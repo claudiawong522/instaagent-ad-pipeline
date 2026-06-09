@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+
+@dataclass
+class JsonResponse:
+    status: int
+    headers: dict[str, str]
+    body: Any
+
+
+class HttpClientError(RuntimeError):
+    def __init__(self, message: str, status: int | None = None, body: Any = None) -> None:
+        super().__init__(message)
+        self.status = status
+        self.body = body
+
+
+def request_json(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    body: Any = None,
+    timeout: int = 60,
+) -> JsonResponse:
+    if params:
+        query = urlencode({k: v for k, v in params.items() if v is not None}, doseq=True)
+        separator = "&" if "?" in url else "?"
+        url = f"{url}{separator}{query}"
+
+    encoded_body = None
+    request_headers = dict(headers or {})
+    if body is not None:
+        encoded_body = json.dumps(body).encode("utf-8")
+        request_headers.setdefault("Content-Type", "application/json")
+
+    request = Request(url, data=encoded_body, method=method.upper(), headers=request_headers)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            parsed = json.loads(raw) if raw else None
+            return JsonResponse(
+                status=response.status,
+                headers=dict(response.headers.items()),
+                body=parsed,
+            )
+    except HTTPError as exc:
+        raw = exc.read().decode("utf-8")
+        try:
+            parsed = json.loads(raw) if raw else None
+        except json.JSONDecodeError:
+            parsed = raw
+        raise HttpClientError(f"HTTP {exc.code} for {url}", status=exc.code, body=parsed) from exc
+    except URLError as exc:
+        raise HttpClientError(f"Network error for {url}: {exc.reason}") from exc
+

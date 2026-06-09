@@ -1,0 +1,25 @@
+{
+  "page": 1,
+  "pageSize": 1,
+  "data": [
+    {
+      "id": "ugc_test_1",
+      "creatorUsername": "skincarecreator",
+      "videoUrl": "https://example.com/reel.mp4",
+      "thumbnailUrl": "https://example.com/reel-thumb.jpg",
+      "caption": "Trying a gentle cleanser for my skin barrier.",
+      "hook": "My skin barrier was wrecked until I tried this.",
+      "createdAt": "2026-06-01T00:00:00Z",
+      "views": 250000,
+      "likes": 18000,
+      "comments": 700,
+      "shares": 1200,
+      "followers": 54000,
+      "viralityScore": 0.91,
+      "category": "beauty",
+      "country": "United States",
+      "musicTitle": "Original audio"
+    }
+  ]
+}
+

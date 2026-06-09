@@ -1,0 +1,20 @@
+{
+  "data": [
+    {
+      "iv_id": "video_test_1",
+      "video_id": "7280000000",
+      "user_handle": "skincarecreator",
+      "description": "Gentle cleanser review.",
+      "video_url": "https://example.com/tiktok.mp4",
+      "date_created_timestamp": "2026-06-01T00:00:00Z",
+      "views": 250000,
+      "likes": 18000,
+      "comments": 700,
+      "shares": 1200,
+      "user_followers": 54000,
+      "hashtags": ["skincare", "cleanser"],
+      "subtitles": "Gentle cleanser review with sensitive skin."
+    }
+  ]
+}
+

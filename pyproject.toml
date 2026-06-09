@@ -1,0 +1,13 @@
+[project]
+name = "instaagent-ad-pipeline"
+version = "0.1.0"
+description = "Lean Step 1/2 ingestion foundation for InstaAgent ad selection."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+instaagent-pipeline = "instaagent_pipeline.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+

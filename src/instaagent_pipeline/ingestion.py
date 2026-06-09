@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any, Callable
+
+from .supabase_client import SupabaseClient
+
+
+@dataclass
+class IngestResult:
+    fetched: int
+    written: int
+
+
+def utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def start_query(
+    *,
+    supabase: SupabaseClient | None,
+    dry_run: bool,
+    run_id: str,
+    provider: str,
+    endpoint: str,
+    method: str,
+    request_params: dict[str, Any],
+) -> str | None:
+    if dry_run or supabase is None:
+        return None
+    row = supabase.insert(
+        "source_queries",
+        {
+            "run_id": run_id,
+            "provider": provider,
+            "endpoint": endpoint,
+            "method": method,
+            "request_params": request_params,
+            "status": "started",
+        },
+    )
+    return row.get("id")
+
+
+def write_items(
+    *,
+    supabase: SupabaseClient | None,
+    dry_run: bool,
+    run_id: str,
+    provider: str,
+    endpoint: str,
+    method: str,
+    request_params: dict[str, Any],
+    source_query_id: str | None,
+    items: list[dict[str, Any]],
+    normalizer: Callable[[dict[str, Any], str, str | None], dict[str, Any]],
+) -> IngestResult:
+    if dry_run:
+        return IngestResult(fetched=len(items), written=0)
+
+    if supabase is None:
+        raise RuntimeError("Supabase credentials are required unless --dry-run is used.")
+
+    if source_query_id:
+        supabase.update_by_id(
+            "source_queries",
+            source_query_id,
+            {
+                "status": "completed",
+                "response_count": len(items),
+                "completed_at": utc_now_iso(),
+            },
+        )
+    else:
+        source_query = supabase.insert(
+            "source_queries",
+            {
+                "run_id": run_id,
+                "provider": provider,
+                "endpoint": endpoint,
+                "method": method,
+                "request_params": request_params,
+                "status": "completed",
+                "response_count": len(items),
+                "completed_at": utc_now_iso(),
+            },
+        )
+        source_query_id = source_query.get("id")
+
+    written = 0
+    for item in items:
+        external_id = str(item.get("id") or item.get("ad_id") or item.get("video_id") or item.get("iv_id") or "")
+        raw_payload = supabase.insert(
+            "raw_payloads",
+            {
+                "run_id": run_id,
+                "source_query_id": source_query_id,
+                "provider": provider,
+                "endpoint": endpoint,
+                "external_id": external_id,
+                "payload_json": item,
+            },
+        )
+        normalized = normalizer(item, run_id, raw_payload.get("id"))
+        supabase.upsert("creative_items", normalized, "run_id,source_provider,external_id")
+        written += 1
+
+    return IngestResult(fetched=len(items), written=written)
+
+
+def log_failed_query(
+    *,
+    supabase: SupabaseClient | None,
+    dry_run: bool,
+    run_id: str,
+    provider: str,
+    endpoint: str,
+    method: str,
+    request_params: dict[str, Any],
+    source_query_id: str | None = None,
+    http_status: int | None,
+    error_message: str,
+) -> None:
+    if dry_run or supabase is None:
+        return
+    if source_query_id:
+        supabase.update_by_id(
+            "source_queries",
+            source_query_id,
+            {
+                "status": "failed",
+                "http_status": http_status,
+                "error_message": error_message,
+                "completed_at": utc_now_iso(),
+            },
+        )
+        return
+    supabase.insert(
+        "source_queries",
+        {
+            "run_id": run_id,
+            "provider": provider,
+            "endpoint": endpoint,
+            "method": method,
+            "request_params": request_params,
+            "status": "failed",
+            "http_status": http_status,
+            "error_message": error_message,
+            "completed_at": utc_now_iso(),
+        },
+    )

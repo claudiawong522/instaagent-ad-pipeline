@@ -1,0 +1,30 @@
+{
+  "metadata": {
+    "count": 1,
+    "order": "longest_running"
+  },
+  "data": [
+    {
+      "id": "ad_test_1",
+      "brand_name": "QE",
+      "headline": "A gentle cleanser for sensitive skin",
+      "link_url": "https://example.com/qe-cleanser",
+      "thumbnail": "https://example.com/thumb.jpg",
+      "video": "https://example.com/video.mp4",
+      "publisher_platform": "instagram",
+      "display_format": "video",
+      "started_running": "2026-05-01T00:00:00Z",
+      "running_duration": 39,
+      "live": true,
+      "full_transcription": "This cleanser is gentle enough for every night.",
+      "timestamped_transcription": [
+        {
+          "startTime": 0,
+          "endTime": 3,
+          "sentence": "This cleanser is gentle enough for every night."
+        }
+      ]
+    }
+  ]
+}
+
