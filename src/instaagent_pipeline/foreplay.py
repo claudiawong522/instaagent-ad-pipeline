@@ -65,6 +65,7 @@ def ingest_foreplay_ads(
                 )
                 body = response.body
             items = result_items(body)
+            items_to_write = items[:current_limit]
 
             result = write_items(
                 supabase=supabase,
@@ -75,8 +76,10 @@ def ingest_foreplay_ads(
                 method="GET",
                 request_params=params,
                 source_query_id=source_query_id,
-                items=items,
+                destination_table="paid_ads",
+                items=items_to_write,
                 normalizer=normalize_foreplay_ad,
+                conflict_columns="run_id,id",
             )
             fetched += result.fetched
             written += result.written

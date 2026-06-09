@@ -53,10 +53,14 @@ def write_items(
     method: str,
     request_params: dict[str, Any],
     source_query_id: str | None,
+    destination_table: str,
     items: list[dict[str, Any]],
     normalizer: Callable[[dict[str, Any], str, str | None], dict[str, Any]],
+    conflict_columns: str = "run_id,source_provider,external_id",
 ) -> IngestResult:
     if dry_run:
+        for item in items:
+            normalizer(item, run_id, None)
         return IngestResult(fetched=len(items), written=0)
 
     if supabase is None:
@@ -103,7 +107,7 @@ def write_items(
             },
         )
         normalized = normalizer(item, run_id, raw_payload.get("id"))
-        supabase.upsert("creative_items", normalized, "run_id,source_provider,external_id")
+        supabase.upsert(destination_table, normalized, conflict_columns)
         written += 1
 
     return IngestResult(fetched=len(items), written=written)

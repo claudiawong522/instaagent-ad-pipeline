@@ -6,16 +6,49 @@
   "data": [
     {
       "id": "ad_test_1",
-      "brand_name": "QE",
-      "headline": "A gentle cleanser for sensitive skin",
-      "link_url": "https://example.com/qe-cleanser",
-      "thumbnail": "https://example.com/thumb.jpg",
+      "live": null,
+      "name": "QE",
+      "type": "video",
+      "ad_id": "1234567890",
+      "cards": null,
+      "image": null,
       "video": "https://example.com/video.mp4",
-      "publisher_platform": "instagram",
+      "avatar": "https://example.com/avatar.jpg",
+      "niches": [
+        "Beauty"
+      ],
+      "persona": {
+        "age": "unknown",
+        "gender": "women"
+      },
+      "brand_id": "brand_test_1",
+      "cta_type": "LEARN_MORE",
+      "headline": null,
+      "link_url": "https://example.com/qe-cleanser",
+      "cta_title": "",
+      "languages": [
+        "English"
+      ],
+      "thumbnail": "https://example.com/thumb.jpg",
+      "categories": [
+        "Health/beauty"
+      ],
+      "description": "A gentle cleanser for sensitive skin",
+      "market_target": "b2c",
+      "content_filter": null,
       "display_format": "video",
-      "started_running": "2026-05-01T00:00:00Z",
-      "running_duration": 39,
-      "live": true,
+      "video_duration": 15.02,
+      "started_running": 1714521600000,
+      "product_category": "face cleanser",
+      "running_duration": null,
+      "emotional_drivers": {
+        "security": 9,
+        "nurturance": 8
+      },
+      "creative_targeting": "skincare enthusiasts",
+      "publisher_platform": [
+        "instagram"
+      ],
       "full_transcription": "This cleanser is gentle enough for every night.",
       "timestamped_transcription": [
         {
@@ -23,8 +56,8 @@
           "endTime": 3,
           "sentence": "This cleanser is gentle enough for every night."
         }
-      ]
+      ],
+      "time_product_was_mentioned": -1.0
     }
   ]
 }
-

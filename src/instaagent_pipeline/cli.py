@@ -49,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             supabase=supabase,
             run_id=args.run_id,
+            keyword=args.keyword,
             target_count=args.target_count,
             page_size=args.page_size,
             dry_run=args.dry_run,
@@ -94,6 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     videos = subparsers.add_parser("ingest-topyappers-videos", help="Ingest TopYappers video records.")
     add_ingest_common_args(videos)
+    videos.add_argument("--keyword", required=True)
     videos.add_argument("--target-count", type=int, default=2500)
     videos.add_argument("--page-size", type=int, default=100)
 
@@ -193,4 +195,3 @@ if __name__ == "__main__":
     except Exception as exc:  # pragma: no cover - CLI boundary
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1)
-

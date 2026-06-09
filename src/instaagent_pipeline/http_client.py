@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import ssl
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -37,14 +39,18 @@ def request_json(
         url = f"{url}{separator}{query}"
 
     encoded_body = None
-    request_headers = dict(headers or {})
+    request_headers = {
+        "Accept": "application/json",
+        "User-Agent": "instaagent-ad-pipeline/0.1",
+        **dict(headers or {}),
+    }
     if body is not None:
         encoded_body = json.dumps(body).encode("utf-8")
         request_headers.setdefault("Content-Type", "application/json")
 
     request = Request(url, data=encoded_body, method=method.upper(), headers=request_headers)
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with urlopen(request, timeout=timeout, context=ssl_context()) as response:
             raw = response.read().decode("utf-8")
             parsed = json.loads(raw) if raw else None
             return JsonResponse(
@@ -62,3 +68,8 @@ def request_json(
     except URLError as exc:
         raise HttpClientError(f"Network error for {url}: {exc.reason}") from exc
 
+
+def ssl_context() -> ssl.SSLContext:
+    if os.getenv("INSTAAGENT_INSECURE_SSL") == "1":
+        return ssl._create_unverified_context()
+    return ssl.create_default_context()

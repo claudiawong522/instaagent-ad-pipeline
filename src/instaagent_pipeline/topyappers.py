@@ -64,6 +64,7 @@ def ingest_topyappers_viral(
                 )
                 body = response.body
             items = result_items(body)
+            items_to_write = items[:current_limit]
 
             result = write_items(
                 supabase=supabase,
@@ -74,13 +75,15 @@ def ingest_topyappers_viral(
                 method="POST",
                 request_params=body_params,
                 source_query_id=source_query_id,
-                items=items,
+                destination_table="ugc_items",
+                items=items_to_write,
                 normalizer=lambda item, rid, raw_id: normalize_topyappers_item(
                     item,
                     rid,
                     raw_id,
                     endpoint_kind="viral-content",
                 ),
+                conflict_columns="run_id,external_id",
             )
             fetched += result.fetched
             written += result.written
@@ -113,6 +116,7 @@ def ingest_topyappers_videos(
     config: Config,
     supabase: SupabaseClient | None,
     run_id: str,
+    keyword: str,
     target_count: int,
     page_size: int,
     dry_run: bool,
@@ -129,7 +133,10 @@ def ingest_topyappers_videos(
         current_limit = min(page_size, target_count - fetched)
         params: dict[str, Any] = {
             "page": page,
-            "limit": current_limit,
+            "perPage": current_limit,
+            "textSearch": keyword,
+            "sortBy": "views",
+            "sortOrder": "desc",
             **extra_params,
         }
         source_query_id = start_query(
@@ -155,6 +162,7 @@ def ingest_topyappers_videos(
                 )
                 body = response.body
             items = result_items(body)
+            items_to_write = items[:current_limit]
 
             result = write_items(
                 supabase=supabase,
@@ -165,13 +173,15 @@ def ingest_topyappers_videos(
                 method="GET",
                 request_params=params,
                 source_query_id=source_query_id,
-                items=items,
+                destination_table="ugc_items",
+                items=items_to_write,
                 normalizer=lambda item, rid, raw_id: normalize_topyappers_item(
                     item,
                     rid,
                     raw_id,
                     endpoint_kind="videos",
                 ),
+                conflict_columns="run_id,external_id",
             )
             fetched += result.fetched
             written += result.written

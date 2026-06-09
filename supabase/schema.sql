@@ -69,31 +69,136 @@ create table if not exists raw_payloads (
   fetched_at timestamptz not null default now()
 );
 
-create table if not exists creative_items (
+create table if not exists paid_ads (
+  paid_ad_row_id uuid primary key default gen_random_uuid(),
+  run_id uuid not null references pipeline_runs(id) on delete cascade,
+  raw_payload_id uuid references raw_payloads(id) on delete set null,
+  id text not null,
+  live boolean,
+  name text,
+  type text,
+  ad_id text,
+  cards jsonb,
+  image text,
+  video text,
+  avatar text,
+  niches jsonb,
+  persona jsonb,
+  brand_id text,
+  cta_type text,
+  headline text,
+  link_url text,
+  cta_title text,
+  languages jsonb,
+  thumbnail text,
+  categories jsonb,
+  description text,
+  market_target text,
+  content_filter jsonb,
+  display_format text,
+  video_duration numeric,
+  started_running numeric,
+  product_category text,
+  running_duration numeric,
+  emotional_drivers jsonb,
+  creative_targeting text,
+  full_transcription text,
+  publisher_platform jsonb,
+  timestamped_transcription jsonb,
+  time_product_was_mentioned numeric,
+  source_metrics jsonb not null default '{}'::jsonb,
+  saved_to_supabase_at timestamptz not null default now(),
+  unique (run_id, id)
+);
+
+create table if not exists ugc_items (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references pipeline_runs(id) on delete cascade,
   raw_payload_id uuid references raw_payloads(id) on delete set null,
-  source_type text not null,
-  source_provider text not null,
   external_id text not null,
-  url text,
-  media_url text,
-  thumbnail_url text,
-  creator_or_brand text,
-  caption text,
-  platform text,
-  display_format text,
-  posted_at timestamptz,
-  started_running_at timestamptz,
-  running_duration_days numeric,
+  topyappers_id text,
+  iv_id text,
+  account_type text,
+  age integer,
+  avatar text,
+  bio text,
+  brand_mentioned jsonb,
+  categories jsonb,
+  color_palette jsonb,
+  comments bigint,
+  comments_to_views_ratio numeric,
+  content_category text,
+  content_format text,
+  content_tone text,
+  country text,
+  cover text,
+  creator_avg_views numeric,
+  creator_engagement_rate numeric,
+  creator_language text,
+  cta_type text,
+  date_added timestamptz,
+  date_created timestamptz,
+  date_created_timestamp numeric,
+  description text,
+  face_count integer,
+  follower_tier text,
+  followers bigint,
+  gender text,
+  hair_color text,
+  handle text,
+  has_face boolean,
+  has_product boolean,
+  has_text_overlay boolean,
+  hashtags jsonb,
+  hook text,
+  is_ai_generated boolean,
+  is_branded boolean,
+  is_promotional boolean,
+  is_trending_format boolean,
+  likes bigint,
+  likes_to_views_ratio numeric,
+  main_category text,
+  music jsonb,
+  nickname text,
+  primary_emotion text,
+  product_category text,
+  production_quality text,
+  race text,
+  setting text,
+  shares bigint,
+  shares_to_views_ratio numeric,
+  source text,
+  subtitles text,
+  target_demographic text,
+  user_followers bigint,
+  user_handle text,
+  user_id text,
+  video_id text,
+  video_url text,
+  video_ranges jsonb,
+  video_topic text,
+  views bigint,
+  views_to_avg_ratio numeric,
+  virality_score numeric,
+  virality_tier text,
+  visual_style text,
   source_metrics jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now(),
-  unique (run_id, source_provider, external_id)
+  saved_to_supabase_at timestamptz not null default now(),
+  unique (run_id, external_id)
 );
 
-create table if not exists transcripts (
+create table if not exists paid_ad_transcripts (
   id uuid primary key default gen_random_uuid(),
-  creative_item_id uuid not null references creative_items(id) on delete cascade,
+  paid_ad_row_id uuid not null references paid_ads(paid_ad_row_id) on delete cascade,
+  transcript_text text,
+  transcript_segments jsonb,
+  transcript_source text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists ugc_transcripts (
+  id uuid primary key default gen_random_uuid(),
+  ugc_item_id uuid not null references ugc_items(id) on delete cascade,
   transcript_text text,
   transcript_segments jsonb,
   transcript_source text,
@@ -103,7 +208,16 @@ create table if not exists transcripts (
 create index if not exists keywords_run_id_idx on keywords(run_id);
 create index if not exists source_queries_run_id_idx on source_queries(run_id);
 create index if not exists raw_payloads_run_id_idx on raw_payloads(run_id);
-create index if not exists creative_items_run_id_idx on creative_items(run_id);
-create index if not exists creative_items_source_idx on creative_items(source_provider, source_type);
-create index if not exists creative_items_external_idx on creative_items(source_provider, external_id);
-
+create index if not exists paid_ads_run_id_idx on paid_ads(run_id);
+create index if not exists paid_ads_id_idx on paid_ads(id);
+create index if not exists paid_ads_ad_id_idx on paid_ads(ad_id);
+create index if not exists paid_ads_brand_id_idx on paid_ads(brand_id);
+create index if not exists paid_ads_saved_to_supabase_at_idx on paid_ads(saved_to_supabase_at desc);
+create index if not exists paid_ads_product_category_idx on paid_ads(product_category);
+create index if not exists ugc_items_run_id_idx on ugc_items(run_id);
+create index if not exists ugc_items_external_idx on ugc_items(external_id);
+create index if not exists ugc_items_video_id_idx on ugc_items(video_id);
+create index if not exists ugc_items_video_topic_idx on ugc_items(video_topic);
+create index if not exists ugc_items_content_category_idx on ugc_items(content_category);
+create index if not exists ugc_items_virality_idx on ugc_items(virality_score desc);
+create index if not exists ugc_items_saved_to_supabase_at_idx on ugc_items(saved_to_supabase_at desc);

@@ -8,7 +8,7 @@ from .http_client import request_json
 
 class SupabaseClient:
     def __init__(self, url: str, key: str) -> None:
-        self.url = url.rstrip("/")
+        self.url = normalize_supabase_url(url)
         self.key = key
 
     @property
@@ -63,3 +63,10 @@ class SupabaseClient:
             return response.body
         return {}
 
+
+def normalize_supabase_url(url: str) -> str:
+    cleaned = url.rstrip("/")
+    suffix = "/rest/v1"
+    if cleaned.endswith(suffix):
+        return cleaned[: -len(suffix)]
+    return cleaned

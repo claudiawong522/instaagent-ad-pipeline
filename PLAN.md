@@ -26,7 +26,9 @@ Given a product and keyword set, collect paid ads and UGC/organic content, analy
    - Foreplay: query paid ads by keyword and collect up to 1000 candidates, prioritizing `order=longest_running`.
    - TopYappers: query UGC with `POST /api/v1/viral-content`, using free-text fields first and category filters only as helpers.
    - Hydrate TopYappers videos with `GET /api/v1/videos` when subtitles or raw video metrics are needed.
-   - Store raw payloads and normalized candidates in Supabase.
+   - Store raw payloads and source-shaped candidates in separate Supabase tables:
+     - Foreplay paid ads -> `paid_ads`.
+     - TopYappers UGC -> `ugc_items`, with columns matching the TopYappers response fields plus database bookkeeping.
 
 3. Transcript extraction
    - Paid ads: use Foreplay transcript fields when present.
@@ -66,7 +68,7 @@ Only Step 1 and Step 2 are implemented now.
 
 Included:
 
-- Supabase schema for products, runs, keywords, source query logs, raw payloads, normalized creative items, transcript placeholders, and API usage.
+- Supabase schema for products, runs, keywords, source query logs, raw payloads, Foreplay-shaped `paid_ads`, TopYappers-shaped `ugc_items`, transcript placeholders, and API usage.
 - CLI to create product/runs and keywords.
 - CLI to ingest Foreplay paid ad candidates.
 - CLI to ingest TopYappers viral-content UGC candidates.
@@ -98,4 +100,3 @@ Not included yet:
 TopYappers is the first UGC source because it can return virality, hook, follower, and subtitle/video fields. Its fixed category/tag system should not be the core search mechanism; use `videoTopicContains`, `contentCategoryContains`, `productCategoryContains`, and `brandMentionedContains` for free-text searches.
 
 Apify Instagram Reels Search & Trend Discovery should be tested later if TopYappers does not return enough relevant UGC for niche keywords. The Apify actor supports arbitrary Instagram Reels keyword discovery but does not appear to be transcript-native, so it would require a separate transcription stage.
-
