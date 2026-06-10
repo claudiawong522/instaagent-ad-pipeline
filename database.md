@@ -69,7 +69,7 @@ Logs each external API request attempted by the pipeline.
 
 ### `api_usage`
 
-Reserved for API cost and rate-limit tracking.
+Records one usage row per live provider API response. Fixture-based `--input-json` runs and dry-runs do not write usage rows.
 
 | Column | Type | Constraints / default | Notes |
 | --- | --- | --- | --- |
@@ -77,8 +77,8 @@ Reserved for API cost and rate-limit tracking.
 | `run_id` | `uuid` | Nullable, references `pipeline_runs(id)` on delete set null | Related run, if known. |
 | `provider` | `text` | Not null | API provider. |
 | `endpoint` | `text` | Not null | Provider endpoint. |
-| `credits_used` | `numeric` | Nullable | API credits consumed. |
-| `rate_limit` | `jsonb` | Not null, default `'{}'::jsonb` | Rate-limit metadata. |
+| `credits_used` | `numeric` | Nullable | API credits consumed when exposed in provider headers. |
+| `rate_limit` | `jsonb` | Not null, default `'{}'::jsonb` | HTTP status, response count, and selected rate-limit/usage/quota headers. |
 | `request_timestamp` | `timestamptz` | Not null, default `now()` | Usage timestamp. |
 
 ### `raw_payloads`
@@ -146,7 +146,7 @@ Unique constraint: `unique (run_id, id)`.
 
 ### `ugc_items`
 
-Stores TopYappers UGC records with columns for stable TopYappers Videos fields and optional viral-content fields. Provider-specific overflow fields that are not promoted to columns live in `source_metrics`.
+Stores TopYappers UGC records with columns for stable viral-content fields and optional metadata-only Videos fields. Provider-specific overflow fields that are not promoted to columns live in `source_metrics`.
 
 | Column | Type | Constraints / default | Notes |
 | --- | --- | --- | --- |
@@ -155,7 +155,7 @@ Stores TopYappers UGC records with columns for stable TopYappers Videos fields a
 | `raw_payload_id` | `uuid` | Nullable, references `raw_payloads(id)` on delete set null | Raw item used for normalization. |
 | `external_id` | `text` | Not null | Dedupe id, chosen from TopYappers `id`, `iv_id`, `video_id`, or `videoId`. |
 | `topyappers_id` | `text` | Nullable | TopYappers `id` field when returned. |
-| `iv_id` | `text` | Nullable | TopYappers Videos `iv_id` field. |
+| `iv_id` | `text` | Nullable | TopYappers Videos `iv_id` field when using the metadata endpoint. |
 | `account_type` | `text` | Nullable | TopYappers field. |
 | `age` | `integer` | Nullable | TopYappers field. |
 | `avatar` | `text` | Nullable | TopYappers field. |
@@ -176,18 +176,18 @@ Stores TopYappers UGC records with columns for stable TopYappers Videos fields a
 | `cta_type` | `text` | Nullable | TopYappers field. |
 | `date_added` | `timestamptz` | Nullable | TopYappers field. |
 | `date_created` | `timestamptz` | Nullable | TopYappers field. |
-| `date_created_timestamp` | `numeric` | Nullable | TopYappers Videos field. |
+| `date_created_timestamp` | `numeric` | Nullable | TopYappers Videos field when using the metadata endpoint. |
 | `description` | `text` | Nullable | TopYappers field. |
 | `face_count` | `integer` | Nullable | TopYappers field. |
 | `follower_tier` | `text` | Nullable | TopYappers field. |
 | `followers` | `bigint` | Nullable | Viral-content follower count field. |
 | `gender` | `text` | Nullable | TopYappers field. |
 | `hair_color` | `text` | Nullable | TopYappers field. |
-| `handle` | `text` | Nullable | Viral-content handle field. |
+| `handle` | `text` | Nullable | Viral-content creator handle, mapped from `handle` or `creatorUsername`. |
 | `has_face` | `boolean` | Nullable | TopYappers field. |
 | `has_product` | `boolean` | Nullable | TopYappers field. |
 | `has_text_overlay` | `boolean` | Nullable | TopYappers field. |
-| `hashtags` | `jsonb` | Nullable | TopYappers Videos field. |
+| `hashtags` | `jsonb` | Nullable | TopYappers field. |
 | `hook` | `text` | Nullable | TopYappers field. |
 | `is_ai_generated` | `boolean` | Nullable | TopYappers field. |
 | `is_branded` | `boolean` | Nullable | TopYappers field. |
@@ -206,13 +206,13 @@ Stores TopYappers UGC records with columns for stable TopYappers Videos fields a
 | `shares` | `bigint` | Nullable | TopYappers field. |
 | `shares_to_views_ratio` | `numeric` | Nullable | TopYappers field. |
 | `source` | `text` | Nullable | TopYappers source platform field. |
-| `subtitles` | `text` | Nullable | TopYappers Videos subtitle field. |
+| `subtitles` | `text` | Nullable | TopYappers Videos subtitle field when using the metadata endpoint. |
 | `target_demographic` | `text` | Nullable | TopYappers field. |
-| `user_followers` | `bigint` | Nullable | TopYappers Videos creator follower count. |
-| `user_handle` | `text` | Nullable | TopYappers Videos creator handle. |
-| `user_id` | `text` | Nullable | TopYappers Videos user id. |
-| `video_id` | `text` | Nullable | TopYappers Videos video id. |
-| `video_url` | `text` | Nullable | TopYappers Videos video URL. |
+| `user_followers` | `bigint` | Nullable | TopYappers Videos creator follower count when using the metadata endpoint. |
+| `user_handle` | `text` | Nullable | TopYappers creator handle, mapped from `user_handle`, `handle`, or viral-content `creatorUsername`. |
+| `user_id` | `text` | Nullable | TopYappers Videos user id when using the metadata endpoint. |
+| `video_id` | `text` | Nullable | TopYappers Videos video id when using the metadata endpoint. |
+| `video_url` | `text` | Nullable | URL-backed UGC video URL, mapped from provider URL fields or derived from `source`, handle, and `video_id`. |
 | `video_ranges` | `jsonb` | Nullable | TopYappers field. |
 | `video_topic` | `text` | Nullable | TopYappers field. |
 | `views` | `bigint` | Nullable | TopYappers field. |
@@ -265,7 +265,7 @@ Stores transcript rows attached to normalized UGC items.
 | `paid_ads_product_category_idx` | `paid_ads` | `product_category` | Filter paid ads by Foreplay product category. |
 | `paid_ads_saved_to_supabase_at_idx` | `paid_ads` | `saved_to_supabase_at desc` | Find recently saved paid ads. |
 | `ugc_items_run_id_idx` | `ugc_items` | `run_id` | Find UGC items for a run. |
-| `ugc_items_external_idx` | `ugc_items` | `source_provider, external_id` | Lookup by provider id. |
+| `ugc_items_external_idx` | `ugc_items` | `external_id` | Lookup by provider id. |
 | `ugc_items_virality_idx` | `ugc_items` | `virality_score desc` | Rank UGC items by virality. |
 
 ## Simple Data Flow
@@ -279,6 +279,7 @@ init-run
 ingest-foreplay --run-id ... --keyword ...
   -> source_queries row starts
   -> Foreplay GET /api/discovery/ads
+  -> api_usage logs HTTP status, response count, and rate/usage headers
   -> source_queries row completes or fails
   -> raw_payloads stores each raw ad item
   -> normalize_foreplay_ad()
@@ -287,18 +288,20 @@ ingest-foreplay --run-id ... --keyword ...
 ingest-topyappers-viral --run-id ... --keyword ...
   -> source_queries row starts
   -> TopYappers POST /api/v1/viral-content
+  -> api_usage logs HTTP status, response count, and rate/usage headers
   -> source_queries row completes or fails
   -> raw_payloads stores each raw UGC item
   -> normalize_topyappers_item(endpoint_kind="viral-content")
-  -> ugc_items upsert on run_id + source_provider + external_id
+  -> ugc_items upsert on run_id + external_id
 
 ingest-topyappers-videos --run-id ... --keyword ...
   -> source_queries row starts
-  -> TopYappers GET /api/v1/videos
+  -> TopYappers GET /api/v1/videos metadata-only fallback
+  -> api_usage logs HTTP status, response count, and rate/usage headers
   -> source_queries row completes or fails
   -> raw_payloads stores each raw video item
   -> normalize_topyappers_item(endpoint_kind="videos")
-  -> ugc_items upsert on run_id + source_provider + external_id
+  -> ugc_items upsert on run_id + external_id
 ```
 
 ## Relationship Map
@@ -321,5 +324,5 @@ Notes:
 - `raw_payloads` is the audit and re-normalization source. Keep it when provider payload shapes change.
 - `paid_ads` stores Foreplay-shaped paid ad rows; `ugc_items` stores UGC candidate rows.
 - `source_queries` records request status, parameters, response counts, and failures.
-- `api_usage` exists in the schema, but the current ingestion code does not appear to write to it yet.
+- `api_usage` records one row per live provider HTTP response, including HTTP status, response count, selected rate-limit/usage headers, and credits used when exposed by provider headers.
 - Transcript tables exist, but the current ingestion path writes Foreplay transcript fields directly into matching `paid_ads` columns when they are present.

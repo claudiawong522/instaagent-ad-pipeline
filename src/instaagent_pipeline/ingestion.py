@@ -43,6 +43,54 @@ def start_query(
     return row.get("id")
 
 
+def log_api_usage(
+    *,
+    supabase: SupabaseClient | None,
+    dry_run: bool,
+    run_id: str,
+    provider: str,
+    endpoint: str,
+    status: int | None,
+    response_count: int | None,
+    headers: dict[str, str] | None,
+) -> None:
+    if dry_run or supabase is None or status is None:
+        return
+    supabase.insert(
+        "api_usage",
+        {
+            "run_id": run_id,
+            "provider": provider,
+            "endpoint": endpoint,
+            "credits_used": credits_used_from_headers(headers or {}),
+            "rate_limit": {
+                "http_status": status,
+                "response_count": response_count,
+                "headers": usage_headers(headers or {}),
+            },
+        },
+    )
+
+
+def credits_used_from_headers(headers: dict[str, str]) -> float | None:
+    for name, value in headers.items():
+        normalized = name.lower()
+        if normalized in {"x-credits-used", "x-credit-used", "x-api-credits-used", "x-usage-credits"}:
+            try:
+                return float(value)
+            except ValueError:
+                return None
+    return None
+
+
+def usage_headers(headers: dict[str, str]) -> dict[str, str]:
+    return {
+        name: value
+        for name, value in headers.items()
+        if any(token in name.lower() for token in ("limit", "remaining", "reset", "credit", "usage", "quota"))
+    }
+
+
 def write_items(
     *,
     supabase: SupabaseClient | None,

@@ -24,8 +24,8 @@ Given a product and keyword set, collect paid ads and UGC/organic content, analy
 
 2. Source ingestion
    - Foreplay: query paid ads by keyword and collect up to 1000 candidates, prioritizing `order=longest_running`.
-   - TopYappers: query UGC with `POST /api/v1/viral-content`, using free-text fields first and category filters only as helpers.
-   - Hydrate TopYappers videos with `GET /api/v1/videos` when subtitles or raw video metrics are needed.
+   - TopYappers: query URL-backed UGC with `POST /api/v1/viral-content`, using free-text fields first and category filters only as helpers.
+   - Use TopYappers `GET /api/v1/videos` only as a metadata-only fallback when subtitles or raw video metrics matter more than video URLs.
    - Store raw payloads and source-shaped candidates in separate Supabase tables:
      - Foreplay paid ads -> `paid_ads`.
      - TopYappers UGC -> `ugc_items`, with columns matching the TopYappers response fields plus database bookkeeping.

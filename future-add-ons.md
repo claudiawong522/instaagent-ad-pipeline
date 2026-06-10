@@ -29,7 +29,8 @@ These are good ideas intentionally deferred to keep the first version lean.
 
 ## Automated Keyword Expansion
 
-- Use LLM/category research to generate keyword variants, competitor terms, ingredient terms, pain-point terms, and adjacent category terms.
+- Use LLM/category research to generate provider-specific keyword variants, competitor terms, ingredient terms, pain-point terms, and adjacent category terms.
+- Keep exact product phrases in run context, then automatically choose broader provider API inputs such as `gentle cleanser` for Foreplay and `cleanser`/`skincare` for TopYappers viral-content when exact brand terms are too sparse.
 
 ## Visual Analysis
 
@@ -38,4 +39,3 @@ These are good ideas intentionally deferred to keep the first version lean.
 ## Compliance/IP Review
 
 - Flag risky medical/beauty claims, direct competitor copying, creator likeness reuse, trademark risk, and platform policy issues.
-

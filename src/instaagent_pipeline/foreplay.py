@@ -6,7 +6,7 @@ from typing import Any
 
 from .config import Config
 from .http_client import HttpClientError, request_json
-from .ingestion import IngestResult, log_failed_query, start_query, write_items
+from .ingestion import IngestResult, log_api_usage, log_failed_query, start_query, write_items
 from .normalizers import normalize_foreplay_ad, result_items
 from .supabase_client import SupabaseClient
 
@@ -54,6 +54,8 @@ def ingest_foreplay_ads(
         try:
             if input_json:
                 body = json.loads(input_json.read_text())
+                response_headers = {}
+                response_status = None
             else:
                 if not config.foreplay_api_key:
                     raise RuntimeError("FOREPLAY_API_KEY is required unless --input-json is used.")
@@ -64,8 +66,20 @@ def ingest_foreplay_ads(
                     params=params,
                 )
                 body = response.body
+                response_headers = response.headers
+                response_status = response.status
             items = result_items(body)
             items_to_write = items[:current_limit]
+            log_api_usage(
+                supabase=supabase,
+                dry_run=dry_run,
+                run_id=run_id,
+                provider="foreplay",
+                endpoint=DISCOVERY_ADS_PATH,
+                status=response_status,
+                response_count=len(items),
+                headers=response_headers,
+            )
 
             result = write_items(
                 supabase=supabase,

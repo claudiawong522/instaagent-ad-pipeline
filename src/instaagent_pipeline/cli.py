@@ -87,13 +87,19 @@ def build_parser() -> argparse.ArgumentParser:
     foreplay.add_argument("--target-count", type=int, default=1000)
     foreplay.add_argument("--page-size", type=int, default=250)
 
-    viral = subparsers.add_parser("ingest-topyappers-viral", help="Ingest TopYappers viral-content candidates.")
+    viral = subparsers.add_parser(
+        "ingest-topyappers-viral",
+        help="Ingest URL-backed TopYappers viral-content candidates.",
+    )
     add_ingest_common_args(viral)
     viral.add_argument("--keyword", required=True)
     viral.add_argument("--target-count", type=int, default=2500)
     viral.add_argument("--page-size", type=int, default=100)
 
-    videos = subparsers.add_parser("ingest-topyappers-videos", help="Ingest TopYappers video records.")
+    videos = subparsers.add_parser(
+        "ingest-topyappers-videos",
+        help="Ingest TopYappers metadata-only video records. This endpoint does not return video URLs.",
+    )
     add_ingest_common_args(videos)
     videos.add_argument("--keyword", required=True)
     videos.add_argument("--target-count", type=int, default=2500)

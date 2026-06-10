@@ -6,7 +6,7 @@ from typing import Any
 
 from .config import Config
 from .http_client import HttpClientError, request_json
-from .ingestion import IngestResult, log_failed_query, start_query, write_items
+from .ingestion import IngestResult, log_api_usage, log_failed_query, start_query, write_items
 from .normalizers import normalize_topyappers_item, result_items
 from .supabase_client import SupabaseClient
 
@@ -53,6 +53,8 @@ def ingest_topyappers_viral(
         try:
             if input_json:
                 body = json.loads(input_json.read_text())
+                response_headers = {}
+                response_status = None
             else:
                 if not config.topyappers_api_key:
                     raise RuntimeError("TOPYAPPERS_API_KEY is required unless --input-json is used.")
@@ -63,8 +65,20 @@ def ingest_topyappers_viral(
                     body=body_params,
                 )
                 body = response.body
+                response_headers = response.headers
+                response_status = response.status
             items = result_items(body)
             items_to_write = items[:current_limit]
+            log_api_usage(
+                supabase=supabase,
+                dry_run=dry_run,
+                run_id=run_id,
+                provider="topyappers",
+                endpoint=VIRAL_CONTENT_PATH,
+                status=response_status,
+                response_count=len(items),
+                headers=response_headers,
+            )
 
             result = write_items(
                 supabase=supabase,
@@ -151,6 +165,8 @@ def ingest_topyappers_videos(
         try:
             if input_json:
                 body = json.loads(input_json.read_text())
+                response_headers = {}
+                response_status = None
             else:
                 if not config.topyappers_api_key:
                     raise RuntimeError("TOPYAPPERS_API_KEY is required unless --input-json is used.")
@@ -161,8 +177,20 @@ def ingest_topyappers_videos(
                     params=params,
                 )
                 body = response.body
+                response_headers = response.headers
+                response_status = response.status
             items = result_items(body)
             items_to_write = items[:current_limit]
+            log_api_usage(
+                supabase=supabase,
+                dry_run=dry_run,
+                run_id=run_id,
+                provider="topyappers",
+                endpoint=VIDEOS_PATH,
+                status=response_status,
+                response_count=len(items),
+                headers=response_headers,
+            )
 
             result = write_items(
                 supabase=supabase,

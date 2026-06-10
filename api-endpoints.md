@@ -8,6 +8,17 @@ The current design keeps paid ads and UGC separate:
 - TopYappers UGC writes to `ugc_items`.
 - Raw source JSON from both providers still writes to `raw_payloads`.
 
+## Provider Keyword Strategy
+
+Store exact product and campaign language in `products.notes`, `pipeline_runs.config`, and `keywords`. Provider API inputs should usually be broader category, benefit, or format terms so discovery does not collapse to zero or only owned-brand results.
+
+For a seed such as `QV cleanser`, use examples like:
+
+| Provider | API field | Recommended input | Why |
+| --- | --- | --- | --- |
+| Foreplay | `query` | `gentle cleanser` or `face cleanser` | Finds competitive paid video ads in the cleanser category without over-constraining to exact QV mentions. |
+| TopYappers viral-content | `videoTopicContains` | `cleanser`, then top up with `skincare` if needed | The URL-backed viral endpoint is topic-oriented; broad terms return more UGC candidates with usable video URLs. |
+
 ## Foreplay: Search Paid Ads
 
 - Provider: Foreplay
@@ -116,7 +127,7 @@ Same mapping as Foreplay search paid ads.
 - Method: `POST`
 - Endpoint: `https://api.topyappers.com/api/v1/viral-content`
 - Code path: `ingest-topyappers-viral`
-- Purpose: discover viral UGC candidates with free-text topic/category filters and virality metrics.
+- Purpose: primary URL-backed UGC ingestion endpoint. Discover viral UGC candidates with free-text topic/category filters, virality metrics, and provider video URLs.
 
 ### Input Columns / Body Fields
 
@@ -138,7 +149,7 @@ Same mapping as Foreplay search paid ads.
 
 ### Output Columns / Response Fields
 
-`ugc_items` mirrors the TopYappers response fields one-to-one, plus DB bookkeeping. The raw TopYappers `id` field is stored as `ugc_items.topyappers_id` because `ugc_items.id` is the database primary key.
+`ugc_items` stores stable TopYappers viral-content fields as first-class columns, plus DB bookkeeping. The raw TopYappers `id` field is stored as `ugc_items.topyappers_id` because `ugc_items.id` is the database primary key.
 
 TopYappers viral-content fields stored directly:
 
@@ -166,13 +177,15 @@ id, run_id, raw_payload_id, external_id, saved_to_supabase_at
 
 Provider-specific fields that are not promoted to first-class columns are stored in `ugc_items.source_metrics` as JSONB. Full source JSON is also preserved in `raw_payloads.payload_json`.
 
+TopYappers documents `videoUrl` and `thumbnailUrl` on this viral-content endpoint. Use this endpoint when URL-backed UGC records are required. The normalizer maps provider URL fields to `ugc_items.video_url`; when live payloads omit URL fields, it derives public URLs from `source`, `handle`/`user_handle`, and `video_id` for TikTok, Instagram, and YouTube. It also maps `thumbnailUrl` or `cover` to `ugc_items.cover`, `caption` to `ugc_items.description`, `handle` or `creatorUsername` to `ugc_items.handle` and `ugc_items.user_handle`, `createdAt` to `ugc_items.date_created`, `category` to `ugc_items.content_category` and `ugc_items.main_category`, and `musicTitle` to `ugc_items.music`.
+
 ## TopYappers: Videos
 
 - Provider: TopYappers
 - Method: `GET`
 - Endpoint: `https://api.topyappers.com/api/v1/videos`
 - Code path: `ingest-topyappers-videos`
-- Purpose: primary UGC ingestion endpoint. Search video records by keyword and retrieve subtitles, views, follower count, hashtags, and raw video metrics.
+- Purpose: metadata-only UGC fallback. Search video records by keyword and retrieve subtitles, views, follower count, hashtags, and raw video metrics. This endpoint does not return video URLs.
 
 ### Input Columns / Query Fields
 
@@ -193,12 +206,12 @@ Provider-specific fields that are not promoted to first-class columns are stored
 
 ### Output Columns / Response Fields
 
-`ugc_items` also stores the TopYappers Videos fields directly:
+`ugc_items` also stores the TopYappers Videos fields directly. Per the TopYappers docs, `/api/v1/videos` does not return a URL field; `video_url` remains null for this endpoint unless the provider adds one later.
 
 ```text
 iv_id, comments, date_created_timestamp, description, hashtags, likes,
 shares, source, subtitles, user_followers, user_handle, user_id,
-video_id, video_url, views
+video_id, views
 ```
 
 DB-only fields:
@@ -219,8 +232,8 @@ Provider-specific fields that are not promoted to first-class columns are stored
 | `source_queries` | all ingestion commands | Request/response/error logging per API page. |
 | `raw_payloads` | ingestion commands | Preserved raw source item JSON. |
 | `paid_ads` | `ingest-foreplay` | Foreplay-shaped paid ad rows. |
-| `ugc_items` | `ingest-topyappers-viral`, `ingest-topyappers-videos` | TopYappers-shaped UGC candidate rows. |
-| `api_usage` | future monitoring | Provider credit/rate-limit tracking. |
+| `ugc_items` | `ingest-topyappers-viral`, `ingest-topyappers-videos` | TopYappers-shaped UGC candidate rows. Use `ingest-topyappers-viral` when `video_url` is required. |
+| `api_usage` | live ingestion commands | Provider HTTP status, response count, selected rate-limit/usage headers, and credits used when exposed. |
 | `paid_ad_transcripts` | created by schema only | Later paid-ad transcript processing stage. |
 | `ugc_transcripts` | created by schema only | Later UGC transcript processing stage. |
 

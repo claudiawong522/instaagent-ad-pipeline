@@ -18,8 +18,8 @@ Lean Step 1/2 implementation for InstaAgent's ad selection pipeline.
 - Python CLI for:
   - creating products/runs/keywords.
   - ingesting Foreplay paid ad candidates into `paid_ads`.
-  - ingesting TopYappers videos into `ugc_items` as the primary UGC source.
-  - optionally ingesting TopYappers viral-content UGC candidates into `ugc_items`.
+  - ingesting URL-backed TopYappers viral-content UGC candidates into `ugc_items`.
+  - optionally ingesting TopYappers videos metadata into `ugc_items` when URLs are not required.
 
 ## Setup
 
@@ -55,20 +55,20 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-foreplay \
   --page-size 250
 ```
 
-Ingest TopYappers video UGC:
+Ingest TopYappers URL-backed UGC:
 
 ```bash
-PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-topyappers-videos \
+PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-topyappers-viral \
   --run-id "<pipeline_run_id>" \
   --keyword "gentle cleanser" \
   --target-count 2500 \
   --page-size 100
 ```
 
-Optionally ingest TopYappers viral-content discovery rows:
+Optionally ingest TopYappers metadata-only video records:
 
 ```bash
-PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-topyappers-viral \
+PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-topyappers-videos \
   --run-id "<pipeline_run_id>" \
   --keyword "gentle cleanser" \
   --target-count 2500 \
@@ -95,7 +95,7 @@ Optional:
 
 ## Supabase Key Choice
 
-Use the service role key for this local/server-side ingestion CLI when possible. It bypasses row-level security, which makes batch writes to `products`, `pipeline_runs`, `source_queries`, `raw_payloads`, `paid_ads`, and `ugc_items` straightforward.
+Use the service role key for this local/server-side ingestion CLI when possible. It bypasses row-level security, which makes batch writes to `products`, `pipeline_runs`, `source_queries`, `api_usage`, `raw_payloads`, `paid_ads`, and `ugc_items` straightforward.
 
 Use the anon public key only if you intentionally enable RLS policies that allow this CLI to insert/update the needed tables. The anon key is designed for browser/client usage and should not have broad write permissions to ingestion tables.
 

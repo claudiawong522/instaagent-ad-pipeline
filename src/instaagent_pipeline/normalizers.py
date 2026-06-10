@@ -86,18 +86,27 @@ TOPYAPPERS_FIRST_CLASS_KEYS = {
     "commentCount",
     "comments_to_views_ratio",
     "content_category",
+    "category",
     "content_format",
     "content_tone",
     "country",
     "cover",
+    "thumbnailUrl",
+    "thumbnail_url",
+    "coverUrl",
+    "cover_url",
     "creator_avg_views",
     "creator_engagement_rate",
     "creator_language",
+    "creatorUsername",
     "cta_type",
     "date_added",
     "date_created",
+    "createdAt",
+    "created_at",
     "date_created_timestamp",
     "description",
+    "caption",
     "face_count",
     "follower_tier",
     "followers",
@@ -120,6 +129,8 @@ TOPYAPPERS_FIRST_CLASS_KEYS = {
     "likes_to_views_ratio",
     "main_category",
     "music",
+    "musicTitle",
+    "music_title",
     "nickname",
     "primary_emotion",
     "product_category",
@@ -282,25 +293,25 @@ def normalize_topyappers_item(
         "color_palette": item.get("color_palette"),
         "comments": as_int(first_present(item, "comments", "comment_count", "commentCount")),
         "comments_to_views_ratio": as_number(item.get("comments_to_views_ratio")),
-        "content_category": item.get("content_category"),
+        "content_category": first_present(item, "content_category", "category"),
         "content_format": item.get("content_format"),
         "content_tone": item.get("content_tone"),
         "country": item.get("country"),
-        "cover": item.get("cover"),
+        "cover": first_present(item, "cover", "thumbnailUrl", "thumbnail_url", "coverUrl", "cover_url"),
         "creator_avg_views": as_number(item.get("creator_avg_views")),
         "creator_engagement_rate": as_number(item.get("creator_engagement_rate")),
         "creator_language": item.get("creator_language"),
         "cta_type": item.get("cta_type"),
         "date_added": as_timestamp(item.get("date_added")),
-        "date_created": as_timestamp(item.get("date_created")),
+        "date_created": as_timestamp(first_present(item, "date_created", "createdAt", "created_at")),
         "date_created_timestamp": date_created_timestamp,
-        "description": item.get("description"),
+        "description": first_present(item, "description", "caption"),
         "face_count": as_int(item.get("face_count")),
         "follower_tier": item.get("follower_tier"),
         "followers": as_int(first_present(item, "followers", "followerCount")),
         "gender": item.get("gender"),
         "hair_color": item.get("hair_color"),
-        "handle": item.get("handle"),
+        "handle": first_present(item, "handle", "creatorUsername"),
         "has_face": as_bool(item.get("has_face")),
         "has_product": as_bool(item.get("has_product")),
         "has_text_overlay": as_bool(item.get("has_text_overlay")),
@@ -312,8 +323,8 @@ def normalize_topyappers_item(
         "is_trending_format": as_bool(item.get("is_trending_format")),
         "likes": as_int(first_present(item, "likes", "like_count", "likeCount")),
         "likes_to_views_ratio": as_number(item.get("likes_to_views_ratio")),
-        "main_category": item.get("main_category"),
-        "music": item.get("music"),
+        "main_category": first_present(item, "main_category", "category"),
+        "music": music_value(item),
         "nickname": item.get("nickname"),
         "primary_emotion": item.get("primary_emotion"),
         "product_category": item.get("product_category"),
@@ -326,10 +337,10 @@ def normalize_topyappers_item(
         "subtitles": item.get("subtitles"),
         "target_demographic": item.get("target_demographic"),
         "user_followers": as_int(item.get("user_followers")),
-        "user_handle": item.get("user_handle"),
+        "user_handle": first_present(item, "user_handle", "handle", "creatorUsername"),
         "user_id": item.get("user_id"),
         "video_id": first_present(item, "video_id", "videoId"),
-        "video_url": first_present(item, "video_url", "videoUrl", "webVideoUrl", "url"),
+        "video_url": first_present(item, "video_url", "videoUrl", "webVideoUrl", "url") or derived_video_url(item),
         "video_ranges": item.get("video_ranges"),
         "video_topic": item.get("video_topic"),
         "views": as_int(first_present(item, "views", "play_count", "playCount")),
@@ -365,6 +376,41 @@ def source_metrics_from_unmapped(
     if extra:
         metrics.update({key: value for key, value in extra.items() if value is not None})
     return metrics
+
+
+def music_value(item: dict[str, Any]) -> Any:
+    music = item.get("music")
+    if music not in (None, ""):
+        return music
+    title = first_present(item, "musicTitle", "music_title")
+    if title is None:
+        return None
+    return {"title": title}
+
+
+def derived_video_url(item: dict[str, Any]) -> str | None:
+    source = stringify_if_needed(item.get("source"))
+    video_id = stringify_if_needed(first_present(item, "video_id", "videoId"))
+    if not source or not video_id:
+        return None
+
+    source = source.lower()
+    if source == "youtube":
+        return f"https://www.youtube.com/watch?v={video_id}"
+
+    if source == "instagram":
+        normalized_id = video_id.strip("/")
+        if normalized_id.startswith(("p/", "reel/", "tv/")):
+            return f"https://www.instagram.com/{normalized_id}/"
+        return f"https://www.instagram.com/reel/{normalized_id}/"
+
+    if source == "tiktok":
+        handle = stringify_if_needed(first_present(item, "user_handle", "handle", "creatorUsername"))
+        if not handle:
+            return None
+        return f"https://www.tiktok.com/@{handle.lstrip('@')}/video/{video_id}"
+
+    return None
 
 
 def as_int(value: Any) -> int | None:

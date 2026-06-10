@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from instaagent_pipeline.ingestion import log_api_usage
 from instaagent_pipeline.normalizers import normalize_foreplay_ad, normalize_topyappers_item, result_items
 
 
@@ -69,7 +70,7 @@ def test_normalize_foreplay_ad_maps_actual_response_fields() -> None:
     assert normalized["source_metrics"] == {}
 
 
-def test_normalize_topyappers_video_maps_video_url_column() -> None:
+def test_normalize_topyappers_video_leaves_video_url_empty_when_endpoint_omits_it() -> None:
     body = json.loads(Path("tests/fixtures/topyappers_videos.json").read_text())
     item = result_items(body)[0]
 
@@ -78,13 +79,13 @@ def test_normalize_topyappers_video_maps_video_url_column() -> None:
     assert normalized["external_id"] == "video_test_1"
     assert normalized["iv_id"] == "video_test_1"
     assert normalized["video_id"] == "7280000000"
-    assert normalized["video_url"] == "https://example.com/tiktok.mp4"
+    assert normalized["video_url"] is None
     assert normalized["views"] == 250000
     assert normalized["subtitles"] == "Gentle cleanser review with sensitive skin."
     assert normalized["source_metrics"] == {"endpoint_kind": "videos"}
 
 
-def test_normalize_topyappers_viral_keeps_unmapped_fields_in_source_metrics() -> None:
+def test_normalize_topyappers_viral_maps_url_backed_fields() -> None:
     body = json.loads(Path("tests/fixtures/topyappers_viral.json").read_text())
     item = result_items(body)[0]
 
@@ -92,7 +93,120 @@ def test_normalize_topyappers_viral_keeps_unmapped_fields_in_source_metrics() ->
 
     assert normalized["external_id"] == "ugc_test_1"
     assert normalized["video_url"] == "https://example.com/reel.mp4"
+    assert normalized["cover"] == "https://example.com/reel-thumb.jpg"
+    assert normalized["description"] == "Trying a gentle cleanser for my skin barrier."
+    assert normalized["handle"] == "skincarecreator"
+    assert normalized["user_handle"] == "skincarecreator"
+    assert normalized["date_created"] == "2026-06-01T00:00:00Z"
+    assert normalized["content_category"] == "beauty"
+    assert normalized["main_category"] == "beauty"
+    assert normalized["music"] == {"title": "Original audio"}
+    assert normalized["source"] is None
     assert normalized["source_metrics"]["endpoint_kind"] == "viral-content"
-    assert normalized["source_metrics"]["creatorUsername"] == "skincarecreator"
-    assert normalized["source_metrics"]["caption"] == "Trying a gentle cleanser for my skin barrier."
-    assert normalized["source_metrics"]["musicTitle"] == "Original audio"
+    assert "creatorUsername" not in normalized["source_metrics"]
+    assert "caption" not in normalized["source_metrics"]
+    assert "musicTitle" not in normalized["source_metrics"]
+
+
+def test_normalize_topyappers_viral_derives_video_url_when_provider_omits_url() -> None:
+    item = {
+        "id": "ugc_live_shape_1",
+        "source": "tiktok",
+        "handle": "skincarecreator",
+        "video_id": "7621528611052408086",
+        "views": 419300,
+    }
+
+    normalized = normalize_topyappers_item(item, "run_1", "raw_1", endpoint_kind="viral-content")
+
+    assert normalized["video_url"] == "https://www.tiktok.com/@skincarecreator/video/7621528611052408086"
+    assert normalized["user_handle"] == "skincarecreator"
+
+
+def test_normalize_topyappers_viral_derives_instagram_url() -> None:
+    item = {
+        "id": "ugc_live_shape_2",
+        "source": "instagram",
+        "handle": "skincarecreator",
+        "video_id": "p/DY1ZLysRaPk",
+        "views": 958533,
+    }
+
+    normalized = normalize_topyappers_item(item, "run_1", "raw_1", endpoint_kind="viral-content")
+
+    assert normalized["video_url"] == "https://www.instagram.com/p/DY1ZLysRaPk/"
+
+
+class RecordingSupabase:
+    def __init__(self) -> None:
+        self.inserts: list[tuple[str, dict]] = []
+
+    def insert(self, table: str, payload: dict) -> dict:
+        self.inserts.append((table, payload))
+        return {"id": "usage_1", **payload}
+
+
+def test_log_api_usage_records_status_counts_and_rate_limit_headers() -> None:
+    supabase = RecordingSupabase()
+
+    log_api_usage(
+        supabase=supabase,  # type: ignore[arg-type]
+        dry_run=False,
+        run_id="run_1",
+        provider="topyappers",
+        endpoint="/api/v1/viral-content",
+        status=200,
+        response_count=10,
+        headers={
+            "X-RateLimit-Remaining": "42",
+            "X-Credits-Used": "3.5",
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert supabase.inserts == [
+        (
+            "api_usage",
+            {
+                "run_id": "run_1",
+                "provider": "topyappers",
+                "endpoint": "/api/v1/viral-content",
+                "credits_used": 3.5,
+                "rate_limit": {
+                    "http_status": 200,
+                    "response_count": 10,
+                    "headers": {
+                        "X-RateLimit-Remaining": "42",
+                        "X-Credits-Used": "3.5",
+                    },
+                },
+            },
+        )
+    ]
+
+
+def test_log_api_usage_skips_dry_run_and_fixture_responses() -> None:
+    supabase = RecordingSupabase()
+
+    log_api_usage(
+        supabase=supabase,  # type: ignore[arg-type]
+        dry_run=True,
+        run_id="run_1",
+        provider="foreplay",
+        endpoint="/api/discovery/ads",
+        status=200,
+        response_count=1,
+        headers={},
+    )
+    log_api_usage(
+        supabase=supabase,  # type: ignore[arg-type]
+        dry_run=False,
+        run_id="run_1",
+        provider="foreplay",
+        endpoint="/api/discovery/ads",
+        status=None,
+        response_count=1,
+        headers={},
+    )
+
+    assert supabase.inserts == []
