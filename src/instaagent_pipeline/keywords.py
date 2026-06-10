@@ -56,6 +56,12 @@ def generate_keyword_allocations(
         "temperature": 0.2,
         "system": (
             "You create search keywords for paid ad and UGC discovery. "
+            "Generate at most 5 keywords and aim for 3 highly relevant keywords. "
+            "Every keyword_text must be exactly one word. Do not return phrases or multi-word keywords. "
+            "Choose words whose search results are likely to contain directly relevant ads or reusable creative formats. "
+            "For a cleanser campaign, cleanser is a good keyword because it directly matches the product; "
+            "skincare is also good because many skincare ads use formats that can inspire cleanser ads; "
+            "asmr is bad because most ASMR videos are not applicable to a cleanser ad even if ASMR is a possible format. "
             "Return strict JSON only. Do not include markdown."
         ),
         "messages": [
@@ -189,9 +195,11 @@ Campaign guidelines: {campaign_guidelines or ""}
 Target paid ads: {target_paid_count}
 Target UGC videos: {target_ugc_count}
 
-Create 3-6 concise search keywords for provider API discovery.
+Create 3-5 concise single-word search keywords for provider API discovery.
+Aim for 3 highly relevant keywords; use 4 or 5 only when the extra keywords clearly improve coverage.
 Use broad category, benefit, pain-point, audience, ingredient, use-case, or content-format terms.
 Avoid exact brand/product terms unless they are clearly useful for owned-brand or competitor lookup.
+Each keyword_text must contain exactly one word with no spaces.
 
 Allocate target_paid_count and target_ugc_count across the keywords.
 The sum of all target_paid_count values must equal {target_paid_count}.
@@ -202,7 +210,7 @@ Return exactly this JSON shape:
 {{
   "keywords": [
     {{
-      "keyword_text": "gentle cleanser",
+      "keyword_text": "cleanser",
       "target_paid_count": 250,
       "target_ugc_count": 625
     }}
@@ -234,8 +242,8 @@ def parse_keyword_allocations(
     rows = parsed.get("keywords") if isinstance(parsed, dict) else None
     if not isinstance(rows, list):
         raise RuntimeError("Claude keyword response must contain a keywords list.")
-    if not 3 <= len(rows) <= 6:
-        raise RuntimeError("Claude must return 3-6 keywords.")
+    if not 3 <= len(rows) <= 5:
+        raise RuntimeError("Claude must return 3-5 keywords.")
 
     allocations: list[KeywordAllocation] = []
     seen: set[str] = set()

@@ -5,7 +5,7 @@ This document reflects the current checked-in working tree at the time it was wr
 ## Data Flow
 
 1. User gives product info, campaign guidelines, target number of paid ads, and target number of UGC videos. This creates `products` and `pipeline_runs`.
-2. If no manual keywords are passed, Claude Haiku extracts 3-6 keywords and splits paid ad / UGC targets across them. The allocations must add up to the user's requested totals. Keywords are stored in `keywords`; the Claude call is logged in `api_usage`.
+2. If no manual keywords are passed, Claude Haiku extracts 3-5 keywords, aiming for 3 highly relevant single-word keywords, and splits paid ad / UGC targets across them. The allocations must add up to the user's requested totals. Keywords are stored in `keywords`; the Claude call is logged in `api_usage`.
 3. Ingest commands load active keywords for the run. Foreplay and TopYappers query each keyword for its allocated count. Each query is logged in `source_queries`; each live API response is logged in `api_usage`; raw JSON goes into `raw_payloads`.
 4. If an API returns fewer ads or videos than requested for a keyword, the pipeline saves what came back and moves on.
 5. Normalized Foreplay output fills `paid_ads`. Normalized TopYappers output fills `ugc_items`.
