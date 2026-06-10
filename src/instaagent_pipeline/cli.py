@@ -6,6 +6,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .apify_transcripts import (
+    backfill_ugc_transcripts_from_provider_subtitles,
+    backfill_ugc_transcripts_with_apify,
+)
 from .config import Config
 from .foreplay import ingest_foreplay_ads
 from .keywords import (
@@ -23,7 +27,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     config = Config.from_env()
-    supabase = build_supabase(config, dry_run=getattr(args, "dry_run", False))
+    dry_run = getattr(args, "dry_run", False)
+    dry_run_needs_supabase = args.command == "backfill-ugc-transcripts"
+    supabase = build_supabase(config, dry_run=dry_run and not dry_run_needs_supabase)
 
     if args.command == "init-run":
         result = init_run(args, supabase, config)
@@ -69,6 +75,12 @@ def main(argv: list[str] | None = None) -> int:
                 target_field="target_ugc_count",
                 ingest_func=ingest_topyappers_viral,
             )
+        result = with_ugc_transcript_backfill(
+            result,
+            config=config,
+            supabase=supabase,
+            args=args,
+        )
     elif args.command == "ingest-topyappers-videos":
         if args.keyword:
             result = ingest_topyappers_videos(
@@ -90,6 +102,34 @@ def main(argv: list[str] | None = None) -> int:
                 target_field="target_ugc_count",
                 ingest_func=ingest_topyappers_videos,
             )
+        result = with_ugc_transcript_backfill(
+            result,
+            config=config,
+            supabase=supabase,
+            args=args,
+        )
+    elif args.command == "backfill-ugc-transcripts":
+        provider_subtitles = backfill_ugc_transcripts_from_provider_subtitles(
+            supabase=supabase,
+            run_id=args.run_id,
+            limit=args.limit,
+            dry_run=args.dry_run,
+        )
+        apify = None
+        if not args.skip_apify:
+            apify = backfill_ugc_transcripts_with_apify(
+                config=config,
+                supabase=supabase,
+                run_id=args.run_id,
+                limit=args.limit,
+                dry_run=args.dry_run,
+                input_json=args.input_json,
+                timeout=args.timeout,
+            )
+        result = {
+            "provider_subtitles": provider_subtitles,
+            "apify": apify,
+        }
     else:
         parser.error("Unknown command")
         return 2
@@ -99,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="InstaAgent ad pipeline Step 1/2 CLI")
+    parser = argparse.ArgumentParser(description="InstaAgent ad pipeline CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init = subparsers.add_parser("init-run", help="Create a product, pipeline run, and keywords.")
@@ -127,6 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ingest URL-backed TopYappers viral-content candidates.",
     )
     add_ingest_common_args(viral)
+    add_ugc_transcript_args(viral)
     viral.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
     viral.add_argument("--target-count", type=int, default=2500)
     viral.add_argument("--page-size", type=int, default=100)
@@ -136,9 +177,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ingest TopYappers metadata-only video records. This endpoint does not return video URLs.",
     )
     add_ingest_common_args(videos)
+    add_ugc_transcript_args(videos)
     videos.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
     videos.add_argument("--target-count", type=int, default=2500)
     videos.add_argument("--page-size", type=int, default=100)
+
+    transcripts = subparsers.add_parser(
+        "backfill-ugc-transcripts",
+        help="Backfill missing UGC transcripts from public social video URLs using Apify.",
+    )
+    transcripts.add_argument("--run-id", required=True)
+    transcripts.add_argument("--limit", type=int, default=100)
+    transcripts.add_argument("--timeout", type=int, default=300)
+    transcripts.add_argument("--dry-run", action="store_true")
+    transcripts.add_argument("--skip-apify", action="store_true")
+    transcripts.add_argument(
+        "--input-json",
+        type=Path,
+        help="Use a saved Apify dataset response instead of calling Apify. Intended for one-row tests.",
+    )
 
     return parser
 
@@ -155,12 +212,77 @@ def add_ingest_common_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_ugc_transcript_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--skip-transcript-backfill",
+        action="store_true",
+        help="Do not copy TopYappers subtitles or call Apify after live TopYappers ingestion.",
+    )
+    parser.add_argument(
+        "--transcript-limit",
+        type=int,
+        help="Maximum number of rows to process in each transcript stage. Defaults to the number fetched.",
+    )
+    parser.add_argument(
+        "--transcript-timeout",
+        type=int,
+        default=300,
+        help="Apify actor timeout in seconds per video URL.",
+    )
+
+
 def build_supabase(config: Config, *, dry_run: bool) -> SupabaseClient | None:
     if dry_run:
         return None
     if not config.supabase_url or not config.supabase_key:
         raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required unless --dry-run is used.")
     return SupabaseClient(config.supabase_url, config.supabase_key)
+
+
+def with_ugc_transcript_backfill(
+    ingestion_result: Any,
+    *,
+    config: Config,
+    supabase: SupabaseClient | None,
+    args: argparse.Namespace,
+) -> Any:
+    if args.dry_run or args.skip_transcript_backfill:
+        return ingestion_result
+    if supabase is None:
+        raise RuntimeError("Supabase credentials are required for transcript backfill.")
+
+    transcript_limit = args.transcript_limit or fetched_count(ingestion_result)
+    if transcript_limit < 1:
+        return {"ingestion": ingestion_result, "transcripts": None}
+
+    provider_subtitles = backfill_ugc_transcripts_from_provider_subtitles(
+        supabase=supabase,
+        run_id=args.run_id,
+        limit=transcript_limit,
+        dry_run=False,
+    )
+    apify = backfill_ugc_transcripts_with_apify(
+        config=config,
+        supabase=supabase,
+        run_id=args.run_id,
+        limit=transcript_limit,
+        dry_run=False,
+        input_json=None,
+        timeout=args.transcript_timeout,
+    )
+    return {
+        "ingestion": ingestion_result,
+        "transcripts": {
+            "provider_subtitles": provider_subtitles,
+            "apify": apify,
+        },
+    }
+
+
+def fetched_count(result: Any) -> int:
+    if isinstance(result, dict):
+        return int(result.get("fetched") or 0)
+    return int(getattr(result, "fetched", 0) or 0)
 
 
 def init_run(args: argparse.Namespace, supabase: SupabaseClient | None, config: Config) -> dict[str, Any]:
@@ -315,8 +437,12 @@ def parse_extra_params(values: list[str]) -> dict[str, Any]:
 
 
 def to_jsonable(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [to_jsonable(item) for item in value]
     if hasattr(value, "__dict__"):
-        return value.__dict__
+        return {key: to_jsonable(item) for key, item in value.__dict__.items()}
     return value
 
 

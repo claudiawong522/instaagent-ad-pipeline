@@ -1,12 +1,13 @@
 # API Endpoints
 
-This document lists the endpoints used by the Step 1/2 implementation, their input fields, output fields, and Supabase mappings.
+This document lists the endpoints used by the ingestion and transcript-backfill implementation, their input fields, output fields, and Supabase mappings.
 
 The current design keeps paid ads and UGC separate:
 
 - Foreplay paid ads write to `paid_ads`.
 - TopYappers UGC writes to `ugc_items`.
-- Raw source JSON from both providers still writes to `raw_payloads`.
+- Apify UGC transcript fallback writes to `ugc_transcripts`.
+- Raw source JSON from external providers still writes to `raw_payloads`.
 
 ## Provider Keyword Strategy
 
@@ -232,20 +233,56 @@ id, run_id, raw_payload_id, external_id, saved_to_supabase_at
 
 Provider-specific fields that are not promoted to first-class columns are stored in `ugc_items.source_metrics` as JSONB. Full source JSON is also preserved in `raw_payloads.payload_json`.
 
-## Supabase Tables Written by Step 1/2
+## Apify: Known-URL UGC Transcript Backfill
+
+- Provider: Apify
+- Actor: `tictechid/anoxvanzi-transcriber`
+- Method: `POST`
+- Endpoint: `https://api.apify.com/v2/acts/tictechid~anoxvanzi-transcriber/run-sync-get-dataset-items`
+- Code path: `backfill-ugc-transcripts`
+- Purpose: backfill transcripts for URL-backed `ugc_items` rows when TopYappers `subtitles` is missing.
+
+After live TopYappers ingestion, the CLI first copies non-empty `ugc_items.subtitles` values into `ugc_transcripts` with `transcript_source = 'topyappers:subtitles'`. It then selects `ugc_items` for the same run where `video_url` is present, `subtitles` is null or empty, and no transcript row exists, and sends supported public social video URLs to Apify. The standalone `backfill-ugc-transcripts` command runs the same two-stage transcript flow. Supported URL hosts are Instagram, TikTok, YouTube, and Facebook.
+
+### Input Columns / Body Fields
+
+| Field | Type | Required | Used by Code | Notes |
+| --- | --- | --- | --- | --- |
+| `start_urls` | string | yes | yes | Public video URL from `ugc_items.video_url`. The actor readme mentions a single URL or array; the CLI sends one URL per actor run for predictable row-level logging. |
+| `token` | query string | yes | yes | Apify token from `APIFY_API_KEY`. |
+
+### Output Columns / Response Fields
+
+| Response Field | Supabase Destination | Notes |
+| --- | --- | --- |
+| `transcript` | `ugc_transcripts.transcript_text` | Parsed into clean text when timestamp markers are present; raw timestamped text is preserved in `raw_payloads`. |
+| timestamp ranges in `transcript` | `ugc_transcripts.transcript_segments` | Parsed into objects with `start`, `end`, and `text` when the actor returns bracketed timestamp ranges. |
+| actor name | `ugc_transcripts.transcript_source` | Stored as `apify:tictechid/anoxvanzi-transcriber`. |
+| full dataset item JSON | `raw_payloads.payload_json` | Raw source of truth, including `status`, `durationSec`, `detected_language`, `error`, and processing timestamp. |
+
+TopYappers provider subtitles map as follows:
+
+| Response Field | Supabase Destination | Notes |
+| --- | --- | --- |
+| `ugc_items.subtitles` | `ugc_transcripts.transcript_text` | Copied when non-empty. |
+| provider name | `ugc_transcripts.transcript_source` | Stored as `topyappers:subtitles`. |
+
+One transcript row is upserted per `(ugc_item_id, transcript_source)`.
+
+## Supabase Tables Written by Current Commands
 
 | Table | Written By | Purpose |
 | --- | --- | --- |
 | `products` | `init-run` | Product brief. |
 | `pipeline_runs` | `init-run` | One execution/config for a product. |
 | `keywords` | `init-run` | Claude-generated or manual keyword terms plus per-keyword paid ad and UGC target allocations. |
-| `source_queries` | all ingestion commands | Request/response/error logging per API page. |
-| `raw_payloads` | ingestion commands | Preserved raw source item JSON. |
+| `source_queries` | all external API commands | Request/response/error logging per API page or transcript actor run. |
+| `raw_payloads` | external API commands | Preserved raw source item JSON. |
 | `paid_ads` | `ingest-foreplay` | Foreplay-shaped paid ad rows. |
 | `ugc_items` | `ingest-topyappers-viral`, `ingest-topyappers-videos` | TopYappers-shaped UGC candidate rows. Use `ingest-topyappers-viral` when `video_url` is required. |
-| `api_usage` | live LLM and ingestion commands | Claude keyword-generation usage plus provider HTTP status, response count, selected rate-limit/usage headers, and credits used when exposed. |
+| `api_usage` | live LLM, ingestion, and transcript commands | Claude keyword-generation usage plus provider HTTP status, response count, selected rate-limit/usage headers, and credits used when exposed. |
 | `paid_ad_transcripts` | created by schema only | Later paid-ad transcript processing stage. |
-| `ugc_transcripts` | created by schema only | Later UGC transcript processing stage. |
+| `ugc_transcripts` | `backfill-ugc-transcripts` | UGC transcript rows from provider subtitles and Apify fallback results. |
 
 ## UGC Save Timestamp
 

@@ -9,7 +9,9 @@ This document reflects the current checked-in working tree at the time it was wr
 3. Ingest commands load active keywords for the run. Foreplay and TopYappers query each keyword for its allocated count. Each query is logged in `source_queries`; each live API response is logged in `api_usage`; raw JSON goes into `raw_payloads`.
 4. If an API returns fewer ads or videos than requested for a keyword, the pipeline saves what came back and moves on.
 5. Normalized Foreplay output fills `paid_ads`. Normalized TopYappers output fills `ugc_items`.
-6. Current transcript text stays on `paid_ads.full_transcription`, `paid_ads.timestamped_transcription`, or `ugc_items.subtitles` when providers return it. `paid_ad_transcripts` and `ugc_transcripts` exist for a later transcript stage.
+6. Current provider transcript text stays on `paid_ads.full_transcription`, `paid_ads.timestamped_transcription`, or `ugc_items.subtitles` when providers return it.
+7. Live TopYappers ingestion and `backfill-ugc-transcripts` both copy non-empty `ugc_items.subtitles` into `ugc_transcripts`.
+8. The same transcript stage finds remaining UGC rows without `subtitles`, sends supported public social video URLs to Apify, stores raw Apify output in `raw_payloads`, and writes cleaned transcript text plus parsed timestamp segments to `ugc_transcripts`.
 
 ## Tables
 
@@ -262,6 +264,8 @@ Stores transcript rows attached to normalized UGC items.
 | `transcript_source` | `text` | Nullable | Source of the transcript. |
 | `created_at` | `timestamptz` | Not null, default `now()` | Creation timestamp. |
 
+Unique index: `ugc_transcripts_item_source_idx` on `(ugc_item_id, transcript_source)`.
+
 ## Indexes
 
 | Index | Table | Columns / expression | Purpose |
@@ -278,3 +282,4 @@ Stores transcript rows attached to normalized UGC items.
 | `ugc_items_run_id_idx` | `ugc_items` | `run_id` | Find UGC items for a run. |
 | `ugc_items_external_idx` | `ugc_items` | `external_id` | Lookup by provider id. |
 | `ugc_items_virality_idx` | `ugc_items` | `virality_score desc` | Rank UGC items by virality. |
+| `ugc_transcripts_item_source_idx` | `ugc_transcripts` | `ugc_item_id, transcript_source` | Upsert one transcript per item/source and support transcript lookup by UGC item. |

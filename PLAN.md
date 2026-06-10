@@ -1,6 +1,6 @@
 # InstaAgent Ad Selection Pipeline
 
-This is the full future plan for the InstaAgent ad selection pipeline. The current implementation only covers Step 1 and Step 2: product/run setup and source ingestion foundations.
+This is the full future plan for the InstaAgent ad selection pipeline. The current implementation covers Step 1 and Step 2 foundations, plus a first known-URL UGC transcript fallback for Step 3.
 
 ## Goal
 
@@ -34,8 +34,9 @@ Given a product and keyword set, collect paid ads and UGC/organic content, analy
 
 3. Transcript extraction
    - Paid ads: use Foreplay transcript fields when present.
-   - UGC: use TopYappers `subtitles` when present.
-   - Fallback later: transcribe downloaded video/audio if source subtitles are missing.
+   - UGC: copy TopYappers `subtitles` into `ugc_transcripts` when present.
+   - Known-URL UGC fallback: use Apify `tictechid/anoxvanzi-transcriber` for public Instagram, TikTok, YouTube Shorts, and Facebook URLs when TopYappers subtitles are missing.
+   - Fallback later: transcribe downloaded video/audio if source subtitles are missing and URL-based actors fail.
 
 4. LLM analysis
    - Analyze every transcript into structured ICP, format, hook, and cloneability fields.
@@ -66,7 +67,7 @@ Given a product and keyword set, collect paid ads and UGC/organic content, analy
 
 ## Current Implementation Scope
 
-Only Step 1 and Step 2 are implemented now.
+Step 1, Step 2, and the first UGC transcript backfill path in Step 3 are implemented now.
 
 Included:
 
@@ -75,11 +76,13 @@ Included:
 - CLI to ingest Foreplay paid ad candidates across stored keyword allocations.
 - CLI to ingest TopYappers viral-content UGC candidates across stored keyword allocations.
 - CLI to ingest/hydrate TopYappers video records across stored keyword allocations.
+- CLI to backfill missing UGC transcripts from public social video URLs through Apify into `ugc_transcripts`.
 - Endpoint documentation that matches the ingestion code.
 
 Not included yet:
 
-- Transcript extraction as a standalone processing stage.
+- Paid-ad transcript extraction as a standalone processing stage.
+- Downloaded media/audio transcription for UGC rows not covered by provider subtitles or Apify URL actors.
 - LLM analysis.
 - Embeddings.
 - Clustering.

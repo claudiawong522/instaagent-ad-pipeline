@@ -223,3 +223,4 @@ create index if not exists ugc_items_video_topic_idx on ugc_items(video_topic);
 create index if not exists ugc_items_content_category_idx on ugc_items(content_category);
 create index if not exists ugc_items_virality_idx on ugc_items(virality_score desc);
 create index if not exists ugc_items_saved_to_supabase_at_idx on ugc_items(saved_to_supabase_at desc);
+create unique index if not exists ugc_transcripts_item_source_idx on ugc_transcripts(ugc_item_id, transcript_source);

@@ -1,0 +1,11 @@
+[
+  {
+    "sourceUrl": "https://www.tiktok.com/@creator/video/123",
+    "videoId": "123",
+    "status": "success",
+    "durationSec": 8.1,
+    "transcript": "[0.00s - 2.50s] Welcome to my channel! [2.50s - 8.10s] Today I'm testing this cleanser.",
+    "detected_language": "en",
+    "timestamp": "2026-06-10T00:00:00.000Z"
+  }
+]

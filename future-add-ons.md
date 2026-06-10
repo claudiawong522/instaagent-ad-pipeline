@@ -13,8 +13,8 @@ These are good ideas intentionally deferred to keep the first version lean.
 - Use Apify `data-slayer/instagram-search-reels` when TopYappers does not return enough relevant keyword results.
 - Benefits: arbitrary Instagram Reels keyword search, captions, hashtags, creator metadata, engagement metrics, audio metadata, and video URLs.
 - Tradeoff: the actor is not transcript-native, so a separate transcription step is needed.
-- For known Instagram URLs that TopYappers saved without `subtitles`, evaluate Apify `apple_yang/instagram-transcripts-scraper` as a transcript-only fallback. It accepts one public Instagram video URL and returns `text` plus timestamped `segments`; store successful output in `ugc_transcripts`, not `ugc_items.subtitles`.
-- For a broader known-URL transcript fallback, evaluate Apify `tictechid/anoxvanzi-transcriber`. It accepts `start_urls` for public Instagram, TikTok, YouTube Shorts, and Facebook videos, then returns `transcript`, `detected_language`, duration, status, and errors; this can cover non-Instagram TopYappers rows.
+- If the broader Apify transcript actor has poor Instagram reliability or cost, compare Apify `apple_yang/instagram-transcripts-scraper` as an Instagram-only alternative. It accepts one public Instagram video URL and returns `text` plus timestamped `segments`.
+- If Apify confirms array input is stable for `tictechid/anoxvanzi-transcriber`, batch multiple known URLs into one actor run to reduce per-run base charges.
 
 ## Account-Size-Normalized UGC Virality
 

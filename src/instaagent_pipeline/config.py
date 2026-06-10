@@ -13,6 +13,7 @@ class Config:
     foreplay_base_url: str
     topyappers_api_key: str | None
     topyappers_base_url: str
+    apify_api_key: str | None
     claude_api_key: str | None
     claude_model: str
 
@@ -26,6 +27,7 @@ class Config:
             foreplay_base_url=os.getenv("FOREPLAY_BASE_URL", "https://public.api.foreplay.co").rstrip("/"),
             topyappers_api_key=os.getenv("TOPYAPPERS_API_KEY"),
             topyappers_base_url=os.getenv("TOPYAPPERS_BASE_URL", "https://api.topyappers.com").rstrip("/"),
+            apify_api_key=os.getenv("APIFY_API_KEY") or os.getenv("APIFY_TOKEN"),
             claude_api_key=os.getenv("CLAUDE_API_KEY"),
             claude_model=os.getenv("CLAUDE_MODEL", "claude-haiku-4-5"),
         )

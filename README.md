@@ -1,6 +1,6 @@
 # InstaAgent Ad Pipeline
 
-Lean Step 1/2 implementation for InstaAgent's ad selection pipeline.
+Lean ingestion and transcript-backfill foundation for InstaAgent's ad selection pipeline.
 
 ## What Exists Now
 
@@ -17,11 +17,13 @@ Lean Step 1/2 implementation for InstaAgent's ad selection pipeline.
 - `supabase/migrations/007_source_metrics_jsonb.sql`: migration that adds JSONB overflow fields for provider-specific metadata.
 - `supabase/migrations/008_drop_creative_items.sql`: migration that removes obsolete shared-table schema tables from existing projects.
 - `supabase/migrations/009_keyword_allocations.sql`: migration that adds per-keyword paid ad and UGC target allocations.
+- `supabase/migrations/010_ugc_transcript_source_unique.sql`: migration that lets UGC transcript backfills upsert by item and transcript source.
 - Python CLI for:
   - creating products/runs and Claude-generated keyword allocations.
   - ingesting Foreplay paid ad candidates into `paid_ads` across stored keyword allocations.
   - ingesting URL-backed TopYappers viral-content UGC candidates into `ugc_items` across stored keyword allocations.
   - optionally ingesting TopYappers videos metadata into `ugc_items` when URLs are not required.
+  - backfilling missing UGC transcripts from public social video URLs through Apify.
 
 ## Setup
 
@@ -63,6 +65,8 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-topyappers-viral \
   --page-size 100
 ```
 
+After live TopYappers ingestion, the CLI automatically copies TopYappers `subtitles` into `ugc_transcripts`, then uses Apify for supported public video URLs that still do not have a transcript. Pass `--skip-transcript-backfill` to ingest only UGC rows without running the transcript stage.
+
 Optionally ingest TopYappers metadata-only video records:
 
 ```bash
@@ -73,7 +77,26 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-topyappers-videos \
 
 Omit `--keyword` to use stored keyword allocations. Pass `--keyword` and `--target-count` to run one manual keyword for debugging or backfills.
 
-Use `--dry-run` to fetch/parse without writing to Supabase, or `--input-json path/to/response.json` to normalize a saved API payload. `--dry-run` with omitted `--keyword` is not supported because stored keywords must be loaded from Supabase.
+Use `--dry-run` to fetch/parse without writing to Supabase, or `--input-json path/to/response.json` to normalize a saved API payload. For ingestion commands, `--dry-run` with omitted `--keyword` is not supported because stored keywords must be loaded from Supabase.
+
+Backfill or rerun UGC transcript extraction:
+
+```bash
+PYTHONPATH=src python3 -m instaagent_pipeline.cli backfill-ugc-transcripts \
+  --run-id "<pipeline_run_id>" \
+  --limit 25
+```
+
+This first copies TopYappers `subtitles` into `ugc_transcripts`, then calls Apify for supported public social video URLs that remain missing a transcript. Use `--skip-apify` to copy only provider subtitles.
+
+Preview candidates without calling Apify or writing transcripts:
+
+```bash
+PYTHONPATH=src python3 -m instaagent_pipeline.cli backfill-ugc-transcripts \
+  --run-id "<pipeline_run_id>" \
+  --limit 25 \
+  --dry-run
+```
 
 ## Required Environment Variables
 
@@ -83,6 +106,8 @@ Use `--dry-run` to fetch/parse without writing to Supabase, or `--input-json pat
 - `FOREPLAY_API_KEY`
 - `TOPYAPPERS_API_KEY`
 - `CLAUDE_API_KEY`
+- `APIFY_API_KEY`
+  - Required only for `backfill-ugc-transcripts`.
 
 Optional:
 
@@ -156,6 +181,14 @@ Then add keyword allocation columns:
 
 ```bash
 cat supabase/migrations/009_keyword_allocations.sql | pbcopy
+```
+
+Then paste and run it in Supabase.
+
+Then add the UGC transcript source uniqueness index:
+
+```bash
+cat supabase/migrations/010_ugc_transcript_source_unique.sql | pbcopy
 ```
 
 Then paste and run it in Supabase.
