@@ -8,6 +8,13 @@ from typing import Any
 
 from .config import Config
 from .foreplay import ingest_foreplay_ads
+from .keywords import (
+    active_keyword_allocations,
+    allocate_manual_keywords,
+    generate_keyword_allocations,
+    insert_keyword_allocations,
+)
+from .ingestion import utc_now_iso
 from .supabase_client import SupabaseClient
 from .topyappers import ingest_topyappers_videos, ingest_topyappers_viral
 
@@ -19,43 +26,70 @@ def main(argv: list[str] | None = None) -> int:
     supabase = build_supabase(config, dry_run=getattr(args, "dry_run", False))
 
     if args.command == "init-run":
-        result = init_run(args, supabase)
+        result = init_run(args, supabase, config)
     elif args.command == "ingest-foreplay":
-        result = ingest_foreplay_ads(
-            config=config,
-            supabase=supabase,
-            run_id=args.run_id,
-            keyword=args.keyword,
-            target_count=args.target_count,
-            page_size=args.page_size,
-            dry_run=args.dry_run,
-            input_json=args.input_json,
-            extra_params=parse_extra_params(args.extra_param),
-        )
+        if args.keyword:
+            result = ingest_foreplay_ads(
+                config=config,
+                supabase=supabase,
+                run_id=args.run_id,
+                keyword=args.keyword,
+                target_count=args.target_count,
+                page_size=args.page_size,
+                dry_run=args.dry_run,
+                input_json=args.input_json,
+                extra_params=parse_extra_params(args.extra_param),
+            )
+        else:
+            result = ingest_allocated_keywords(
+                config=config,
+                supabase=supabase,
+                args=args,
+                target_field="target_paid_count",
+                ingest_func=ingest_foreplay_ads,
+            )
     elif args.command == "ingest-topyappers-viral":
-        result = ingest_topyappers_viral(
-            config=config,
-            supabase=supabase,
-            run_id=args.run_id,
-            keyword=args.keyword,
-            target_count=args.target_count,
-            page_size=args.page_size,
-            dry_run=args.dry_run,
-            input_json=args.input_json,
-            extra_params=parse_extra_params(args.extra_param),
-        )
+        if args.keyword:
+            result = ingest_topyappers_viral(
+                config=config,
+                supabase=supabase,
+                run_id=args.run_id,
+                keyword=args.keyword,
+                target_count=args.target_count,
+                page_size=args.page_size,
+                dry_run=args.dry_run,
+                input_json=args.input_json,
+                extra_params=parse_extra_params(args.extra_param),
+            )
+        else:
+            result = ingest_allocated_keywords(
+                config=config,
+                supabase=supabase,
+                args=args,
+                target_field="target_ugc_count",
+                ingest_func=ingest_topyappers_viral,
+            )
     elif args.command == "ingest-topyappers-videos":
-        result = ingest_topyappers_videos(
-            config=config,
-            supabase=supabase,
-            run_id=args.run_id,
-            keyword=args.keyword,
-            target_count=args.target_count,
-            page_size=args.page_size,
-            dry_run=args.dry_run,
-            input_json=args.input_json,
-            extra_params=parse_extra_params(args.extra_param),
-        )
+        if args.keyword:
+            result = ingest_topyappers_videos(
+                config=config,
+                supabase=supabase,
+                run_id=args.run_id,
+                keyword=args.keyword,
+                target_count=args.target_count,
+                page_size=args.page_size,
+                dry_run=args.dry_run,
+                input_json=args.input_json,
+                extra_params=parse_extra_params(args.extra_param),
+            )
+        else:
+            result = ingest_allocated_keywords(
+                config=config,
+                supabase=supabase,
+                args=args,
+                target_field="target_ugc_count",
+                ingest_func=ingest_topyappers_videos,
+            )
     else:
         parser.error("Unknown command")
         return 2
@@ -73,7 +107,8 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--category")
     init.add_argument("--target-market")
     init.add_argument("--notes")
-    init.add_argument("--keyword", action="append", required=True)
+    init.add_argument("--campaign-guidelines")
+    init.add_argument("--keyword", action="append")
     init.add_argument("--keyword-type", default="seed")
     init.add_argument("--target-paid-count", type=int, default=1000)
     init.add_argument("--target-ugc-count", type=int, default=2500)
@@ -83,7 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     foreplay = subparsers.add_parser("ingest-foreplay", help="Ingest Foreplay paid ad candidates.")
     add_ingest_common_args(foreplay)
-    foreplay.add_argument("--keyword", required=True)
+    foreplay.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
     foreplay.add_argument("--target-count", type=int, default=1000)
     foreplay.add_argument("--page-size", type=int, default=250)
 
@@ -92,7 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ingest URL-backed TopYappers viral-content candidates.",
     )
     add_ingest_common_args(viral)
-    viral.add_argument("--keyword", required=True)
+    viral.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
     viral.add_argument("--target-count", type=int, default=2500)
     viral.add_argument("--page-size", type=int, default=100)
 
@@ -101,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ingest TopYappers metadata-only video records. This endpoint does not return video URLs.",
     )
     add_ingest_common_args(videos)
-    videos.add_argument("--keyword", required=True)
+    videos.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
     videos.add_argument("--target-count", type=int, default=2500)
     videos.add_argument("--page-size", type=int, default=100)
 
@@ -128,8 +163,10 @@ def build_supabase(config: Config, *, dry_run: bool) -> SupabaseClient | None:
     return SupabaseClient(config.supabase_url, config.supabase_key)
 
 
-def init_run(args: argparse.Namespace, supabase: SupabaseClient | None) -> dict[str, Any]:
-    config = json.loads(args.config_json)
+def init_run(args: argparse.Namespace, supabase: SupabaseClient | None, config: Config) -> dict[str, Any]:
+    run_config = json.loads(args.config_json)
+    if args.campaign_guidelines:
+        run_config["campaign_guidelines"] = args.campaign_guidelines
     product_payload = {
         "name": args.product_name,
         "category": args.category,
@@ -138,20 +175,36 @@ def init_run(args: argparse.Namespace, supabase: SupabaseClient | None) -> dict[
     }
     run_payload = {
         "status": "created",
-        "config": config,
+        "config": run_config,
         "target_paid_count": args.target_paid_count,
         "target_ugc_count": args.target_ugc_count,
         "top_k": args.top_k,
     }
-
     if args.dry_run:
+        if args.keyword:
+            allocations = allocate_manual_keywords(
+                args.keyword,
+                target_paid_count=args.target_paid_count,
+                target_ugc_count=args.target_ugc_count,
+                keyword_type=args.keyword_type,
+            )
+        else:
+            generation_result = generate_keyword_allocations(
+                config=config,
+                dry_run=True,
+                product_name=args.product_name,
+                category=args.category,
+                target_market=args.target_market,
+                notes=args.notes,
+                campaign_guidelines=args.campaign_guidelines,
+                target_paid_count=args.target_paid_count,
+                target_ugc_count=args.target_ugc_count,
+            )
+            allocations = generation_result.allocations
         return {
             "product": product_payload,
             "pipeline_run": run_payload,
-            "keywords": [
-                {"keyword_text": keyword, "keyword_type": args.keyword_type, "source": "manual", "active": True}
-                for keyword in args.keyword
-            ],
+            "keywords": [allocation.__dict__ for allocation in allocations],
         }
 
     if supabase is None:
@@ -160,20 +213,92 @@ def init_run(args: argparse.Namespace, supabase: SupabaseClient | None) -> dict[
     product = supabase.insert("products", product_payload)
     run_payload["product_id"] = product["id"]
     run = supabase.insert("pipeline_runs", run_payload)
-    keywords = [
-        supabase.insert(
-            "keywords",
+    try:
+        if args.keyword:
+            allocations = allocate_manual_keywords(
+                args.keyword,
+                target_paid_count=args.target_paid_count,
+                target_ugc_count=args.target_ugc_count,
+                keyword_type=args.keyword_type,
+            )
+        else:
+            generation_result = generate_keyword_allocations(
+                config=config,
+                supabase=supabase,
+                dry_run=args.dry_run,
+                run_id=run["id"],
+                product_name=args.product_name,
+                category=args.category,
+                target_market=args.target_market,
+                notes=args.notes,
+                campaign_guidelines=args.campaign_guidelines,
+                target_paid_count=args.target_paid_count,
+                target_ugc_count=args.target_ugc_count,
+            )
+            allocations = generation_result.allocations
+        keywords = insert_keyword_allocations(supabase, run_id=run["id"], allocations=allocations)
+    except Exception:
+        supabase.update_by_id(
+            "pipeline_runs",
+            run["id"],
             {
-                "run_id": run["id"],
-                "keyword_text": keyword,
-                "keyword_type": args.keyword_type,
-                "source": "manual",
-                "active": True,
+                "status": "failed",
+                "updated_at": utc_now_iso(),
             },
         )
-        for keyword in args.keyword
-    ]
+        raise
     return {"product": product, "pipeline_run": run, "keywords": keywords}
+
+
+def ingest_allocated_keywords(
+    *,
+    config: Config,
+    supabase: SupabaseClient | None,
+    args: argparse.Namespace,
+    target_field: str,
+    ingest_func: Any,
+) -> dict[str, Any]:
+    if args.dry_run:
+        raise RuntimeError("--keyword is required with --dry-run because dry-run cannot load stored keywords.")
+    if supabase is None:
+        raise RuntimeError("Supabase credentials are required to load stored keyword allocations.")
+
+    rows = active_keyword_allocations(supabase, args.run_id)
+    if not rows:
+        raise RuntimeError(f"No active keywords found for run {args.run_id}.")
+
+    details: list[dict[str, Any]] = []
+    fetched = 0
+    written = 0
+    extra_params = parse_extra_params(args.extra_param)
+    for row in rows:
+        keyword = str(row.get("keyword_text") or "").strip()
+        target_count = int(row.get(target_field) or 0)
+        if not keyword or target_count <= 0:
+            continue
+        result = ingest_func(
+            config=config,
+            supabase=supabase,
+            run_id=args.run_id,
+            keyword=keyword,
+            target_count=target_count,
+            page_size=args.page_size,
+            dry_run=False,
+            input_json=args.input_json,
+            extra_params=extra_params,
+        )
+        fetched += result.fetched
+        written += result.written
+        details.append(
+            {
+                "keyword": keyword,
+                "target_count": target_count,
+                "fetched": result.fetched,
+                "written": result.written,
+            }
+        )
+
+    return {"fetched": fetched, "written": written, "keywords": details}
 
 
 def parse_extra_params(values: list[str]) -> dict[str, Any]:

@@ -50,12 +50,12 @@ def ingest_foreplay_ads(
             method="GET",
             request_params=params,
         )
+        response_headers: dict[str, str] = {}
+        response_status: int | None = None
 
         try:
             if input_json:
                 body = json.loads(input_json.read_text())
-                response_headers = {}
-                response_status = None
             else:
                 if not config.foreplay_api_key:
                     raise RuntimeError("FOREPLAY_API_KEY is required unless --input-json is used.")
@@ -94,6 +94,7 @@ def ingest_foreplay_ads(
                 items=items_to_write,
                 normalizer=normalize_foreplay_ad,
                 conflict_columns="run_id,id",
+                response_status=response_status,
             )
             fetched += result.fetched
             written += result.written
@@ -104,6 +105,17 @@ def ingest_foreplay_ads(
                 break
             offset += current_limit
         except (HttpClientError, RuntimeError) as exc:
+            if isinstance(exc, HttpClientError) and response_status is None and not input_json:
+                log_api_usage(
+                    supabase=supabase,
+                    dry_run=dry_run,
+                    run_id=run_id,
+                    provider="foreplay",
+                    endpoint=DISCOVERY_ADS_PATH,
+                    status=exc.status,
+                    response_count=None,
+                    headers={},
+                )
             log_failed_query(
                 supabase=supabase,
                 dry_run=dry_run,

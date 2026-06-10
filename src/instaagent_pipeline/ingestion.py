@@ -21,7 +21,7 @@ def start_query(
     *,
     supabase: SupabaseClient | None,
     dry_run: bool,
-    run_id: str,
+    run_id: str | None,
     provider: str,
     endpoint: str,
     method: str,
@@ -43,19 +43,47 @@ def start_query(
     return row.get("id")
 
 
+def complete_query(
+    *,
+    supabase: SupabaseClient | None,
+    dry_run: bool,
+    source_query_id: str | None,
+    response_count: int | None,
+    http_status: int | None = None,
+) -> None:
+    if dry_run or supabase is None or source_query_id is None:
+        return
+    payload: dict[str, Any] = {
+        "status": "completed",
+        "response_count": response_count,
+        "completed_at": utc_now_iso(),
+    }
+    if http_status is not None:
+        payload["http_status"] = http_status
+    supabase.update_by_id("source_queries", source_query_id, payload)
+
+
 def log_api_usage(
     *,
     supabase: SupabaseClient | None,
     dry_run: bool,
-    run_id: str,
+    run_id: str | None,
     provider: str,
     endpoint: str,
     status: int | None,
     response_count: int | None,
     headers: dict[str, str] | None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     if dry_run or supabase is None or status is None:
         return
+    rate_limit: dict[str, Any] = {
+        "http_status": status,
+        "response_count": response_count,
+        "headers": usage_headers(headers or {}),
+    }
+    if metadata:
+        rate_limit.update(metadata)
     supabase.insert(
         "api_usage",
         {
@@ -63,11 +91,7 @@ def log_api_usage(
             "provider": provider,
             "endpoint": endpoint,
             "credits_used": credits_used_from_headers(headers or {}),
-            "rate_limit": {
-                "http_status": status,
-                "response_count": response_count,
-                "headers": usage_headers(headers or {}),
-            },
+            "rate_limit": rate_limit,
         },
     )
 
@@ -105,6 +129,7 @@ def write_items(
     items: list[dict[str, Any]],
     normalizer: Callable[[dict[str, Any], str, str | None], dict[str, Any]],
     conflict_columns: str = "run_id,source_provider,external_id",
+    response_status: int | None = None,
 ) -> IngestResult:
     if dry_run:
         for item in items:
@@ -115,29 +140,27 @@ def write_items(
         raise RuntimeError("Supabase credentials are required unless --dry-run is used.")
 
     if source_query_id:
-        supabase.update_by_id(
-            "source_queries",
-            source_query_id,
-            {
-                "status": "completed",
-                "response_count": len(items),
-                "completed_at": utc_now_iso(),
-            },
+        complete_query(
+            supabase=supabase,
+            dry_run=dry_run,
+            source_query_id=source_query_id,
+            response_count=len(items),
+            http_status=response_status,
         )
     else:
-        source_query = supabase.insert(
-            "source_queries",
-            {
-                "run_id": run_id,
-                "provider": provider,
-                "endpoint": endpoint,
-                "method": method,
-                "request_params": request_params,
-                "status": "completed",
-                "response_count": len(items),
-                "completed_at": utc_now_iso(),
-            },
-        )
+        payload: dict[str, Any] = {
+            "run_id": run_id,
+            "provider": provider,
+            "endpoint": endpoint,
+            "method": method,
+            "request_params": request_params,
+            "status": "completed",
+            "response_count": len(items),
+            "completed_at": utc_now_iso(),
+        }
+        if response_status is not None:
+            payload["http_status"] = response_status
+        source_query = supabase.insert("source_queries", payload)
         source_query_id = source_query.get("id")
 
     written = 0

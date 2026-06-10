@@ -19,6 +19,16 @@ For a seed such as `QV cleanser`, use examples like:
 | Foreplay | `query` | `gentle cleanser` or `face cleanser` | Finds competitive paid video ads in the cleanser category without over-constraining to exact QV mentions. |
 | TopYappers viral-content | `videoTopicContains` | `cleanser`, then top up with `skincare` if needed | The URL-backed viral endpoint is topic-oriented; broad terms return more UGC candidates with usable video URLs. |
 
+## Claude: Generate Keyword Allocations
+
+- Provider column: configured Claude model, for example `claude-haiku-4-5`
+- Method: `POST`
+- Endpoint: `https://api.anthropic.com/v1/messages`
+- Code path: `init-run` when no manual `--keyword` values are supplied
+- Purpose: generate 3-6 discovery keywords from product context and allocate paid ad / UGC targets across them.
+
+Output is stored in `keywords.keyword_text`, `keywords.target_paid_count`, and `keywords.target_ugc_count`. The per-keyword paid ad targets must add up to `pipeline_runs.target_paid_count`; the per-keyword UGC targets must add up to `pipeline_runs.target_ugc_count`. The Claude call is logged in `source_queries` and `api_usage`.
+
 ## Foreplay: Search Paid Ads
 
 - Provider: Foreplay
@@ -228,12 +238,12 @@ Provider-specific fields that are not promoted to first-class columns are stored
 | --- | --- | --- |
 | `products` | `init-run` | Product brief. |
 | `pipeline_runs` | `init-run` | One execution/config for a product. |
-| `keywords` | `init-run` | Seed and expanded keyword terms. |
+| `keywords` | `init-run` | Claude-generated or manual keyword terms plus per-keyword paid ad and UGC target allocations. |
 | `source_queries` | all ingestion commands | Request/response/error logging per API page. |
 | `raw_payloads` | ingestion commands | Preserved raw source item JSON. |
 | `paid_ads` | `ingest-foreplay` | Foreplay-shaped paid ad rows. |
 | `ugc_items` | `ingest-topyappers-viral`, `ingest-topyappers-videos` | TopYappers-shaped UGC candidate rows. Use `ingest-topyappers-viral` when `video_url` is required. |
-| `api_usage` | live ingestion commands | Provider HTTP status, response count, selected rate-limit/usage headers, and credits used when exposed. |
+| `api_usage` | live LLM and ingestion commands | Claude keyword-generation usage plus provider HTTP status, response count, selected rate-limit/usage headers, and credits used when exposed. |
 | `paid_ad_transcripts` | created by schema only | Later paid-ad transcript processing stage. |
 | `ugc_transcripts` | created by schema only | Later UGC transcript processing stage. |
 

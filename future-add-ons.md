@@ -27,10 +27,10 @@ These are good ideas intentionally deferred to keep the first version lean.
 
 - Generate scripts, shot lists, asset requirements, creator directions, and prompt-ready clone specs from selected winners.
 
-## Automated Keyword Expansion
+## Keyword Quality Tuning
 
-- Use LLM/category research to generate provider-specific keyword variants, competitor terms, ingredient terms, pain-point terms, and adjacent category terms.
-- Keep exact product phrases in run context, then automatically choose broader provider API inputs such as `gentle cleanser` for Foreplay and `cleanser`/`skincare` for TopYappers viral-content when exact brand terms are too sparse.
+- Add keyword approval, rejection, regeneration, and per-provider keyword variants.
+- Add competitor/domain lookup when exact brand or competitor terms matter.
 
 ## Visual Analysis
 

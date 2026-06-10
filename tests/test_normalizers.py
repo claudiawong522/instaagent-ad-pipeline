@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from instaagent_pipeline.ingestion import log_api_usage
+from instaagent_pipeline.ingestion import complete_query, log_api_usage
+from instaagent_pipeline.keywords import KeywordAllocation, KeywordGenerationResult, claude_provider, log_claude_keyword_usage
 from instaagent_pipeline.normalizers import normalize_foreplay_ad, normalize_topyappers_item, result_items
 
 
@@ -140,10 +141,15 @@ def test_normalize_topyappers_viral_derives_instagram_url() -> None:
 class RecordingSupabase:
     def __init__(self) -> None:
         self.inserts: list[tuple[str, dict]] = []
+        self.updates: list[tuple[str, str, dict]] = []
 
     def insert(self, table: str, payload: dict) -> dict:
         self.inserts.append((table, payload))
         return {"id": "usage_1", **payload}
+
+    def update_by_id(self, table: str, row_id: str, payload: dict) -> dict:
+        self.updates.append((table, row_id, payload))
+        return {"id": row_id, **payload}
 
 
 def test_log_api_usage_records_status_counts_and_rate_limit_headers() -> None:
@@ -210,3 +216,75 @@ def test_log_api_usage_skips_dry_run_and_fixture_responses() -> None:
     )
 
     assert supabase.inserts == []
+
+
+def test_complete_query_records_success_status_and_http_status() -> None:
+    supabase = RecordingSupabase()
+
+    complete_query(
+        supabase=supabase,  # type: ignore[arg-type]
+        dry_run=False,
+        source_query_id="query_1",
+        response_count=4,
+        http_status=200,
+    )
+
+    assert supabase.updates == [
+        (
+            "source_queries",
+            "query_1",
+            {
+                "status": "completed",
+                "response_count": 4,
+                "completed_at": supabase.updates[0][2]["completed_at"],
+                "http_status": 200,
+            },
+        )
+    ]
+
+
+def test_claude_usage_provider_includes_model() -> None:
+    supabase = RecordingSupabase()
+    result = KeywordGenerationResult(
+        allocations=[
+            KeywordAllocation(keyword_text="gentle cleanser", target_paid_count=100, target_ugc_count=250),
+        ],
+        model="claude-haiku-4-5",
+        status=200,
+        headers={"anthropic-ratelimit-requests-remaining": "49"},
+        usage={"input_tokens": 12, "output_tokens": 8},
+    )
+
+    log_claude_keyword_usage(
+        supabase=supabase,  # type: ignore[arg-type]
+        dry_run=False,
+        run_id="run_1",
+        result=result,
+    )
+
+    assert supabase.inserts == [
+        (
+            "api_usage",
+            {
+                "run_id": "run_1",
+                "provider": "claude-haiku-4-5",
+                "endpoint": "/v1/messages",
+                "credits_used": None,
+                "rate_limit": {
+                    "http_status": 200,
+                    "response_count": 1,
+                    "keyword_count": 1,
+                    "model": "claude-haiku-4-5",
+                    "usage": {"input_tokens": 12, "output_tokens": 8},
+                    "headers": {
+                        "anthropic-ratelimit-requests-remaining": "49",
+                    },
+                },
+            },
+        )
+    ]
+
+
+def test_claude_provider_prefixes_non_claude_model_names() -> None:
+    assert claude_provider("claude-haiku-4-5") == "claude-haiku-4-5"
+    assert claude_provider("haiku45") == "claude-haiku45"

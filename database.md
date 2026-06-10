@@ -2,6 +2,15 @@
 
 This document reflects the current checked-in working tree at the time it was written, especially `supabase/schema.sql` and `supabase/migrations/001_split_paid_ads_and_ugc.sql`. The repo had uncommitted database and pipeline edits, so confirm against Supabase before treating this as a deployed-production snapshot.
 
+## Data Flow
+
+1. User gives product info, campaign guidelines, target number of paid ads, and target number of UGC videos. This creates `products` and `pipeline_runs`.
+2. If no manual keywords are passed, Claude Haiku extracts 3-6 keywords and splits paid ad / UGC targets across them. The allocations must add up to the user's requested totals. Keywords are stored in `keywords`; the Claude call is logged in `api_usage`.
+3. Ingest commands load active keywords for the run. Foreplay and TopYappers query each keyword for its allocated count. Each query is logged in `source_queries`; each live API response is logged in `api_usage`; raw JSON goes into `raw_payloads`.
+4. If an API returns fewer ads or videos than requested for a keyword, the pipeline saves what came back and moves on.
+5. Normalized Foreplay output fills `paid_ads`. Normalized TopYappers output fills `ugc_items`.
+6. Current transcript text stays on `paid_ads.full_transcription`, `paid_ads.timestamped_transcription`, or `ugc_items.subtitles` when providers return it. `paid_ad_transcripts` and `ugc_transcripts` exist for a later transcript stage.
+
 ## Tables
 
 ### `products`
@@ -35,7 +44,7 @@ Tracks one configured collection run for one product.
 
 ### `keywords`
 
-Stores seed and derived keywords attached to a run.
+Stores generated or manual discovery keywords attached to a run, including per-keyword target allocations.
 
 | Column | Type | Constraints / default | Notes |
 | --- | --- | --- | --- |
@@ -44,6 +53,8 @@ Stores seed and derived keywords attached to a run.
 | `keyword_text` | `text` | Not null | Keyword value used for source queries. |
 | `keyword_type` | `text` | Not null, default `'seed'` | Keyword category. |
 | `source` | `text` | Not null, default `'manual'` | Where the keyword came from. |
+| `target_paid_count` | `integer` | Not null, default `0` | Number of paid ads to request for this keyword. |
+| `target_ugc_count` | `integer` | Not null, default `0` | Number of UGC items to request for this keyword. |
 | `active` | `boolean` | Not null, default `true` | Whether the keyword should be used. |
 | `created_at` | `timestamptz` | Not null, default `now()` | Creation timestamp. |
 
@@ -69,7 +80,7 @@ Logs each external API request attempted by the pipeline.
 
 ### `api_usage`
 
-Records one usage row per live provider API response. Fixture-based `--input-json` runs and dry-runs do not write usage rows.
+Records usage rows for live Claude keyword-generation calls and live provider API responses. Fixture-based `--input-json` runs and dry-runs do not write provider usage rows.
 
 | Column | Type | Constraints / default | Notes |
 | --- | --- | --- | --- |
@@ -267,62 +278,3 @@ Stores transcript rows attached to normalized UGC items.
 | `ugc_items_run_id_idx` | `ugc_items` | `run_id` | Find UGC items for a run. |
 | `ugc_items_external_idx` | `ugc_items` | `external_id` | Lookup by provider id. |
 | `ugc_items_virality_idx` | `ugc_items` | `virality_score desc` | Rank UGC items by virality. |
-
-## Simple Data Flow
-
-```text
-init-run
-  -> products
-  -> pipeline_runs
-  -> keywords
-
-ingest-foreplay --run-id ... --keyword ...
-  -> source_queries row starts
-  -> Foreplay GET /api/discovery/ads
-  -> api_usage logs HTTP status, response count, and rate/usage headers
-  -> source_queries row completes or fails
-  -> raw_payloads stores each raw ad item
-  -> normalize_foreplay_ad()
-  -> paid_ads upsert on run_id + id
-
-ingest-topyappers-viral --run-id ... --keyword ...
-  -> source_queries row starts
-  -> TopYappers POST /api/v1/viral-content
-  -> api_usage logs HTTP status, response count, and rate/usage headers
-  -> source_queries row completes or fails
-  -> raw_payloads stores each raw UGC item
-  -> normalize_topyappers_item(endpoint_kind="viral-content")
-  -> ugc_items upsert on run_id + external_id
-
-ingest-topyappers-videos --run-id ... --keyword ...
-  -> source_queries row starts
-  -> TopYappers GET /api/v1/videos metadata-only fallback
-  -> api_usage logs HTTP status, response count, and rate/usage headers
-  -> source_queries row completes or fails
-  -> raw_payloads stores each raw video item
-  -> normalize_topyappers_item(endpoint_kind="videos")
-  -> ugc_items upsert on run_id + external_id
-```
-
-## Relationship Map
-
-```text
-products
-  -> pipeline_runs
-       -> keywords
-       -> source_queries
-       -> raw_payloads
-       -> paid_ads
-            -> paid_ad_transcripts
-       -> ugc_items
-            -> ugc_transcripts
-       -> api_usage
-```
-
-Notes:
-
-- `raw_payloads` is the audit and re-normalization source. Keep it when provider payload shapes change.
-- `paid_ads` stores Foreplay-shaped paid ad rows; `ugc_items` stores UGC candidate rows.
-- `source_queries` records request status, parameters, response counts, and failures.
-- `api_usage` records one row per live provider HTTP response, including HTTP status, response count, selected rate-limit/usage headers, and credits used when exposed by provider headers.
-- Transcript tables exist, but the current ingestion path writes Foreplay transcript fields directly into matching `paid_ads` columns when they are present.

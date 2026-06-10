@@ -27,6 +27,8 @@ create table if not exists keywords (
   keyword_text text not null,
   keyword_type text not null default 'seed',
   source text not null default 'manual',
+  target_paid_count integer not null default 0,
+  target_ugc_count integer not null default 0,
   active boolean not null default true,
   created_at timestamptz not null default now()
 );

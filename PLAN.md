@@ -19,13 +19,15 @@ Given a product and keyword set, collect paid ads and UGC/organic content, analy
 1. Product/run setup
    - Create a product record with name, category, target market, and notes.
    - Create a pipeline run with target counts, top K, and source config.
-   - Store seed keywords and expanded keyword variants.
+   - Use Claude Haiku to generate 3-6 discovery keywords when manual keywords are not supplied.
+   - Store keywords plus per-keyword paid ad and UGC target allocations. Allocations must add up to the run targets.
    - Log every API request in `source_queries`.
 
 2. Source ingestion
-   - Foreplay: query paid ads by keyword and collect up to 1000 candidates, prioritizing `order=longest_running`.
-   - TopYappers: query URL-backed UGC with `POST /api/v1/viral-content`, using free-text fields first and category filters only as helpers.
+   - Foreplay: query paid ads by allocated keyword, prioritizing `order=longest_running`.
+   - TopYappers: query URL-backed UGC by allocated keyword with `POST /api/v1/viral-content`, using free-text fields first and category filters only as helpers.
    - Use TopYappers `GET /api/v1/videos` only as a metadata-only fallback when subtitles or raw video metrics matter more than video URLs.
+   - If a provider returns fewer items than the keyword target, save the returned items and move on.
    - Store raw payloads and source-shaped candidates in separate Supabase tables:
      - Foreplay paid ads -> `paid_ads`.
      - TopYappers UGC -> `ugc_items`, with columns matching the TopYappers response fields plus database bookkeeping.
@@ -69,10 +71,10 @@ Only Step 1 and Step 2 are implemented now.
 Included:
 
 - Supabase schema for products, runs, keywords, source query logs, raw payloads, Foreplay-shaped `paid_ads`, TopYappers-shaped `ugc_items`, transcript placeholders, and API usage.
-- CLI to create product/runs and keywords.
-- CLI to ingest Foreplay paid ad candidates.
-- CLI to ingest TopYappers viral-content UGC candidates.
-- CLI to ingest/hydrate TopYappers video records.
+- CLI to create product/runs and Claude-generated or manual keyword allocations.
+- CLI to ingest Foreplay paid ad candidates across stored keyword allocations.
+- CLI to ingest TopYappers viral-content UGC candidates across stored keyword allocations.
+- CLI to ingest/hydrate TopYappers video records across stored keyword allocations.
 - Endpoint documentation that matches the ingestion code.
 
 Not included yet:

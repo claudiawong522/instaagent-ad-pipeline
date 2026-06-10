@@ -50,11 +50,11 @@ def ingest_topyappers_viral(
             method="POST",
             request_params=body_params,
         )
+        response_headers: dict[str, str] = {}
+        response_status: int | None = None
         try:
             if input_json:
                 body = json.loads(input_json.read_text())
-                response_headers = {}
-                response_status = None
             else:
                 if not config.topyappers_api_key:
                     raise RuntimeError("TOPYAPPERS_API_KEY is required unless --input-json is used.")
@@ -98,6 +98,7 @@ def ingest_topyappers_viral(
                     endpoint_kind="viral-content",
                 ),
                 conflict_columns="run_id,external_id",
+                response_status=response_status,
             )
             fetched += result.fetched
             written += result.written
@@ -108,6 +109,17 @@ def ingest_topyappers_viral(
                 break
             page += 1
         except (HttpClientError, RuntimeError) as exc:
+            if isinstance(exc, HttpClientError) and response_status is None and not input_json:
+                log_api_usage(
+                    supabase=supabase,
+                    dry_run=dry_run,
+                    run_id=run_id,
+                    provider="topyappers",
+                    endpoint=VIRAL_CONTENT_PATH,
+                    status=exc.status,
+                    response_count=None,
+                    headers={},
+                )
             log_failed_query(
                 supabase=supabase,
                 dry_run=dry_run,
@@ -162,11 +174,11 @@ def ingest_topyappers_videos(
             method="GET",
             request_params=params,
         )
+        response_headers: dict[str, str] = {}
+        response_status: int | None = None
         try:
             if input_json:
                 body = json.loads(input_json.read_text())
-                response_headers = {}
-                response_status = None
             else:
                 if not config.topyappers_api_key:
                     raise RuntimeError("TOPYAPPERS_API_KEY is required unless --input-json is used.")
@@ -210,6 +222,7 @@ def ingest_topyappers_videos(
                     endpoint_kind="videos",
                 ),
                 conflict_columns="run_id,external_id",
+                response_status=response_status,
             )
             fetched += result.fetched
             written += result.written
@@ -220,6 +233,17 @@ def ingest_topyappers_videos(
                 break
             page += 1
         except (HttpClientError, RuntimeError) as exc:
+            if isinstance(exc, HttpClientError) and response_status is None and not input_json:
+                log_api_usage(
+                    supabase=supabase,
+                    dry_run=dry_run,
+                    run_id=run_id,
+                    provider="topyappers",
+                    endpoint=VIDEOS_PATH,
+                    status=exc.status,
+                    response_count=None,
+                    headers={},
+                )
             log_failed_query(
                 supabase=supabase,
                 dry_run=dry_run,

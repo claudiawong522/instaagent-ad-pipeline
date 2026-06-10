@@ -15,10 +15,12 @@ Lean Step 1/2 implementation for InstaAgent's ad selection pipeline.
 - `supabase/migrations/005_paid_ads_foreplay_exact_shape.sql`: migration that resets `paid_ads` to columns matching Foreplay paid ad JSON fields.
 - `supabase/migrations/006_ugc_video_url.sql`: migration that adds the TopYappers video URL column if an existing project is missing it.
 - `supabase/migrations/007_source_metrics_jsonb.sql`: migration that adds JSONB overflow fields for provider-specific metadata.
+- `supabase/migrations/008_drop_creative_items.sql`: migration that removes obsolete shared-table schema tables from existing projects.
+- `supabase/migrations/009_keyword_allocations.sql`: migration that adds per-keyword paid ad and UGC target allocations.
 - Python CLI for:
-  - creating products/runs/keywords.
-  - ingesting Foreplay paid ad candidates into `paid_ads`.
-  - ingesting URL-backed TopYappers viral-content UGC candidates into `ugc_items`.
+  - creating products/runs and Claude-generated keyword allocations.
+  - ingesting Foreplay paid ad candidates into `paid_ads` across stored keyword allocations.
+  - ingesting URL-backed TopYappers viral-content UGC candidates into `ugc_items` across stored keyword allocations.
   - optionally ingesting TopYappers videos metadata into `ugc_items` when URLs are not required.
 
 ## Setup
@@ -40,9 +42,9 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli init-run \
   --product-name "QE cleanser" \
   --category "skincare" \
   --target-market "US skincare buyers" \
-  --keyword "cleanser" \
-  --keyword "gentle cleanser" \
-  --keyword "gentle cleansing"
+  --campaign-guidelines "Find competitor ads and UGC for a gentle cleanser launch." \
+  --target-paid-count 1000 \
+  --target-ugc-count 2500
 ```
 
 Ingest Foreplay paid ads:
@@ -50,8 +52,6 @@ Ingest Foreplay paid ads:
 ```bash
 PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-foreplay \
   --run-id "<pipeline_run_id>" \
-  --keyword "gentle cleanser" \
-  --target-count 1000 \
   --page-size 250
 ```
 
@@ -60,8 +60,6 @@ Ingest TopYappers URL-backed UGC:
 ```bash
 PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-topyappers-viral \
   --run-id "<pipeline_run_id>" \
-  --keyword "gentle cleanser" \
-  --target-count 2500 \
   --page-size 100
 ```
 
@@ -70,12 +68,12 @@ Optionally ingest TopYappers metadata-only video records:
 ```bash
 PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-topyappers-videos \
   --run-id "<pipeline_run_id>" \
-  --keyword "gentle cleanser" \
-  --target-count 2500 \
   --page-size 100
 ```
 
-Use `--dry-run` to fetch/parse without writing to Supabase, or `--input-json path/to/response.json` to normalize a saved API payload.
+Omit `--keyword` to use stored keyword allocations. Pass `--keyword` and `--target-count` to run one manual keyword for debugging or backfills.
+
+Use `--dry-run` to fetch/parse without writing to Supabase, or `--input-json path/to/response.json` to normalize a saved API payload. `--dry-run` with omitted `--keyword` is not supported because stored keywords must be loaded from Supabase.
 
 ## Required Environment Variables
 
@@ -84,11 +82,14 @@ Use `--dry-run` to fetch/parse without writing to Supabase, or `--input-json pat
 - `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_ANON_KEY`
 - `FOREPLAY_API_KEY`
 - `TOPYAPPERS_API_KEY`
+- `CLAUDE_API_KEY`
 
 Optional:
 
 - `FOREPLAY_BASE_URL`
 - `TOPYAPPERS_BASE_URL`
+- `CLAUDE_MODEL`
+  - Defaults to `claude-haiku-4-5`.
 - `INSTAAGENT_INSECURE_SSL=1`
   - Local dev workaround only if this Python install cannot verify HTTPS certificates.
   - Do not use this in production.
@@ -139,6 +140,22 @@ Then run the JSONB source metrics migration:
 
 ```bash
 cat supabase/migrations/007_source_metrics_jsonb.sql | pbcopy
+```
+
+Then paste and run it in Supabase.
+
+Then remove obsolete shared-table schema tables:
+
+```bash
+cat supabase/migrations/008_drop_creative_items.sql | pbcopy
+```
+
+Then paste and run it in Supabase.
+
+Then add keyword allocation columns:
+
+```bash
+cat supabase/migrations/009_keyword_allocations.sql | pbcopy
 ```
 
 Then paste and run it in Supabase.

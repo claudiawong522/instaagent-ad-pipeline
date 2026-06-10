@@ -63,6 +63,17 @@ class SupabaseClient:
             return response.body
         return {}
 
+    def select(self, table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        response = request_json(
+            "GET",
+            f"{self.url}/rest/v1/{table}",
+            headers=self._headers,
+            params=params,
+        )
+        if isinstance(response.body, list):
+            return [row for row in response.body if isinstance(row, dict)]
+        return []
+
 
 def normalize_supabase_url(url: str) -> str:
     cleaned = url.rstrip("/")

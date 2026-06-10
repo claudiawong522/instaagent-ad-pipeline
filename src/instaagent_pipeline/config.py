@@ -13,6 +13,8 @@ class Config:
     foreplay_base_url: str
     topyappers_api_key: str | None
     topyappers_base_url: str
+    claude_api_key: str | None
+    claude_model: str
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -24,6 +26,8 @@ class Config:
             foreplay_base_url=os.getenv("FOREPLAY_BASE_URL", "https://public.api.foreplay.co").rstrip("/"),
             topyappers_api_key=os.getenv("TOPYAPPERS_API_KEY"),
             topyappers_base_url=os.getenv("TOPYAPPERS_BASE_URL", "https://api.topyappers.com").rstrip("/"),
+            claude_api_key=os.getenv("CLAUDE_API_KEY"),
+            claude_model=os.getenv("CLAUDE_MODEL", "claude-haiku-4-5"),
         )
 
 
