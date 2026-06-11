@@ -13,6 +13,31 @@ This document reflects the current checked-in working tree at the time it was wr
 7. Live TopYappers ingestion and `backfill-ugc-transcripts` both copy non-empty `ugc_items.subtitles` into `ugc_transcripts`.
 8. The same transcript stage finds remaining UGC rows without `subtitles`, sends supported public social video URLs to Apify, stores raw Apify output in `raw_payloads`, and writes cleaned transcript text plus parsed timestamp segments to `ugc_transcripts`.
 
+### Diagram
+
+```
+User: product + campaign info
+        │  init-run
+        ▼
+products ── pipeline_runs ── keywords  (Claude Haiku splits paid/UGC targets across 3-5 keywords)
+        │
+        ├─ ingest-apify-ads (per keyword)
+        │     Meta Ad Library via Apify ──► paid_ads  (copy, video URL, metrics)
+        │     └─ auto: OpenRouter enrichment (1 call/ad: video base64 + ad copy)
+        │           ├─► paid_ad_transcripts   (transcript + segments)
+        │           └─► paid_ads analysis columns (hook, persona/ICP, format, emotion, …)
+        │
+        └─ ingest-topyappers-viral (per keyword)
+              TopYappers ──► ugc_items  (metrics + provider analysis fields)
+              └─ auto: transcript backfill
+                    ├─ subtitles present ──► ugc_transcripts (topyappers:subtitles)
+                    └─ else video_url ──► Apify transcriber ──► ugc_transcripts (apify:…)
+
+every external call ──► source_queries + api_usage;  every raw response ──► raw_payloads
+```
+
+End state per run: both content tables carry comparable transcript and ICP/format/hook metadata — the shape the later stages (embeddings, clustering, top-K selection) consume.
+
 ## Tables
 
 ### `products`
