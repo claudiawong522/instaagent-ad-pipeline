@@ -4,7 +4,7 @@ This document lists the endpoints used by the ingestion and transcript-backfill 
 
 The current design keeps paid ads and UGC separate:
 
-- Foreplay paid ads write to `paid_ads`.
+- Apify Meta Ad Library paid ads write to `paid_ads`.
 - TopYappers UGC writes to `ugc_items`.
 - Apify UGC transcript fallback writes to `ugc_transcripts`.
 - Raw source JSON from external providers still writes to `raw_payloads`.
@@ -17,7 +17,7 @@ For a seed such as `QV cleanser`, use examples like:
 
 | Provider | API field | Recommended input | Why |
 | --- | --- | --- | --- |
-| Foreplay | `query` | `gentle cleanser` or `face cleanser` | Finds competitive paid video ads in the cleanser category without over-constraining to exact QV mentions. |
+| Apify Meta Ad Library | `search_terms` inside generated Meta Ad Library URL | `gentle cleanser` or `face cleanser` | Finds competitive paid video ads in the cleanser category without over-constraining to exact QV mentions. |
 | TopYappers viral-content | `videoTopicContains` | `cleanser`, then top up with `skincare` if needed | The URL-backed viral endpoint is topic-oriented; broad terms return more UGC candidates with usable video URLs. |
 
 ## Claude: Generate Keyword Allocations
@@ -30,107 +30,66 @@ For a seed such as `QV cleanser`, use examples like:
 
 Output is stored in `keywords.keyword_text`, `keywords.target_paid_count`, and `keywords.target_ugc_count`. The per-keyword paid ad targets must add up to `pipeline_runs.target_paid_count`; the per-keyword UGC targets must add up to `pipeline_runs.target_ugc_count`. The Claude call is logged in `source_queries` and `api_usage`.
 
-## Foreplay: Search Paid Ads
+## Apify: Search Meta Ad Library Paid Ads
 
-- Provider: Foreplay
-- Method: `GET`
-- Endpoint: `https://public.api.foreplay.co/api/discovery/ads`
-- Code path: `ingest-foreplay`
-- Purpose: search paid ads by keyword and retrieve candidate ads with longevity and transcript metadata.
+- Provider: `apify:apify/facebook-ads-scraper`
+- Method: `POST`
+- Endpoint: `https://api.apify.com/v2/acts/apify~facebook-ads-scraper/run-sync-get-dataset-items`
+- Code path: `ingest-apify-ads`
+- Purpose: search Meta Ad Library by keyword and retrieve paid ad candidates with creatives, copy, platform, start/end dates, and raw transparency metadata.
 
 ### Input Columns / Query Fields
 
 | Field | Type | Required | Used by Code | Notes |
 | --- | --- | --- | --- | --- |
-| `query` | string | yes | yes | Product/category keyword such as `gentle cleanser`. |
-| `limit` | integer | yes | yes | Page size. |
-| `offset` | integer | yes | yes | Offset pagination. |
-| `order` | string | yes | yes | Defaults to `longest_running`. |
-| `live` | boolean | no | yes | Optional active-status filter via `--extra-param live=true`. |
-| `display_format` | string | no | yes | Optional format filter via `--extra-param display_format=video`. |
-| `publisher_platform` | string | no | yes | Optional platform filter. |
-| `languages` | string/string[] | no | yes | Optional language filter. |
-| `market_target` | string | no | yes | Optional B2B/B2C filter. |
-| `running_duration_min_days` | integer | no | yes | Optional longevity minimum. |
-| `running_duration_max_days` | integer | no | yes | Optional longevity maximum. |
+| `startUrls` | array | yes | yes | Contains one generated Meta Ad Library URL per keyword. |
+| `resultsLimit` | integer | yes | yes | Set from the keyword's paid-ad target count. |
+| `activeStatus` | string | yes | yes | Defaults to `active`. |
+| `onlyTotal` | boolean | yes | yes | Defaults to `false`; the pipeline needs ad rows, not counts only. |
+| `includeAboutPage` | boolean | yes | yes | Defaults to `false`. |
+| `isDetailsPerAd` | boolean | yes | yes | Defaults to `false`. |
+| `--extra-param` overrides | JSON values | no | yes | Optional actor input overrides for debugging or provider-specific tuning. |
+
+The generated Meta Ad Library URL uses:
+
+```text
+active_status=active
+ad_type=all
+country=ALL
+is_targeted_country=false
+media_type=video
+publisher_platforms[0]=instagram
+publisher_platforms[1]=facebook
+search_type=keyword_unordered
+search_terms=<keyword>
+```
 
 ### Output Columns / Response Fields
 
 | Response Field | Supabase Destination | Notes |
 | --- | --- | --- |
-| `id` | `paid_ads.id` | Foreplay item id. Database primary key is `paid_ads.paid_ad_row_id`. |
-| `live` | `paid_ads.live` | Exact Foreplay field. |
-| `name` | `paid_ads.name` | Exact Foreplay field. |
-| `type` | `paid_ads.type` | Exact Foreplay field. |
-| `ad_id` | `paid_ads.ad_id` | Exact Foreplay field. |
-| `cards` | `paid_ads.cards` | Exact Foreplay field. |
-| `image` | `paid_ads.image` | Exact Foreplay field. |
-| `video` | `paid_ads.video` | Exact Foreplay field. |
-| `avatar` | `paid_ads.avatar` | Exact Foreplay field. |
-| `niches` | `paid_ads.niches` | Exact Foreplay field. |
-| `persona` | `paid_ads.persona` | Exact Foreplay field. |
-| `brand_id` | `paid_ads.brand_id` | Exact Foreplay field. |
-| `cta_type` | `paid_ads.cta_type` | Exact Foreplay field. |
-| `headline` | `paid_ads.headline` | Exact Foreplay field. |
-| `link_url` | `paid_ads.link_url` | Exact Foreplay field. |
-| `cta_title` | `paid_ads.cta_title` | Exact Foreplay field. |
-| `languages` | `paid_ads.languages` | Exact Foreplay field. |
-| `thumbnail` | `paid_ads.thumbnail` | Exact Foreplay field. |
-| `categories` | `paid_ads.categories` | Exact Foreplay field. |
-| `description` | `paid_ads.description` | Exact Foreplay field. |
-| `market_target` | `paid_ads.market_target` | Exact Foreplay field. |
-| `content_filter` | `paid_ads.content_filter` | Exact Foreplay field. |
-| `display_format` | `paid_ads.display_format` | Exact Foreplay field. |
-| `video_duration` | `paid_ads.video_duration` | Exact Foreplay field. |
-| `started_running` | `paid_ads.started_running` | Exact Foreplay field. |
-| `product_category` | `paid_ads.product_category` | Exact Foreplay field. |
-| `running_duration` | `paid_ads.running_duration` | Exact Foreplay field. |
-| `emotional_drivers` | `paid_ads.emotional_drivers` | Exact Foreplay field. |
-| `creative_targeting` | `paid_ads.creative_targeting` | Exact Foreplay field. |
-| `full_transcription` | `paid_ads.full_transcription` | Exact Foreplay field. |
-| `publisher_platform` | `paid_ads.publisher_platform` | Exact Foreplay field. |
-| `timestamped_transcription` | `paid_ads.timestamped_transcription` | Exact Foreplay field. |
-| `time_product_was_mentioned` | `paid_ads.time_product_was_mentioned` | Exact Foreplay field. |
+| `adArchiveID` / `adArchiveId` | `paid_ads.id`, `paid_ads.ad_id` | Meta ad archive identifier. Database primary key is `paid_ads.paid_ad_row_id`. |
+| `isActive` | `paid_ads.live` | Active status when supplied. Otherwise inferred from end date. |
+| `snapshot.pageName` / `pageName` | `paid_ads.name` | Advertiser/page display name. |
+| `snapshot.displayFormat` | `paid_ads.type`, `paid_ads.display_format` | Creative format when supplied. |
+| `snapshot.cards` | `paid_ads.cards` | Raw card/carousel items. |
+| card/snapshot image URL | `paid_ads.image` | First available creative image URL. |
+| card/snapshot video URL | `paid_ads.video` | First available creative video URL. |
+| `snapshot.pageProfilePictureUrl` | `paid_ads.avatar` | Page avatar. |
+| `pageID` / `pageId` | `paid_ads.brand_id` | Meta page identifier. |
+| `snapshot.ctaType` / card `ctaType` | `paid_ads.cta_type` | CTA type. |
+| `snapshot.title` / card `title` | `paid_ads.headline` | Ad headline/title. |
+| `snapshot.linkUrl` / card `linkUrl` | `paid_ads.link_url` | Destination URL. |
+| `snapshot.ctaText` / card `ctaText` | `paid_ads.cta_title` | Human CTA text. |
+| card/snapshot preview URL | `paid_ads.thumbnail` | First available preview/thumbnail URL. |
+| `categories` / `snapshot.pageCategories` | `paid_ads.categories` | Provider categories. |
+| `snapshot.body.text` / card `body` | `paid_ads.description` | Ad copy text. |
+| `startDateFormatted` / `startDate` | `paid_ads.started_running` | Stored as epoch milliseconds. |
+| `endDateFormatted` / `endDate` | `paid_ads.running_duration` | Duration in days, computed locally from start/end or start/current time for active ads. |
+| `publisherPlatform` | `paid_ads.publisher_platform` | Meta publisher platforms. |
+| transcript fields | `paid_ads.full_transcription`, `paid_ads.timestamped_transcription` | Left null; this actor does not document video transcripts. |
 | unmapped provider fields | `paid_ads.source_metrics` | JSONB overflow for provider-specific fields that are not promoted to columns. |
 | full item JSON | `raw_payloads.payload_json` | Raw source of truth. |
-
-## Foreplay: Hydrate One Ad
-
-- Provider: Foreplay
-- Method: `GET`
-- Endpoint: `https://public.api.foreplay.co/api/ad/{ad_id}`
-- Code path: not called automatically yet; documented for Step 2 hydration extension.
-- Purpose: fetch full ad metadata if discovery results are incomplete.
-
-### Input Columns / Path Fields
-
-| Field | Type | Required | Notes |
-| --- | --- | --- | --- |
-| `ad_id` | string | yes | Foreplay ad id. |
-
-### Output Columns / Response Fields
-
-Same mapping as Foreplay search paid ads.
-
-## Foreplay: Usage
-
-- Provider: Foreplay
-- Method: `GET`
-- Endpoint: `https://public.api.foreplay.co/api/usage`
-- Code path: documented for monitoring; not part of default ingestion loop.
-- Purpose: track Foreplay credit usage.
-
-### Input Columns / Query Fields
-
-| Field | Type | Required | Notes |
-| --- | --- | --- | --- |
-| auth header | bearer token | yes | `Authorization: Bearer <FOREPLAY_API_KEY>`. |
-
-### Output Columns / Response Fields
-
-| Response Field | Supabase Destination | Notes |
-| --- | --- | --- |
-| full usage JSON | `api_usage.rate_limit` or `raw_payloads.payload_json` | Exact fields depend on account response. |
 
 ## TopYappers: Viral Content
 
@@ -278,11 +237,11 @@ One transcript row is upserted per `(ugc_item_id, transcript_source)`.
 | `keywords` | `init-run` | Claude-generated or manual keyword terms plus per-keyword paid ad and UGC target allocations. |
 | `source_queries` | all external API commands | Request/response/error logging per API page or transcript actor run. |
 | `raw_payloads` | external API commands | Preserved raw source item JSON. |
-| `paid_ads` | `ingest-foreplay` | Foreplay-shaped paid ad rows. |
+| `paid_ads` | `ingest-apify-ads` | Apify Meta Ad Library paid ad rows. |
 | `ugc_items` | `ingest-topyappers-viral`, `ingest-topyappers-videos` | TopYappers-shaped UGC candidate rows. Use `ingest-topyappers-viral` when `video_url` is required. |
 | `api_usage` | live LLM, ingestion, and transcript commands | Claude keyword-generation usage plus provider HTTP status, response count, selected rate-limit/usage headers, and credits used when exposed. |
 | `paid_ad_transcripts` | created by schema only | Later paid-ad transcript processing stage. |
-| `ugc_transcripts` | `backfill-ugc-transcripts` | UGC transcript rows from provider subtitles and Apify fallback results. |
+| `ugc_transcripts` | `backfill-ugc-transcripts` | UGC transcript rows from Apify fallback results. |
 
 ## UGC Save Timestamp
 

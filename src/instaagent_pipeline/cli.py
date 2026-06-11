@@ -6,12 +6,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .apify_ads import ingest_apify_ads
 from .apify_transcripts import (
     backfill_ugc_transcripts_from_provider_subtitles,
     backfill_ugc_transcripts_with_apify,
 )
 from .config import Config
-from .foreplay import ingest_foreplay_ads
 from .keywords import (
     active_keyword_allocations,
     allocate_manual_keywords,
@@ -33,15 +33,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "init-run":
         result = init_run(args, supabase, config)
-    elif args.command == "ingest-foreplay":
+    elif args.command == "ingest-apify-ads":
         if args.keyword:
-            result = ingest_foreplay_ads(
+            result = ingest_apify_ads(
                 config=config,
                 supabase=supabase,
                 run_id=args.run_id,
                 keyword=args.keyword,
                 target_count=args.target_count,
-                page_size=args.page_size,
+                page_size=getattr(args, "page_size", args.target_count),
                 dry_run=args.dry_run,
                 input_json=args.input_json,
                 extra_params=parse_extra_params(args.extra_param),
@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
                 supabase=supabase,
                 args=args,
                 target_field="target_paid_count",
-                ingest_func=ingest_foreplay_ads,
+                ingest_func=ingest_apify_ads,
             )
     elif args.command == "ingest-topyappers-viral":
         if args.keyword:
@@ -156,11 +156,10 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--config-json", default="{}")
     init.add_argument("--dry-run", action="store_true")
 
-    foreplay = subparsers.add_parser("ingest-foreplay", help="Ingest Foreplay paid ad candidates.")
-    add_ingest_common_args(foreplay)
-    foreplay.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
-    foreplay.add_argument("--target-count", type=int, default=1000)
-    foreplay.add_argument("--page-size", type=int, default=250)
+    apify_ads = subparsers.add_parser("ingest-apify-ads", help="Ingest Apify Meta Ad Library paid ad candidates.")
+    add_ingest_common_args(apify_ads)
+    apify_ads.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
+    apify_ads.add_argument("--target-count", type=int, default=1000)
 
     viral = subparsers.add_parser(
         "ingest-topyappers-viral",
@@ -404,7 +403,7 @@ def ingest_allocated_keywords(
             run_id=args.run_id,
             keyword=keyword,
             target_count=target_count,
-            page_size=args.page_size,
+            page_size=int(getattr(args, "page_size", target_count) or target_count),
             dry_run=False,
             input_json=args.input_json,
             extra_params=extra_params,

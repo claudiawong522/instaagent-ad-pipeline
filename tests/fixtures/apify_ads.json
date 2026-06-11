@@ -1,0 +1,49 @@
+[
+  {
+    "inputUrl": "https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=video&publisher_platforms%5B0%5D=instagram&publisher_platforms%5B1%5D=facebook&search_type=keyword_unordered&search_terms=gentle+cleanser",
+    "pageID": "14226545351",
+    "pageId": "14226545351",
+    "pageName": "QE Skincare",
+    "adArchiveID": "1204694134935316",
+    "adArchiveId": "1204694134935316",
+    "startDateFormatted": "2026-01-05T08:00:00.000Z",
+    "endDateFormatted": "2026-01-26T08:00:00.000Z",
+    "startDate": 1767600000,
+    "endDate": 1769414400,
+    "isActive": true,
+    "publisherPlatform": ["FACEBOOK", "INSTAGRAM"],
+    "categories": ["UNKNOWN"],
+    "snapshot": {
+      "pageId": "14226545351",
+      "pageName": "QE Skincare",
+      "pageProfilePictureUrl": "https://example.com/avatar.jpg",
+      "caption": "example.com",
+      "ctaText": "Shop now",
+      "ctaType": "SHOP_NOW",
+      "displayFormat": "VIDEO",
+      "linkUrl": "https://example.com/qe-cleanser",
+      "title": "Gentle Cleanser",
+      "body": {
+        "text": "A gentle cleanser for sensitive skin."
+      },
+      "videos": [],
+      "images": [],
+      "cards": [
+        {
+          "body": "A gentle cleanser for sensitive skin.",
+          "caption": "example.com",
+          "ctaText": "Shop Now",
+          "ctaType": "SHOP_NOW",
+          "linkUrl": "https://example.com/qe-cleanser",
+          "title": "Gentle Cleanser",
+          "videoHdUrl": "https://example.com/qe-cleanser.mp4",
+          "videoPreviewImageUrl": "https://example.com/qe-cleanser-preview.jpg",
+          "originalImageUrl": "https://example.com/qe-cleanser.jpg",
+          "resizedImageUrl": "https://example.com/qe-cleanser-resized.jpg"
+        }
+      ]
+    },
+    "totalActiveTime": null,
+    "targetedOrReachedCountries": []
+  }
+]

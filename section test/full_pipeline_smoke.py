@@ -14,9 +14,11 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from instaagent_pipeline.apify_ads import APIFY_ADS_PROVIDER, ingest_apify_ads
 from instaagent_pipeline.cli import build_supabase, ingest_allocated_keywords, init_run
 from instaagent_pipeline.config import Config
-from instaagent_pipeline.foreplay import ingest_foreplay_ads
+from instaagent_pipeline.ingestion import utc_now_iso
+from instaagent_pipeline.keywords import generate_keyword_allocations, insert_keyword_allocations
 from instaagent_pipeline.topyappers import ingest_topyappers_viral
 
 
@@ -26,7 +28,11 @@ def main() -> int:
         raise SystemExit("Refusing to run live API/DB smoke test without --confirm-live.")
 
     config = Config.from_env()
-    missing = required_env_missing(config, need_foreplay=not args.skip_foreplay, need_topyappers=not args.skip_topyappers)
+    missing = required_env_missing(
+        config,
+        need_apify_ads=not args.skip_apify_ads,
+        need_topyappers=not args.skip_topyappers,
+    )
     if missing:
         raise SystemExit(f"Missing required env values: {', '.join(missing)}")
 
@@ -34,7 +40,102 @@ def main() -> int:
     if supabase is None:
         raise SystemExit("Supabase client was not created.")
 
-    init_result = init_run(
+    run_id: str | None = None
+    try:
+        init_result = init_smoke_run(args, supabase, config)
+        run_id = init_result["pipeline_run"]["id"]
+
+        apify_ads_result = None
+        topyappers_result = None
+        if not args.skip_apify_ads:
+            apify_ads_result = ingest_allocated_keywords(
+                config=config,
+                supabase=supabase,
+                args=SimpleNamespace(
+                    run_id=run_id,
+                    dry_run=False,
+                    input_json=None,
+                    extra_param=args.extra_param,
+                ),
+                target_field="target_paid_count",
+                ingest_func=ingest_apify_ads,
+            )
+
+        if not args.skip_topyappers:
+            topyappers_result = ingest_allocated_keywords(
+                config=config,
+                supabase=supabase,
+                args=SimpleNamespace(
+                    run_id=run_id,
+                    dry_run=False,
+                    page_size=args.topyappers_page_size,
+                    input_json=None,
+                    extra_param=args.extra_param,
+                ),
+                target_field="target_ugc_count",
+                ingest_func=ingest_topyappers_viral,
+            )
+
+        verification = verify_database_state(
+            supabase=supabase,
+            run_id=run_id,
+            expected_paid_total=args.target_paid_count,
+            expected_ugc_total=args.target_ugc_count,
+            expect_apify_ads=not args.skip_apify_ads,
+            expect_topyappers=not args.skip_topyappers,
+        )
+        supabase.update_by_id("pipeline_runs", run_id, {"status": "completed", "updated_at": utc_now_iso()})
+    except Exception:
+        if run_id is not None:
+            supabase.update_by_id("pipeline_runs", run_id, {"status": "failed", "updated_at": utc_now_iso()})
+        raise
+
+    summary = {
+        "run_id": run_id,
+        "product": init_result["product"],
+        "keywords": verification["keywords"],
+        "apify_ads": apify_ads_result,
+        "topyappers": topyappers_result,
+        "database_counts": verification["counts"],
+        "warnings": verification["warnings"],
+    }
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Live smoke test for product -> Claude keywords -> provider ingestion -> Supabase rows.",
+    )
+    parser.add_argument("--confirm-live", action="store_true", help="Required. Writes to Supabase and calls paid APIs.")
+    parser.add_argument("--product-id", help="Reuse an existing products.id row instead of creating a new product.")
+    parser.add_argument("--product-name", default="Smoke test gentle cleanser", help="Used when --product-id is omitted.")
+    parser.add_argument("--category", default="skincare", help="Used when --product-id is omitted.")
+    parser.add_argument("--target-market", default="US skincare buyers", help="Used when --product-id is omitted.")
+    parser.add_argument("--notes", default="Smoke test record. Safe to delete.", help="Used when --product-id is omitted.")
+    parser.add_argument(
+        "--campaign-guidelines",
+        default="Find competitor paid ads and UGC videos for a gentle cleanser launch.",
+    )
+    parser.add_argument("--target-paid-count", type=int, default=3)
+    parser.add_argument("--target-ugc-count", type=int, default=3)
+    parser.add_argument("--topyappers-page-size", type=int, default=1)
+    parser.add_argument("--skip-apify-ads", action="store_true")
+    parser.add_argument("--skip-topyappers", action="store_true")
+    parser.add_argument(
+        "--extra-param",
+        action="append",
+        default=[],
+        help="Extra provider API param as key=value. Passed to both provider ingestion stages.",
+    )
+    return parser.parse_args()
+
+
+def init_smoke_run(args: argparse.Namespace, supabase: Any, config: Config) -> dict[str, Any]:
+    if args.product_id:
+        return init_existing_product_run(args, supabase, config)
+
+    return init_run(
         SimpleNamespace(
             product_name=args.product_name,
             category=args.category,
@@ -52,90 +153,63 @@ def main() -> int:
         supabase,
         config,
     )
-    run_id = init_result["pipeline_run"]["id"]
 
-    foreplay_result = None
-    topyappers_result = None
-    if not args.skip_foreplay:
-        foreplay_result = ingest_allocated_keywords(
+
+def init_existing_product_run(args: argparse.Namespace, supabase: Any, config: Config) -> dict[str, Any]:
+    products = supabase.select(
+        "products",
+        {
+            "select": "id,name,category,target_market,notes",
+            "id": f"eq.{args.product_id}",
+        },
+    )
+    if not products:
+        raise RuntimeError(f"No product found for --product-id {args.product_id}.")
+
+    product = products[0]
+    run_config: dict[str, Any] = {}
+    if args.campaign_guidelines:
+        run_config["campaign_guidelines"] = args.campaign_guidelines
+    run = supabase.insert(
+        "pipeline_runs",
+        {
+            "product_id": product["id"],
+            "status": "created",
+            "config": run_config,
+            "target_paid_count": args.target_paid_count,
+            "target_ugc_count": args.target_ugc_count,
+            "top_k": 3,
+        },
+    )
+    try:
+        generation_result = generate_keyword_allocations(
             config=config,
             supabase=supabase,
-            args=SimpleNamespace(
-                run_id=run_id,
-                dry_run=False,
-                page_size=args.foreplay_page_size,
-                input_json=None,
-                extra_param=args.extra_param,
-            ),
-            target_field="target_paid_count",
-            ingest_func=ingest_foreplay_ads,
+            dry_run=False,
+            run_id=run["id"],
+            product_name=str(product.get("name") or ""),
+            category=product.get("category"),
+            target_market=product.get("target_market"),
+            notes=product.get("notes"),
+            campaign_guidelines=args.campaign_guidelines,
+            target_paid_count=args.target_paid_count,
+            target_ugc_count=args.target_ugc_count,
         )
-
-    if not args.skip_topyappers:
-        topyappers_result = ingest_allocated_keywords(
-            config=config,
-            supabase=supabase,
-            args=SimpleNamespace(
-                run_id=run_id,
-                dry_run=False,
-                page_size=args.topyappers_page_size,
-                input_json=None,
-                extra_param=args.extra_param,
-            ),
-            target_field="target_ugc_count",
-            ingest_func=ingest_topyappers_viral,
+        keywords = insert_keyword_allocations(supabase, run_id=run["id"], allocations=generation_result.allocations)
+    except Exception:
+        supabase.update_by_id(
+            "pipeline_runs",
+            run["id"],
+            {
+                "status": "failed",
+                "updated_at": utc_now_iso(),
+            },
         )
-
-    verification = verify_database_state(
-        supabase=supabase,
-        run_id=run_id,
-        expected_paid_total=args.target_paid_count,
-        expected_ugc_total=args.target_ugc_count,
-        expect_foreplay=not args.skip_foreplay,
-        expect_topyappers=not args.skip_topyappers,
-    )
-    summary = {
-        "run_id": run_id,
-        "product": init_result["product"],
-        "keywords": verification["keywords"],
-        "foreplay": foreplay_result,
-        "topyappers": topyappers_result,
-        "database_counts": verification["counts"],
-        "warnings": verification["warnings"],
-    }
-    print(json.dumps(summary, indent=2, sort_keys=True))
-    return 0
+        raise
+    return {"product": product, "pipeline_run": run, "keywords": keywords}
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Live smoke test for product -> Claude keywords -> provider ingestion -> Supabase rows.",
-    )
-    parser.add_argument("--confirm-live", action="store_true", help="Required. Writes to Supabase and calls paid APIs.")
-    parser.add_argument("--product-name", default="Smoke test gentle cleanser")
-    parser.add_argument("--category", default="skincare")
-    parser.add_argument("--target-market", default="US skincare buyers")
-    parser.add_argument("--notes", default="Smoke test record. Safe to delete.")
-    parser.add_argument(
-        "--campaign-guidelines",
-        default="Find competitor paid ads and UGC videos for a gentle cleanser launch.",
-    )
-    parser.add_argument("--target-paid-count", type=int, default=3)
-    parser.add_argument("--target-ugc-count", type=int, default=3)
-    parser.add_argument("--foreplay-page-size", type=int, default=1)
-    parser.add_argument("--topyappers-page-size", type=int, default=1)
-    parser.add_argument("--skip-foreplay", action="store_true")
-    parser.add_argument("--skip-topyappers", action="store_true")
-    parser.add_argument(
-        "--extra-param",
-        action="append",
-        default=[],
-        help="Extra provider API param as key=value. Passed to both provider ingestion stages.",
-    )
-    return parser.parse_args()
-
-
-def required_env_missing(config: Config, *, need_foreplay: bool, need_topyappers: bool) -> list[str]:
+def required_env_missing(config: Config, *, need_apify_ads: bool, need_topyappers: bool) -> list[str]:
     missing: list[str] = []
     if not config.supabase_url:
         missing.append("SUPABASE_URL")
@@ -143,8 +217,8 @@ def required_env_missing(config: Config, *, need_foreplay: bool, need_topyappers
         missing.append("SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY")
     if not config.claude_api_key:
         missing.append("CLAUDE_API_KEY")
-    if need_foreplay and not config.foreplay_api_key:
-        missing.append("FOREPLAY_API_KEY")
+    if need_apify_ads and not config.apify_api_key:
+        missing.append("APIFY_API_KEY")
     if need_topyappers and not config.topyappers_api_key:
         missing.append("TOPYAPPERS_API_KEY")
     return missing
@@ -156,7 +230,7 @@ def verify_database_state(
     run_id: str,
     expected_paid_total: int,
     expected_ugc_total: int,
-    expect_foreplay: bool,
+    expect_apify_ads: bool,
     expect_topyappers: bool,
 ) -> dict[str, Any]:
     keywords = supabase.select(
@@ -187,14 +261,14 @@ def verify_database_state(
         failures.append(f"UGC allocation {ugc_allocated} != requested {expected_ugc_total}")
     if not any(str(row.get("provider", "")).startswith("claude") for row in api_usage):
         failures.append("missing Claude keyword-generation row in api_usage")
-    if expect_foreplay and not any(row.get("provider") == "foreplay" for row in source_queries):
-        failures.append("missing Foreplay source_queries rows")
+    if expect_apify_ads and not any(row.get("provider") == APIFY_ADS_PROVIDER for row in source_queries):
+        failures.append("missing Apify paid-ad source_queries rows")
     if expect_topyappers and not any(row.get("provider") == "topyappers" for row in source_queries):
         failures.append("missing TopYappers source_queries rows")
 
     # Shortfalls are valid: provider APIs may return fewer rows than requested.
-    if expect_foreplay and len(paid_ads) < expected_paid_total:
-        warnings.append(f"Foreplay returned {len(paid_ads)} paid ads for target {expected_paid_total}")
+    if expect_apify_ads and len(paid_ads) < expected_paid_total:
+        warnings.append(f"Apify returned {len(paid_ads)} paid ads for target {expected_paid_total}")
     if expect_topyappers and len(ugc_items) < expected_ugc_total:
         warnings.append(f"TopYappers returned {len(ugc_items)} UGC items for target {expected_ugc_total}")
 

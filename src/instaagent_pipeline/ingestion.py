@@ -165,7 +165,16 @@ def write_items(
 
     written = 0
     for item in items:
-        external_id = str(item.get("id") or item.get("ad_id") or item.get("video_id") or item.get("iv_id") or "")
+        external_id = str(
+            item.get("id")
+            or item.get("adArchiveID")
+            or item.get("adArchiveId")
+            or item.get("ad_id")
+            or item.get("adId")
+            or item.get("video_id")
+            or item.get("iv_id")
+            or ""
+        )
         raw_payload = supabase.insert(
             "raw_payloads",
             {

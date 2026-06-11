@@ -2,7 +2,7 @@ create table if not exists paid_ads (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references pipeline_runs(id) on delete cascade,
   raw_payload_id uuid references raw_payloads(id) on delete set null,
-  source_provider text not null default 'foreplay',
+  source_provider text not null default 'apify:apify/facebook-ads-scraper',
   external_id text not null,
   url text,
   media_url text,

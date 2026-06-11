@@ -12,7 +12,7 @@ Lean ingestion and transcript-backfill foundation for InstaAgent's ad selection 
 - `supabase/migrations/002_topyappers_columns.sql`: migration that adds columns matching TopYappers UGC JSON fields.
 - `supabase/migrations/003_ugc_saved_to_supabase_at.sql`: migration that logs when each UGC video row was saved to Supabase.
 - `supabase/migrations/004_topyappers_exact_shape.sql`: migration that resets `ugc_items` to columns matching TopYappers JSON fields.
-- `supabase/migrations/005_paid_ads_foreplay_exact_shape.sql`: migration that resets `paid_ads` to columns matching Foreplay paid ad JSON fields.
+- `supabase/migrations/005_paid_ads_apify_shape.sql`: migration that resets `paid_ads` to columns used by Apify Meta Ad Library paid ad JSON fields.
 - `supabase/migrations/006_ugc_video_url.sql`: migration that adds the TopYappers video URL column if an existing project is missing it.
 - `supabase/migrations/007_source_metrics_jsonb.sql`: migration that adds JSONB overflow fields for provider-specific metadata.
 - `supabase/migrations/008_drop_creative_items.sql`: migration that removes obsolete shared-table schema tables from existing projects.
@@ -20,7 +20,7 @@ Lean ingestion and transcript-backfill foundation for InstaAgent's ad selection 
 - `supabase/migrations/010_ugc_transcript_source_unique.sql`: migration that lets UGC transcript backfills upsert by item and transcript source.
 - Python CLI for:
   - creating products/runs and Claude-generated keyword allocations.
-  - ingesting Foreplay paid ad candidates into `paid_ads` across stored keyword allocations.
+  - ingesting Apify Meta Ad Library paid ad candidates into `paid_ads` across stored keyword allocations.
   - ingesting URL-backed TopYappers viral-content UGC candidates into `ugc_items` across stored keyword allocations.
   - optionally ingesting TopYappers videos metadata into `ugc_items` when URLs are not required.
   - backfilling missing UGC transcripts from public social video URLs through Apify.
@@ -49,12 +49,11 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli init-run \
   --target-ugc-count 2500
 ```
 
-Ingest Foreplay paid ads:
+Ingest Apify Meta Ad Library paid ads:
 
 ```bash
-PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-foreplay \
-  --run-id "<pipeline_run_id>" \
-  --page-size 250
+PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-apify-ads \
+  --run-id "<pipeline_run_id>"
 ```
 
 Ingest TopYappers URL-backed UGC:
@@ -103,15 +102,13 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli backfill-ugc-transcripts \
 - `SUPABASE_URL`
   - Either `https://your-project.supabase.co` or `https://your-project.supabase.co/rest/v1/` works.
 - `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_ANON_KEY`
-- `FOREPLAY_API_KEY`
 - `TOPYAPPERS_API_KEY`
 - `CLAUDE_API_KEY`
 - `APIFY_API_KEY`
-  - Required only for `backfill-ugc-transcripts`.
+  - Required for `ingest-apify-ads` and Apify-backed UGC transcript fallback.
 
 Optional:
 
-- `FOREPLAY_BASE_URL`
 - `TOPYAPPERS_BASE_URL`
 - `CLAUDE_MODEL`
   - Defaults to `claude-haiku-4-5`.
@@ -145,10 +142,10 @@ cat supabase/migrations/004_topyappers_exact_shape.sql | pbcopy
 
 Then paste and run it in Supabase.
 
-Then run the Foreplay paid ad exact-shape migration:
+Then run the Apify paid ad shape migration:
 
 ```bash
-cat supabase/migrations/005_paid_ads_foreplay_exact_shape.sql | pbcopy
+cat supabase/migrations/005_paid_ads_apify_shape.sql | pbcopy
 ```
 
 Then paste and run it in Supabase.

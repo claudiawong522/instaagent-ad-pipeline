@@ -4,6 +4,7 @@ import json
 import os
 import ssl
 from dataclasses import dataclass
+from http.client import RemoteDisconnected
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -65,8 +66,9 @@ def request_json(
         except json.JSONDecodeError:
             parsed = raw
         raise HttpClientError(f"HTTP {exc.code} for {url}", status=exc.code, body=parsed) from exc
-    except URLError as exc:
-        raise HttpClientError(f"Network error for {url}: {exc.reason}") from exc
+    except (URLError, RemoteDisconnected) as exc:
+        reason = getattr(exc, "reason", exc)
+        raise HttpClientError(f"Network error for {url}: {reason}") from exc
 
 
 def ssl_context() -> ssl.SSLContext:

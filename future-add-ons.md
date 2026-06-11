@@ -4,7 +4,7 @@ These are good ideas intentionally deferred to keep the first version lean.
 
 ## Competitor Mode
 
-- Use Foreplay `GET /api/spyder/brand/ads` or brand/domain lookup first, then pull brand ads.
+- Use Meta Ad Library page URLs or page IDs with Apify `apify/facebook-ads-scraper` to pull ads for known competitor brands.
 - Useful for customer-specific competitor research.
 - Deferred because the first version should prove the keyword-led category workflow first.
 

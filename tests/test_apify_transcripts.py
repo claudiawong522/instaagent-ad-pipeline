@@ -157,8 +157,6 @@ def test_transcribe_candidate_writes_raw_payload_then_upserts_transcript() -> No
         config=Config(
             supabase_url=None,
             supabase_key=None,
-            foreplay_api_key=None,
-            foreplay_base_url="https://public.api.foreplay.co",
             topyappers_api_key=None,
             topyappers_base_url="https://api.topyappers.com",
             apify_api_key=None,
@@ -209,8 +207,6 @@ def test_transcribe_candidate_falls_back_to_insert_when_unique_index_is_missing(
         config=Config(
             supabase_url=None,
             supabase_key=None,
-            foreplay_api_key=None,
-            foreplay_base_url="https://public.api.foreplay.co",
             topyappers_api_key=None,
             topyappers_base_url="https://api.topyappers.com",
             apify_api_key=None,

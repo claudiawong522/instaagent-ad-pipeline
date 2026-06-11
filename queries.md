@@ -38,10 +38,13 @@ Use `paid_ads.raw_payload_id -> raw_payloads.source_query_id -> source_queries.r
 ```sql
 select
   pa.paid_ad_row_id,
-  pa.id as foreplay_id,
+  pa.id as meta_ad_archive_id,
   sq.provider,
   sq.endpoint,
-  sq.request_params ->> 'query' as keyword_used,
+  coalesce(
+    sq.request_params ->> 'keyword',
+    sq.request_params #>> '{actor_input,startUrls,0,url}'
+  ) as keyword_or_input_url,
   k.id as keyword_id,
   k.target_paid_count,
   k.target_ugc_count
@@ -50,12 +53,12 @@ join raw_payloads rp on rp.id = pa.raw_payload_id
 join source_queries sq on sq.id = rp.source_query_id
 left join keywords k
   on k.run_id = pa.run_id
-  and k.keyword_text = sq.request_params ->> 'query'
+  and k.keyword_text = sq.request_params ->> 'keyword'
 where pa.paid_ad_row_id = '<PAID_AD_ROW_UUID>';
 ```
 
-If you mean Foreplay's ad ID instead of the Supabase row UUID:
+If you mean Meta's ad archive ID instead of the Supabase row UUID:
 
 ```sql
-where pa.id = '<FOREPLAY_AD_ID>';
+where pa.id = '<META_AD_ARCHIVE_ID>';
 ```

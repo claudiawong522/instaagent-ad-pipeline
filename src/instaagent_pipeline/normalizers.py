@@ -4,70 +4,47 @@ from datetime import UTC, datetime
 from typing import Any
 
 
-FOREPLAY_FIRST_CLASS_KEYS = {
+APIFY_AD_FIRST_CLASS_KEYS = {
     "id",
-    "live",
-    "is_live",
-    "isLive",
-    "name",
-    "brand_name",
-    "brandName",
-    "type",
-    "ad_type",
-    "adType",
-    "ad_id",
+    "adArchiveID",
+    "adArchiveId",
     "adId",
+    "pageID",
+    "pageId",
+    "pageName",
+    "live",
+    "active",
+    "isActive",
+    "name",
+    "type",
+    "ad_id",
     "cards",
     "image",
-    "image_url",
-    "imageUrl",
     "video",
-    "video_url",
-    "videoUrl",
     "avatar",
-    "avatar_url",
-    "avatarUrl",
-    "niches",
-    "persona",
-    "brand",
     "brand_id",
-    "brandId",
     "cta_type",
-    "ctaType",
     "headline",
     "title",
     "link_url",
-    "linkUrl",
     "cta_title",
-    "ctaTitle",
     "languages",
     "thumbnail",
-    "thumbnail_url",
-    "thumbnailUrl",
     "categories",
     "description",
-    "market_target",
-    "marketTarget",
-    "content_filter",
     "display_format",
-    "displayFormat",
     "video_duration",
     "videoDuration",
     "started_running",
-    "startedRunning",
+    "startDate",
+    "startDateFormatted",
+    "endDate",
+    "endDateFormatted",
     "product_category",
-    "productCategory",
     "running_duration",
-    "runningDuration",
-    "emotional_drivers",
-    "creative_targeting",
-    "creativeTargeting",
-    "full_transcription",
     "publisher_platform",
     "publisherPlatform",
-    "timestamped_transcription",
-    "time_product_was_mentioned",
-    "timeProductWasMentioned",
+    "totalActiveTime",
 }
 
 
@@ -221,50 +198,51 @@ def as_number(value: Any) -> float | None:
     return None
 
 
-def normalize_foreplay_ad(item: dict[str, Any], run_id: str, raw_payload_id: str | None) -> dict[str, Any]:
-    external_id_value = first_present(item, "id", "ad_id", "adId")
-    started_running = first_present(item, "started_running", "startedRunning")
-    running_duration = first_present(item, "running_duration", "runningDuration")
+def normalize_apify_ad(item: dict[str, Any], run_id: str, raw_payload_id: str | None) -> dict[str, Any]:
+    snapshot = item.get("snapshot") if isinstance(item.get("snapshot"), dict) else {}
+    cards = snapshot.get("cards") if isinstance(snapshot.get("cards"), list) else None
+    external_id_value = first_present(item, "adArchiveID", "adArchiveId", "id", "adId")
+    start_datetime = apify_datetime(first_present(item, "startDateFormatted", "startDate"))
+    end_datetime = apify_datetime(first_present(item, "endDateFormatted", "endDate"))
+    live = apify_live_status(item, end_datetime)
 
     return {
         "run_id": run_id,
         "raw_payload_id": raw_payload_id,
         "id": str(external_id_value) if external_id_value is not None else "",
-        "live": as_bool(first_present(item, "live", "is_live", "isLive")),
-        "name": first_present(item, "name", "brand_name", "brandName"),
-        "type": first_present(item, "type", "ad_type", "adType"),
-        "ad_id": first_present(item, "ad_id", "adId"),
-        "cards": item.get("cards"),
-        "image": first_present(item, "image", "image_url", "imageUrl"),
-        "video": first_present(item, "video", "video_url", "videoUrl"),
-        "avatar": first_present(item, "avatar", "avatar_url", "avatarUrl"),
-        "niches": item.get("niches"),
-        "persona": item.get("persona"),
-        "brand_id": first_present(item, "brand_id", "brandId") or nested_first(item, "brand.id"),
-        "cta_type": first_present(item, "cta_type", "ctaType"),
-        "headline": first_present(item, "headline", "title"),
-        "link_url": first_present(item, "link_url", "linkUrl"),
-        "cta_title": first_present(item, "cta_title", "ctaTitle"),
+        "live": live,
+        "name": first_present(item, "pageName") or snapshot.get("pageName") or nested_first(item, "pageInfo.page.name"),
+        "type": stringify_if_needed(snapshot.get("displayFormat")) or "ad",
+        "ad_id": stringify_if_needed(first_present(item, "adArchiveID", "adArchiveId", "adId")),
+        "cards": cards,
+        "image": apify_image_url(snapshot, cards),
+        "video": apify_video_url(snapshot, cards),
+        "avatar": snapshot.get("pageProfilePictureUrl"),
+        "niches": None,
+        "persona": None,
+        "brand_id": stringify_if_needed(first_present(item, "pageID", "pageId") or snapshot.get("pageId")),
+        "cta_type": first_present(snapshot, "ctaType") or first_card_value(cards, "ctaType"),
+        "headline": apify_text_value(snapshot.get("title")) or first_card_value(cards, "title"),
+        "link_url": first_present(snapshot, "linkUrl") or first_card_value(cards, "linkUrl"),
+        "cta_title": first_present(snapshot, "ctaText") or first_card_value(cards, "ctaText"),
         "languages": item.get("languages"),
-        "thumbnail": first_present(item, "thumbnail", "thumbnail_url", "thumbnailUrl"),
-        "categories": item.get("categories"),
-        "description": item.get("description"),
-        "market_target": first_present(item, "market_target", "marketTarget"),
-        "content_filter": item.get("content_filter"),
-        "display_format": stringify_if_needed(first_present(item, "display_format", "displayFormat")),
-        "video_duration": as_number(first_present(item, "video_duration", "videoDuration")),
-        "started_running": as_number(started_running),
-        "product_category": first_present(item, "product_category", "productCategory"),
-        "running_duration": as_number(running_duration),
-        "emotional_drivers": item.get("emotional_drivers"),
-        "creative_targeting": first_present(item, "creative_targeting", "creativeTargeting"),
-        "full_transcription": item.get("full_transcription"),
-        "publisher_platform": first_present(item, "publisher_platform", "publisherPlatform"),
-        "timestamped_transcription": item.get("timestamped_transcription"),
-        "time_product_was_mentioned": as_number(
-            first_present(item, "time_product_was_mentioned", "timeProductWasMentioned")
-        ),
-        "source_metrics": source_metrics_from_unmapped(item, FOREPLAY_FIRST_CLASS_KEYS),
+        "thumbnail": apify_thumbnail_url(snapshot, cards),
+        "categories": item.get("categories") or snapshot.get("pageCategories"),
+        "description": apify_text_value(snapshot.get("body")) or first_card_value(cards, "body"),
+        "market_target": None,
+        "content_filter": None,
+        "display_format": stringify_if_needed(snapshot.get("displayFormat")),
+        "video_duration": as_number(first_present(item, "videoDuration", "video_duration")),
+        "started_running": epoch_millis(start_datetime),
+        "product_category": None,
+        "running_duration": apify_running_duration_days(start_datetime, end_datetime, live),
+        "emotional_drivers": None,
+        "creative_targeting": None,
+        "full_transcription": None,
+        "publisher_platform": first_present(item, "publisherPlatform", "publisher_platform"),
+        "timestamped_transcription": None,
+        "time_product_was_mentioned": None,
+        "source_metrics": source_metrics_from_unmapped(item, APIFY_AD_FIRST_CLASS_KEYS),
     }
 
 
@@ -376,6 +354,122 @@ def source_metrics_from_unmapped(
     if extra:
         metrics.update({key: value for key, value in extra.items() if value is not None})
     return metrics
+
+
+def apify_datetime(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(epoch_seconds(float(value)), tz=UTC)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return datetime.fromtimestamp(epoch_seconds(float(stripped)), tz=UTC)
+        except ValueError:
+            pass
+        try:
+            parsed = datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    return None
+
+
+def epoch_seconds(value: float) -> float:
+    return value / 1000 if value > 100_000_000_000 else value
+
+
+def epoch_millis(value: datetime | None) -> float | None:
+    if value is None:
+        return None
+    return value.timestamp() * 1000
+
+
+def apify_live_status(item: dict[str, Any], end_datetime: datetime | None) -> bool | None:
+    explicit = as_bool(first_present(item, "isActive", "active", "live"))
+    if explicit is not None:
+        return explicit
+    if end_datetime is None:
+        return True
+    return end_datetime > datetime.now(UTC)
+
+
+def apify_running_duration_days(
+    start_datetime: datetime | None,
+    end_datetime: datetime | None,
+    live: bool | None,
+) -> float | None:
+    if start_datetime is None:
+        return None
+    effective_end = end_datetime
+    if effective_end is None and live:
+        effective_end = datetime.now(UTC)
+    if effective_end is None:
+        return None
+    seconds = max((effective_end - start_datetime).total_seconds(), 0)
+    return round(seconds / 86_400, 2)
+
+
+def apify_text_value(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, dict):
+        return stringify_if_needed(first_present(value, "text", "value"))
+    return stringify_if_needed(value)
+
+
+def first_card_value(cards: Any, *keys: str) -> Any:
+    if not isinstance(cards, list):
+        return None
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        value = first_present(card, *keys)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def first_nested_media_url(items: Any, *keys: str) -> str | None:
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if isinstance(item, str) and item:
+            return item
+        if not isinstance(item, dict):
+            continue
+        value = first_present(item, *keys)
+        if value not in (None, ""):
+            return stringify_if_needed(value)
+    return None
+
+
+def apify_video_url(snapshot: dict[str, Any], cards: Any) -> str | None:
+    return (
+        first_nested_media_url(snapshot.get("videos"), "videoHdUrl", "videoSdUrl", "url")
+        or first_card_value(cards, "videoHdUrl", "videoSdUrl", "watermarkedVideoHdUrl", "watermarkedVideoSdUrl")
+        or first_nested_media_url(snapshot.get("extraVideos"), "videoHdUrl", "videoSdUrl", "url")
+    )
+
+
+def apify_image_url(snapshot: dict[str, Any], cards: Any) -> str | None:
+    return (
+        first_nested_media_url(snapshot.get("images"), "originalImageUrl", "resizedImageUrl", "url")
+        or first_card_value(cards, "originalImageUrl", "resizedImageUrl", "watermarkedResizedImageUrl")
+        or first_nested_media_url(snapshot.get("extraImages"), "originalImageUrl", "resizedImageUrl", "url")
+    )
+
+
+def apify_thumbnail_url(snapshot: dict[str, Any], cards: Any) -> str | None:
+    return (
+        first_nested_media_url(snapshot.get("videos"), "videoPreviewImageUrl", "previewImageUrl", "thumbnailUrl")
+        or first_card_value(cards, "videoPreviewImageUrl", "resizedImageUrl", "originalImageUrl")
+        or apify_image_url(snapshot, cards)
+    )
 
 
 def music_value(item: dict[str, Any]) -> Any:

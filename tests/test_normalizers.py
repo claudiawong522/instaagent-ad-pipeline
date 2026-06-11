@@ -5,14 +5,14 @@ from pathlib import Path
 
 from instaagent_pipeline.ingestion import complete_query, log_api_usage
 from instaagent_pipeline.keywords import KeywordAllocation, KeywordGenerationResult, claude_provider, log_claude_keyword_usage
-from instaagent_pipeline.normalizers import normalize_foreplay_ad, normalize_topyappers_item, result_items
+from instaagent_pipeline.normalizers import normalize_apify_ad, normalize_topyappers_item, result_items
 
 
-def test_normalize_foreplay_ad_maps_actual_response_fields() -> None:
-    body = json.loads(Path("tests/fixtures/foreplay_ads.json").read_text())
+def test_normalize_apify_ad_maps_actual_response_fields() -> None:
+    body = json.loads(Path("tests/fixtures/apify_ads.json").read_text())
     item = result_items(body)[0]
 
-    normalized = normalize_foreplay_ad(item, "run_1", "raw_1")
+    normalized = normalize_apify_ad(item, "run_1", "raw_1")
 
     assert set(normalized) == {
         "run_id",
@@ -52,23 +52,23 @@ def test_normalize_foreplay_ad_maps_actual_response_fields() -> None:
         "time_product_was_mentioned",
         "source_metrics",
     }
-    assert normalized["id"] == "ad_test_1"
-    assert normalized["ad_id"] == "1234567890"
-    assert normalized["name"] == "QE"
-    assert normalized["type"] == "video"
-    assert normalized["brand_id"] == "brand_test_1"
-    assert normalized["description"] == "A gentle cleanser for sensitive skin"
+    assert normalized["id"] == "1204694134935316"
+    assert normalized["ad_id"] == "1204694134935316"
+    assert normalized["name"] == "QE Skincare"
+    assert normalized["type"] == "VIDEO"
+    assert normalized["brand_id"] == "14226545351"
+    assert normalized["description"] == "A gentle cleanser for sensitive skin."
     assert normalized["link_url"] == "https://example.com/qe-cleanser"
-    assert normalized["video"] == "https://example.com/video.mp4"
+    assert normalized["video"] == "https://example.com/qe-cleanser.mp4"
+    assert normalized["image"] == "https://example.com/qe-cleanser.jpg"
+    assert normalized["thumbnail"] == "https://example.com/qe-cleanser-preview.jpg"
     assert normalized["avatar"] == "https://example.com/avatar.jpg"
-    assert normalized["publisher_platform"] == ["instagram"]
-    assert normalized["started_running"] == 1714521600000
-    assert normalized["video_duration"] == 15.02
-    assert normalized["product_category"] == "face cleanser"
-    assert normalized["emotional_drivers"] == {"security": 9, "nurturance": 8}
-    assert normalized["creative_targeting"] == "skincare enthusiasts"
-    assert normalized["time_product_was_mentioned"] == -1.0
-    assert normalized["source_metrics"] == {}
+    assert normalized["publisher_platform"] == ["FACEBOOK", "INSTAGRAM"]
+    assert normalized["started_running"] == 1767600000000
+    assert normalized["running_duration"] == 21.0
+    assert normalized["full_transcription"] is None
+    assert normalized["source_metrics"]["inputUrl"].startswith("https://www.facebook.com/ads/library/")
+    assert normalized["source_metrics"]["snapshot"]["pageName"] == "QE Skincare"
 
 
 def test_normalize_topyappers_video_leaves_video_url_empty_when_endpoint_omits_it() -> None:
@@ -198,8 +198,8 @@ def test_log_api_usage_skips_dry_run_and_fixture_responses() -> None:
         supabase=supabase,  # type: ignore[arg-type]
         dry_run=True,
         run_id="run_1",
-        provider="foreplay",
-        endpoint="/api/discovery/ads",
+        provider="apify:apify/facebook-ads-scraper",
+        endpoint="/acts/apify~facebook-ads-scraper/run-sync-get-dataset-items",
         status=200,
         response_count=1,
         headers={},
@@ -208,8 +208,8 @@ def test_log_api_usage_skips_dry_run_and_fixture_responses() -> None:
         supabase=supabase,  # type: ignore[arg-type]
         dry_run=False,
         run_id="run_1",
-        provider="foreplay",
-        endpoint="/api/discovery/ads",
+        provider="apify:apify/facebook-ads-scraper",
+        endpoint="/acts/apify~facebook-ads-scraper/run-sync-get-dataset-items",
         status=None,
         response_count=1,
         headers={},

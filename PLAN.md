@@ -9,7 +9,7 @@ Given a product and keyword set, collect paid ads and UGC/organic content, analy
 ## MVP Architecture
 
 - Storage: Supabase Postgres as the system of record.
-- Paid ads: Foreplay Public API.
+- Paid ads: Apify official `apify/facebook-ads-scraper` actor over Meta Ad Library URLs.
 - UGC: TopYappers first, using free-text fields such as `videoTopicContains`.
 - Deferred UGC fallback: Apify Instagram Reels Search & Trend Discovery if TopYappers coverage is too narrow.
 - Later vector storage: Supabase `pgvector` for ICP, format, and hook embeddings.
@@ -24,16 +24,16 @@ Given a product and keyword set, collect paid ads and UGC/organic content, analy
    - Log every API request in `source_queries`.
 
 2. Source ingestion
-   - Foreplay: query paid ads by allocated keyword, prioritizing `order=longest_running`.
+   - Apify paid ads: build a Meta Ad Library keyword URL for each allocated keyword and run `apify/facebook-ads-scraper`.
    - TopYappers: query URL-backed UGC by allocated keyword with `POST /api/v1/viral-content`, using free-text fields first and category filters only as helpers.
    - Use TopYappers `GET /api/v1/videos` only as a metadata-only fallback when subtitles or raw video metrics matter more than video URLs.
    - If a provider returns fewer items than the keyword target, save the returned items and move on.
    - Store raw payloads and source-shaped candidates in separate Supabase tables:
-     - Foreplay paid ads -> `paid_ads`.
+     - Apify Meta Ad Library paid ads -> `paid_ads`.
      - TopYappers UGC -> `ugc_items`, with columns matching the TopYappers response fields plus database bookkeeping.
 
 3. Transcript extraction
-   - Paid ads: use Foreplay transcript fields when present.
+   - Paid ads: leave transcript fields empty unless a separate paid-ad transcription stage is added.
    - UGC: copy TopYappers `subtitles` into `ugc_transcripts` when present.
    - Known-URL UGC fallback: use Apify `tictechid/anoxvanzi-transcriber` for public Instagram, TikTok, YouTube Shorts, and Facebook URLs when TopYappers subtitles are missing.
    - Fallback later: transcribe downloaded video/audio if source subtitles are missing and URL-based actors fail.
@@ -71,9 +71,9 @@ Step 1, Step 2, and the first UGC transcript backfill path in Step 3 are impleme
 
 Included:
 
-- Supabase schema for products, runs, keywords, source query logs, raw payloads, Foreplay-shaped `paid_ads`, TopYappers-shaped `ugc_items`, transcript placeholders, and API usage.
+- Supabase schema for products, runs, keywords, source query logs, raw payloads, Apify-shaped `paid_ads`, TopYappers-shaped `ugc_items`, transcript placeholders, and API usage.
 - CLI to create product/runs and Claude-generated or manual keyword allocations.
-- CLI to ingest Foreplay paid ad candidates across stored keyword allocations.
+- CLI to ingest Apify Meta Ad Library paid ad candidates across stored keyword allocations.
 - CLI to ingest TopYappers viral-content UGC candidates across stored keyword allocations.
 - CLI to ingest/hydrate TopYappers video records across stored keyword allocations.
 - CLI to backfill missing UGC transcripts from public social video URLs through Apify into `ugc_transcripts`.

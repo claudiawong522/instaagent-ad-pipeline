@@ -6,10 +6,10 @@ This document reflects the current checked-in working tree at the time it was wr
 
 1. User gives product info, campaign guidelines, target number of paid ads, and target number of UGC videos. This creates `products` and `pipeline_runs`.
 2. If no manual keywords are passed, Claude Haiku extracts 3-5 keywords, aiming for 3 highly relevant single-word keywords, and splits paid ad / UGC targets across them. The allocations must add up to the user's requested totals. Keywords are stored in `keywords`; the Claude call is logged in `api_usage`.
-3. Ingest commands load active keywords for the run. Foreplay and TopYappers query each keyword for its allocated count. Each query is logged in `source_queries`; each live API response is logged in `api_usage`; raw JSON goes into `raw_payloads`.
+3. Ingest commands load active keywords for the run. Apify paid-ad ingestion and TopYappers query each keyword for its allocated count. Each query is logged in `source_queries`; each live API response is logged in `api_usage`; raw JSON goes into `raw_payloads`.
 4. If an API returns fewer ads or videos than requested for a keyword, the pipeline saves what came back and moves on.
-5. Normalized Foreplay output fills `paid_ads`. Normalized TopYappers output fills `ugc_items`.
-6. Current provider transcript text stays on `paid_ads.full_transcription`, `paid_ads.timestamped_transcription`, or `ugc_items.subtitles` when providers return it.
+5. Normalized Apify Meta Ad Library output fills `paid_ads`. Normalized TopYappers output fills `ugc_items`.
+6. Current provider transcript text stays on `ugc_items.subtitles` when TopYappers returns it. Paid-ad transcript columns are reserved for a later transcription stage.
 7. Live TopYappers ingestion and `backfill-ugc-transcripts` both copy non-empty `ugc_items.subtitles` into `ugc_transcripts`.
 8. The same transcript stage finds remaining UGC rows without `subtitles`, sends supported public social video URLs to Apify, stores raw Apify output in `raw_payloads`, and writes cleaned transcript text plus parsed timestamp segments to `ugc_transcripts`.
 
@@ -68,7 +68,7 @@ Logs each external API request attempted by the pipeline.
 | --- | --- | --- | --- |
 | `id` | `uuid` | Primary key, default `gen_random_uuid()` | Query log identifier. |
 | `run_id` | `uuid` | Nullable, references `pipeline_runs(id)` on delete cascade | Run that triggered the query. |
-| `provider` | `text` | Not null | Source provider, for example `foreplay` or `topyappers`. |
+| `provider` | `text` | Not null | Source provider, for example `apify:apify/facebook-ads-scraper` or `topyappers`. |
 | `endpoint` | `text` | Not null | Provider endpoint path. |
 | `method` | `text` | Not null | HTTP method. |
 | `request_params` | `jsonb` | Not null, default `'{}'::jsonb` | Query params or request body. |
@@ -112,46 +112,46 @@ Stores raw provider payloads before normalization.
 
 ### `paid_ads`
 
-Stores Foreplay paid ad records with stable response fields as first-class columns. Provider-specific overflow fields that are not promoted to columns live in `source_metrics`.
+Stores Apify Meta Ad Library paid ad records with stable fields mapped into first-class columns. Provider-specific overflow fields that are not promoted to columns live in `source_metrics`.
 
 | Column | Type | Constraints / default | Notes |
 | --- | --- | --- | --- |
 | `paid_ad_row_id` | `uuid` | Primary key, default `gen_random_uuid()` | Supabase row identifier. |
 | `run_id` | `uuid` | Not null, references `pipeline_runs(id)` on delete cascade | Owning run. |
 | `raw_payload_id` | `uuid` | Nullable, references `raw_payloads(id)` on delete set null | Raw item used for normalization. |
-| `id` | `text` | Not null | Foreplay `id` response field. |
-| `live` | `boolean` | Nullable | Foreplay `live` response field. |
-| `name` | `text` | Nullable | Foreplay `name` response field. |
-| `type` | `text` | Nullable | Foreplay `type` response field. |
-| `ad_id` | `text` | Nullable | Foreplay `ad_id` response field. |
-| `cards` | `jsonb` | Nullable | Foreplay `cards` response field. |
-| `image` | `text` | Nullable | Foreplay `image` response field. |
-| `video` | `text` | Nullable | Foreplay `video` response field. |
-| `avatar` | `text` | Nullable | Foreplay `avatar` response field. |
-| `niches` | `jsonb` | Nullable | Foreplay `niches` response field. |
-| `persona` | `jsonb` | Nullable | Foreplay `persona` response field. |
-| `brand_id` | `text` | Nullable | Foreplay `brand_id` response field. |
-| `cta_type` | `text` | Nullable | Foreplay `cta_type` response field. |
-| `headline` | `text` | Nullable | Foreplay `headline` response field. |
-| `link_url` | `text` | Nullable | Foreplay `link_url` response field. |
-| `cta_title` | `text` | Nullable | Foreplay `cta_title` response field. |
-| `languages` | `jsonb` | Nullable | Foreplay `languages` response field. |
-| `thumbnail` | `text` | Nullable | Foreplay `thumbnail` response field. |
-| `categories` | `jsonb` | Nullable | Foreplay `categories` response field. |
-| `description` | `text` | Nullable | Foreplay `description` response field. |
-| `market_target` | `text` | Nullable | Foreplay `market_target` response field. |
-| `content_filter` | `jsonb` | Nullable | Foreplay `content_filter` response field. |
-| `display_format` | `text` | Nullable | Foreplay `display_format` response field. |
-| `video_duration` | `numeric` | Nullable | Foreplay `video_duration` response field. |
-| `started_running` | `numeric` | Nullable | Foreplay `started_running` response field, usually epoch milliseconds. |
-| `product_category` | `text` | Nullable | Foreplay `product_category` response field. |
-| `running_duration` | `numeric` | Nullable | Foreplay `running_duration` response field. |
-| `emotional_drivers` | `jsonb` | Nullable | Foreplay `emotional_drivers` response field. |
-| `creative_targeting` | `text` | Nullable | Foreplay `creative_targeting` response field. |
-| `full_transcription` | `text` | Nullable | Foreplay `full_transcription` response field. |
-| `publisher_platform` | `jsonb` | Nullable | Foreplay `publisher_platform` response field. |
-| `timestamped_transcription` | `jsonb` | Nullable | Foreplay `timestamped_transcription` response field. |
-| `time_product_was_mentioned` | `numeric` | Nullable | Foreplay `time_product_was_mentioned` response field. |
+| `id` | `text` | Not null | Apify `adArchiveID` / `adArchiveId`. |
+| `live` | `boolean` | Nullable | Apify `isActive`, or inferred from end date. |
+| `name` | `text` | Nullable | Page name from Apify `snapshot.pageName` / `pageName`. |
+| `type` | `text` | Nullable | Apify `snapshot.displayFormat` when available. |
+| `ad_id` | `text` | Nullable | Apify `adArchiveID` / `adArchiveId`. |
+| `cards` | `jsonb` | Nullable | Apify `snapshot.cards`. |
+| `image` | `text` | Nullable | First image URL from Apify snapshot/card media. |
+| `video` | `text` | Nullable | First video URL from Apify snapshot/card media. |
+| `avatar` | `text` | Nullable | Apify `snapshot.pageProfilePictureUrl`. |
+| `niches` | `jsonb` | Nullable | Reserved compatibility column; not populated by default Apify mapping. |
+| `persona` | `jsonb` | Nullable | Reserved compatibility column; not populated by default Apify mapping. |
+| `brand_id` | `text` | Nullable | Apify `pageID` / `pageId`. |
+| `cta_type` | `text` | Nullable | Apify `snapshot.ctaType` or card `ctaType`. |
+| `headline` | `text` | Nullable | Apify `snapshot.title` or card `title`. |
+| `link_url` | `text` | Nullable | Apify `snapshot.linkUrl` or card `linkUrl`. |
+| `cta_title` | `text` | Nullable | Apify `snapshot.ctaText` or card `ctaText`. |
+| `languages` | `jsonb` | Nullable | Apify language metadata if present. |
+| `thumbnail` | `text` | Nullable | First preview/thumbnail URL from Apify media. |
+| `categories` | `jsonb` | Nullable | Apify `categories` or `snapshot.pageCategories`. |
+| `description` | `text` | Nullable | Apify `snapshot.body.text` or card `body`. |
+| `market_target` | `text` | Nullable | Reserved compatibility column. |
+| `content_filter` | `jsonb` | Nullable | Reserved compatibility column. |
+| `display_format` | `text` | Nullable | Apify `snapshot.displayFormat`. |
+| `video_duration` | `numeric` | Nullable | Apify video duration if present. |
+| `started_running` | `numeric` | Nullable | Apify `startDateFormatted` / `startDate`, stored as epoch milliseconds. |
+| `product_category` | `text` | Nullable | Reserved compatibility column. |
+| `running_duration` | `numeric` | Nullable | Days computed from Apify start/end dates, or start/current time for active ads. |
+| `emotional_drivers` | `jsonb` | Nullable | Reserved compatibility column. |
+| `creative_targeting` | `text` | Nullable | Reserved compatibility column. |
+| `full_transcription` | `text` | Nullable | Reserved for a later paid-ad transcription stage. |
+| `publisher_platform` | `jsonb` | Nullable | Apify `publisherPlatform`. |
+| `timestamped_transcription` | `jsonb` | Nullable | Reserved for a later paid-ad transcription stage. |
+| `time_product_was_mentioned` | `numeric` | Nullable | Reserved for a later paid-ad transcription stage. |
 | `source_metrics` | `jsonb` | Not null, default `{}` | Provider-specific fields not mapped to first-class columns. |
 | `saved_to_supabase_at` | `timestamptz` | Not null, default `now()` | Timestamp when the row was saved to Supabase. |
 
@@ -240,7 +240,7 @@ Unique constraint: `unique (run_id, external_id)`.
 
 ### `paid_ad_transcripts`
 
-Stores transcript rows attached to Foreplay-shaped paid ad rows.
+Stores transcript rows attached to paid ad rows.
 
 | Column | Type | Constraints / default | Notes |
 | --- | --- | --- | --- |
@@ -274,10 +274,10 @@ Unique index: `ugc_transcripts_item_source_idx` on `(ugc_item_id, transcript_sou
 | `source_queries_run_id_idx` | `source_queries` | `run_id` | Find query logs for a run. |
 | `raw_payloads_run_id_idx` | `raw_payloads` | `run_id` | Find raw payloads for a run. |
 | `paid_ads_run_id_idx` | `paid_ads` | `run_id` | Find paid ads for a run. |
-| `paid_ads_id_idx` | `paid_ads` | `id` | Lookup by Foreplay item id. |
-| `paid_ads_ad_id_idx` | `paid_ads` | `ad_id` | Lookup by Foreplay ad id. |
-| `paid_ads_brand_id_idx` | `paid_ads` | `brand_id` | Find ads for a Foreplay brand. |
-| `paid_ads_product_category_idx` | `paid_ads` | `product_category` | Filter paid ads by Foreplay product category. |
+| `paid_ads_id_idx` | `paid_ads` | `id` | Lookup by Apify/Meta ad archive id. |
+| `paid_ads_ad_id_idx` | `paid_ads` | `ad_id` | Lookup by Apify/Meta ad archive id. |
+| `paid_ads_brand_id_idx` | `paid_ads` | `brand_id` | Find ads for a Meta page id. |
+| `paid_ads_product_category_idx` | `paid_ads` | `product_category` | Filter paid ads when product category is populated by a later stage. |
 | `paid_ads_saved_to_supabase_at_idx` | `paid_ads` | `saved_to_supabase_at desc` | Find recently saved paid ads. |
 | `ugc_items_run_id_idx` | `ugc_items` | `run_id` | Find UGC items for a run. |
 | `ugc_items_external_idx` | `ugc_items` | `external_id` | Lookup by provider id. |
