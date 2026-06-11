@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import ssl
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -12,7 +11,7 @@ from urllib.request import Request, urlopen
 
 from .apify_transcripts import upsert_or_insert
 from .config import Config
-from .http_client import HttpClientError, request_json
+from .http_client import HttpClientError, request_json, ssl_context
 from .ingestion import complete_query, log_api_usage, log_failed_query, start_query, utc_now_iso
 from .supabase_client import SupabaseClient
 
@@ -500,7 +499,7 @@ def is_probable_video_url(url: str) -> bool:
 def fetch_video_bytes(url: str, *, timeout: int) -> bytes:
     request = Request(url, headers={"User-Agent": "instaagent-ad-pipeline/0.1"})
     try:
-        with urlopen(request, timeout=timeout, context=ssl.create_default_context()) as response:
+        with urlopen(request, timeout=timeout, context=ssl_context()) as response:
             data = response.read(INLINE_VIDEO_MAX_BYTES + 1)
     except HTTPError as exc:
         raise HttpClientError(f"HTTP {exc.code} fetching video {url}", status=exc.code) from exc
