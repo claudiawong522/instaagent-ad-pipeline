@@ -34,11 +34,14 @@ class SupabaseClient:
         return {}
 
     def update_by_id(self, table: str, row_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.update_by_column(table, "id", row_id, payload)
+
+    def update_by_column(self, table: str, column: str, value: str, payload: dict[str, Any]) -> dict[str, Any]:
         response = request_json(
             "PATCH",
             f"{self.url}/rest/v1/{table}",
             headers=self._headers,
-            params={"id": f"eq.{quote(row_id)}"},
+            params={column: f"eq.{quote(value)}"},
             body=payload,
         )
         if isinstance(response.body, list) and response.body:

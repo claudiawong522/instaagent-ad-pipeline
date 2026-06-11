@@ -33,13 +33,14 @@ Given a product and keyword set, collect paid ads and UGC/organic content, analy
      - TopYappers UGC -> `ugc_items`, with columns matching the TopYappers response fields plus database bookkeeping.
 
 3. Transcript extraction
-   - Paid ads: leave transcript fields empty unless a separate paid-ad transcription stage is added.
+   - Paid ads: a single OpenRouter call per ad (auto after `ingest-apify-ads`, or `enrich-paid-ads`; default model `google/gemini-3-flash-preview`) transcribes the video into `paid_ad_transcripts` and extracts creative metadata into `paid_ads` analysis columns. The video bytes are fetched in memory and sent base64-encoded; nothing is written to disk.
    - UGC: copy TopYappers `subtitles` into `ugc_transcripts` when present.
    - Known-URL UGC fallback: use Apify `tictechid/anoxvanzi-transcriber` for public Instagram, TikTok, YouTube Shorts, and Facebook URLs when TopYappers subtitles are missing.
    - Fallback later: transcribe downloaded video/audio if source subtitles are missing and URL-based actors fail.
 
 4. LLM analysis
-   - Analyze every transcript into structured ICP, format, hook, and cloneability fields.
+   - Paid ads: done in the same OpenRouter enrichment call as transcription — ICP (`persona`), hook, format, and the full ugc_items-parity field set land on `paid_ads`, with `analysis_model`/`analyzed_at` bookkeeping and raw responses in `raw_payloads`.
+   - UGC: analyze every transcript into structured ICP, format, hook, and cloneability fields.
    - Store prompt version, model version, raw response, parsed JSON, and confidence.
 
 5. Embeddings
@@ -77,13 +78,13 @@ Included:
 - CLI to ingest TopYappers viral-content UGC candidates across stored keyword allocations.
 - CLI to ingest/hydrate TopYappers video records across stored keyword allocations.
 - CLI to backfill missing UGC transcripts from public social video URLs through Apify into `ugc_transcripts`.
+- OpenRouter paid-ad enrichment: one call per ad video producing the transcript (`paid_ad_transcripts`) and creative analysis metadata (`paid_ads` columns), auto-run after `ingest-apify-ads` and available standalone as `enrich-paid-ads`.
 - Endpoint documentation that matches the ingestion code.
 
 Not included yet:
 
-- Paid-ad transcript extraction as a standalone processing stage.
 - Downloaded media/audio transcription for UGC rows not covered by provider subtitles or Apify URL actors.
-- LLM analysis.
+- LLM analysis for UGC items beyond the provider-supplied TopYappers fields.
 - Embeddings.
 - Clustering.
 - Ranking/selection outputs.

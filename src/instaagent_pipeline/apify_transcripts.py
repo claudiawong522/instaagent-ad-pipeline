@@ -390,16 +390,21 @@ def transcribe_candidate(
 
 
 def upsert_or_insert_transcript(supabase: SupabaseClient, payload: dict[str, Any]) -> None:
+    upsert_or_insert(supabase, "ugc_transcripts", payload, "ugc_item_id,transcript_source")
+
+
+def upsert_or_insert(
+    supabase: SupabaseClient,
+    table: str,
+    payload: dict[str, Any],
+    conflict_columns: str,
+) -> None:
     try:
-        supabase.upsert(
-            "ugc_transcripts",
-            payload,
-            "ugc_item_id,transcript_source",
-        )
+        supabase.upsert(table, payload, conflict_columns)
     except HttpClientError as exc:
         if exc.status != 400 or not is_missing_upsert_constraint_error(exc):
             raise
-        supabase.insert("ugc_transcripts", payload)
+        supabase.insert(table, payload)
 
 
 def apify_dataset_items(body: Any) -> list[dict[str, Any]]:

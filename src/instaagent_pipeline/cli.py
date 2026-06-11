@@ -12,6 +12,7 @@ from .apify_transcripts import (
     backfill_ugc_transcripts_with_apify,
 )
 from .config import Config
+from .ad_enrichment import enrich_paid_ads
 from .keywords import (
     active_keyword_allocations,
     allocate_manual_keywords,
@@ -28,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     config = Config.from_env()
     dry_run = getattr(args, "dry_run", False)
-    dry_run_needs_supabase = args.command == "backfill-ugc-transcripts"
+    dry_run_needs_supabase = args.command in {"backfill-ugc-transcripts", "enrich-paid-ads"}
     supabase = build_supabase(config, dry_run=dry_run and not dry_run_needs_supabase)
 
     if args.command == "init-run":
@@ -54,6 +55,12 @@ def main(argv: list[str] | None = None) -> int:
                 target_field="target_paid_count",
                 ingest_func=ingest_apify_ads,
             )
+        result = with_paid_ad_enrichment(
+            result,
+            config=config,
+            supabase=supabase,
+            args=args,
+        )
     elif args.command == "ingest-topyappers-viral":
         if args.keyword:
             result = ingest_topyappers_viral(
@@ -130,6 +137,16 @@ def main(argv: list[str] | None = None) -> int:
             "provider_subtitles": provider_subtitles,
             "apify": apify,
         }
+    elif args.command == "enrich-paid-ads":
+        result = enrich_paid_ads(
+            config=config,
+            supabase=supabase,
+            run_id=args.run_id,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            input_json=args.input_json,
+            timeout=args.timeout,
+        )
     else:
         parser.error("Unknown command")
         return 2
@@ -158,6 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     apify_ads = subparsers.add_parser("ingest-apify-ads", help="Ingest Apify Meta Ad Library paid ad candidates.")
     add_ingest_common_args(apify_ads)
+    add_paid_ad_enrichment_args(apify_ads)
     apify_ads.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
     apify_ads.add_argument("--target-count", type=int, default=1000)
 
@@ -196,6 +214,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use a saved Apify dataset response instead of calling Apify. Intended for one-row tests.",
     )
 
+    enrich = subparsers.add_parser(
+        "enrich-paid-ads",
+        help="Transcribe and analyze paid ad videos via OpenRouter into paid_ad_transcripts and paid_ads columns.",
+    )
+    enrich.add_argument("--run-id", required=True)
+    enrich.add_argument("--limit", type=int, default=100)
+    enrich.add_argument("--timeout", type=int, default=300)
+    enrich.add_argument("--dry-run", action="store_true")
+    enrich.add_argument(
+        "--input-json",
+        type=Path,
+        help="Use a saved OpenRouter chat-completions response instead of calling OpenRouter. Intended for one-row tests.",
+    )
+
     return parser
 
 
@@ -227,6 +259,25 @@ def add_ugc_transcript_args(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=300,
         help="Apify actor timeout in seconds per video URL.",
+    )
+
+
+def add_paid_ad_enrichment_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--skip-enrichment",
+        action="store_true",
+        help="Do not transcribe and analyze paid ad videos via OpenRouter after live ingestion.",
+    )
+    parser.add_argument(
+        "--enrichment-limit",
+        type=int,
+        help="Maximum number of paid ads to enrich. Defaults to the number fetched.",
+    )
+    parser.add_argument(
+        "--enrichment-timeout",
+        type=int,
+        default=300,
+        help="OpenRouter request timeout in seconds per ad video (covers the video download too).",
     )
 
 
@@ -276,6 +327,34 @@ def with_ugc_transcript_backfill(
             "apify": apify,
         },
     }
+
+
+def with_paid_ad_enrichment(
+    ingestion_result: Any,
+    *,
+    config: Config,
+    supabase: SupabaseClient | None,
+    args: argparse.Namespace,
+) -> Any:
+    if args.dry_run or args.skip_enrichment:
+        return ingestion_result
+    if supabase is None:
+        raise RuntimeError("Supabase credentials are required for paid ad enrichment.")
+
+    enrichment_limit = args.enrichment_limit or fetched_count(ingestion_result)
+    if enrichment_limit < 1:
+        return {"ingestion": ingestion_result, "enrichment": None}
+
+    enrichment = enrich_paid_ads(
+        config=config,
+        supabase=supabase,
+        run_id=args.run_id,
+        limit=enrichment_limit,
+        dry_run=False,
+        input_json=None,
+        timeout=args.enrichment_timeout,
+    )
+    return {"ingestion": ingestion_result, "enrichment": enrichment}
 
 
 def fetched_count(result: Any) -> int:

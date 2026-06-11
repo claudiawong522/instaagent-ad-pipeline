@@ -9,7 +9,7 @@ This document reflects the current checked-in working tree at the time it was wr
 3. Ingest commands load active keywords for the run. Apify paid-ad ingestion and TopYappers query each keyword for its allocated count. Each query is logged in `source_queries`; each live API response is logged in `api_usage`; raw JSON goes into `raw_payloads`.
 4. If an API returns fewer ads or videos than requested for a keyword, the pipeline saves what came back and moves on.
 5. Normalized Apify Meta Ad Library output fills `paid_ads`. Normalized TopYappers output fills `ugc_items`.
-6. Current provider transcript text stays on `ugc_items.subtitles` when TopYappers returns it. Paid-ad transcript columns are reserved for a later transcription stage.
+6. Current provider transcript text stays on `ugc_items.subtitles` when TopYappers returns it. After paid-ad ingestion, the LLM enrichment stage (`enrich-paid-ads`, auto-triggered by `ingest-apify-ads`) fetches each `paid_ads.video` mp4 into memory and sends it base64-encoded to OpenRouter (default model `google/gemini-3-flash-preview`) in a single call that returns the spoken transcript plus creative analysis metadata. Transcripts go to `paid_ad_transcripts`; analysis fields go to columns on `paid_ads` (`hook`, `persona`, `target_demographic`, `content_format`, and the rest of the analysis columns), with `analysis_model` and `analyzed_at` recording the run.
 7. Live TopYappers ingestion and `backfill-ugc-transcripts` both copy non-empty `ugc_items.subtitles` into `ugc_transcripts`.
 8. The same transcript stage finds remaining UGC rows without `subtitles`, sends supported public social video URLs to Apify, stores raw Apify output in `raw_payloads`, and writes cleaned transcript text plus parsed timestamp segments to `ugc_transcripts`.
 
@@ -128,8 +128,8 @@ Stores Apify Meta Ad Library paid ad records with stable fields mapped into firs
 | `image` | `text` | Nullable | First image URL from Apify snapshot/card media. |
 | `video` | `text` | Nullable | First video URL from Apify snapshot/card media. |
 | `avatar` | `text` | Nullable | Apify `snapshot.pageProfilePictureUrl`. |
-| `niches` | `jsonb` | Nullable | Reserved compatibility column; not populated by default Apify mapping. |
-| `persona` | `jsonb` | Nullable | Reserved compatibility column; not populated by default Apify mapping. |
+| `niches` | `jsonb` | Nullable | LLM enrichment: list of niche descriptors. |
+| `persona` | `jsonb` | Nullable | LLM enrichment: the ICP the ad targets. |
 | `brand_id` | `text` | Nullable | Apify `pageID` / `pageId`. |
 | `cta_type` | `text` | Nullable | Apify `snapshot.ctaType` or card `ctaType`. |
 | `headline` | `text` | Nullable | Apify `snapshot.title` or card `title`. |
@@ -139,19 +139,44 @@ Stores Apify Meta Ad Library paid ad records with stable fields mapped into firs
 | `thumbnail` | `text` | Nullable | First preview/thumbnail URL from Apify media. |
 | `categories` | `jsonb` | Nullable | Apify `categories` or `snapshot.pageCategories`. |
 | `description` | `text` | Nullable | Apify `snapshot.body.text` or card `body`. |
-| `market_target` | `text` | Nullable | Reserved compatibility column. |
+| `market_target` | `text` | Nullable | LLM enrichment: market/region/segment. |
 | `content_filter` | `jsonb` | Nullable | Reserved compatibility column. |
 | `display_format` | `text` | Nullable | Apify `snapshot.displayFormat`. |
 | `video_duration` | `numeric` | Nullable | Apify video duration if present. |
 | `started_running` | `numeric` | Nullable | Apify `startDateFormatted` / `startDate`, stored as epoch milliseconds. |
-| `product_category` | `text` | Nullable | Reserved compatibility column. |
+| `product_category` | `text` | Nullable | LLM enrichment: product category. |
 | `running_duration` | `numeric` | Nullable | Days computed from Apify start/end dates, or start/current time for active ads. |
-| `emotional_drivers` | `jsonb` | Nullable | Reserved compatibility column. |
-| `creative_targeting` | `text` | Nullable | Reserved compatibility column. |
-| `full_transcription` | `text` | Nullable | Reserved for a later paid-ad transcription stage. |
+| `emotional_drivers` | `jsonb` | Nullable | LLM enrichment: list of persuasion levers. |
+| `creative_targeting` | `text` | Nullable | LLM enrichment: who the creative addresses and how. |
+| `full_transcription` | `text` | Nullable | Stays null; transcripts live in `paid_ad_transcripts`. |
 | `publisher_platform` | `jsonb` | Nullable | Apify `publisherPlatform`. |
-| `timestamped_transcription` | `jsonb` | Nullable | Reserved for a later paid-ad transcription stage. |
-| `time_product_was_mentioned` | `numeric` | Nullable | Reserved for a later paid-ad transcription stage. |
+| `timestamped_transcription` | `jsonb` | Nullable | Stays null; transcripts live in `paid_ad_transcripts`. |
+| `time_product_was_mentioned` | `numeric` | Nullable | LLM enrichment: seconds until the product first appears or is mentioned. |
+| `hook` | `text` | Nullable | LLM enrichment: opening line or visual device. |
+| `main_category` | `text` | Nullable | LLM enrichment. |
+| `content_category` | `text` | Nullable | LLM enrichment. |
+| `content_format` | `text` | Nullable | LLM enrichment, e.g. `ugc_testimonial`, `demo`. |
+| `content_tone` | `text` | Nullable | LLM enrichment. |
+| `primary_emotion` | `text` | Nullable | LLM enrichment. |
+| `target_demographic` | `text` | Nullable | LLM enrichment audience descriptor. |
+| `video_topic` | `text` | Nullable | LLM enrichment. |
+| `visual_style` | `text` | Nullable | LLM enrichment. |
+| `production_quality` | `text` | Nullable | LLM enrichment: low/medium/high/professional. |
+| `setting` | `text` | Nullable | LLM enrichment. |
+| `color_palette` | `jsonb` | Nullable | LLM enrichment: list of dominant colors. |
+| `has_face` | `boolean` | Nullable | LLM enrichment. |
+| `face_count` | `integer` | Nullable | LLM enrichment. |
+| `gender` | `text` | Nullable | LLM enrichment: on-screen presenters. |
+| `age` | `integer` | Nullable | LLM enrichment: approximate age of the primary person. |
+| `race` | `text` | Nullable | LLM enrichment. |
+| `hair_color` | `text` | Nullable | LLM enrichment. |
+| `has_product` | `boolean` | Nullable | LLM enrichment. |
+| `has_text_overlay` | `boolean` | Nullable | LLM enrichment. |
+| `is_ai_generated` | `boolean` | Nullable | LLM enrichment. |
+| `is_trending_format` | `boolean` | Nullable | LLM enrichment. |
+| `brand_mentioned` | `jsonb` | Nullable | LLM enrichment: list of brand names spoken or shown. |
+| `analysis_model` | `text` | Nullable | OpenRouter model that produced the analysis, e.g. `google/gemini-3-flash-preview`. |
+| `analyzed_at` | `timestamptz` | Nullable | When enrichment ran; null means not yet enriched. |
 | `source_metrics` | `jsonb` | Not null, default `{}` | Provider-specific fields not mapped to first-class columns. |
 | `saved_to_supabase_at` | `timestamptz` | Not null, default `now()` | Timestamp when the row was saved to Supabase. |
 
@@ -240,7 +265,7 @@ Unique constraint: `unique (run_id, external_id)`.
 
 ### `paid_ad_transcripts`
 
-Stores transcript rows attached to paid ad rows.
+Stores transcript rows attached to paid ad rows. Written by the LLM enrichment stage with `transcript_source = 'openrouter:<model>'`; one row is upserted per `(paid_ad_row_id, transcript_source)` (unique index `paid_ad_transcripts_row_source_idx`).
 
 | Column | Type | Constraints / default | Notes |
 | --- | --- | --- | --- |

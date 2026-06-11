@@ -17,6 +17,7 @@ if str(SRC_DIR) not in sys.path:
 from instaagent_pipeline.apify_ads import APIFY_ADS_PROVIDER, ingest_apify_ads
 from instaagent_pipeline.cli import build_supabase, ingest_allocated_keywords, init_run
 from instaagent_pipeline.config import Config
+from instaagent_pipeline.ad_enrichment import enrich_paid_ads
 from instaagent_pipeline.ingestion import utc_now_iso
 from instaagent_pipeline.keywords import generate_keyword_allocations, insert_keyword_allocations
 from instaagent_pipeline.topyappers import ingest_topyappers_viral
@@ -32,6 +33,7 @@ def main() -> int:
         config,
         need_apify_ads=not args.skip_apify_ads,
         need_topyappers=not args.skip_topyappers,
+        need_enrichment=not args.skip_apify_ads and not args.skip_enrichment,
     )
     if missing:
         raise SystemExit(f"Missing required env values: {', '.join(missing)}")
@@ -46,6 +48,7 @@ def main() -> int:
         run_id = init_result["pipeline_run"]["id"]
 
         apify_ads_result = None
+        enrichment_result = None
         topyappers_result = None
         if not args.skip_apify_ads:
             apify_ads_result = ingest_allocated_keywords(
@@ -60,6 +63,15 @@ def main() -> int:
                 target_field="target_paid_count",
                 ingest_func=ingest_apify_ads,
             )
+            fetched = int(apify_ads_result.get("fetched") or 0)
+            if not args.skip_enrichment and fetched > 0:
+                enrichment_result = enrich_paid_ads(
+                    config=config,
+                    supabase=supabase,
+                    run_id=run_id,
+                    limit=fetched,
+                    dry_run=False,
+                )
 
         if not args.skip_topyappers:
             topyappers_result = ingest_allocated_keywords(
@@ -83,6 +95,7 @@ def main() -> int:
             expected_ugc_total=args.target_ugc_count,
             expect_apify_ads=not args.skip_apify_ads,
             expect_topyappers=not args.skip_topyappers,
+            expect_enrichment=enrichment_result is not None,
         )
         supabase.update_by_id("pipeline_runs", run_id, {"status": "completed", "updated_at": utc_now_iso()})
     except Exception:
@@ -95,6 +108,7 @@ def main() -> int:
         "product": init_result["product"],
         "keywords": verification["keywords"],
         "apify_ads": apify_ads_result,
+        "enrichment": enrichment_result.__dict__ if enrichment_result is not None else None,
         "topyappers": topyappers_result,
         "database_counts": verification["counts"],
         "warnings": verification["warnings"],
@@ -121,6 +135,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-ugc-count", type=int, default=3)
     parser.add_argument("--topyappers-page-size", type=int, default=1)
     parser.add_argument("--skip-apify-ads", action="store_true")
+    parser.add_argument("--skip-enrichment", action="store_true", help="Skip the OpenRouter paid-ad transcript/metadata stage.")
     parser.add_argument("--skip-topyappers", action="store_true")
     parser.add_argument(
         "--extra-param",
@@ -209,7 +224,13 @@ def init_existing_product_run(args: argparse.Namespace, supabase: Any, config: C
     return {"product": product, "pipeline_run": run, "keywords": keywords}
 
 
-def required_env_missing(config: Config, *, need_apify_ads: bool, need_topyappers: bool) -> list[str]:
+def required_env_missing(
+    config: Config,
+    *,
+    need_apify_ads: bool,
+    need_topyappers: bool,
+    need_enrichment: bool = False,
+) -> list[str]:
     missing: list[str] = []
     if not config.supabase_url:
         missing.append("SUPABASE_URL")
@@ -219,6 +240,8 @@ def required_env_missing(config: Config, *, need_apify_ads: bool, need_topyapper
         missing.append("CLAUDE_API_KEY")
     if need_apify_ads and not config.apify_api_key:
         missing.append("APIFY_API_KEY")
+    if need_enrichment and not config.openrouter_api_key:
+        missing.append("OPENROUTER_API_KEY")
     if need_topyappers and not config.topyappers_api_key:
         missing.append("TOPYAPPERS_API_KEY")
     return missing
@@ -232,6 +255,7 @@ def verify_database_state(
     expected_ugc_total: int,
     expect_apify_ads: bool,
     expect_topyappers: bool,
+    expect_enrichment: bool = False,
 ) -> dict[str, Any]:
     keywords = supabase.select(
         "keywords",
@@ -245,8 +269,19 @@ def verify_database_state(
     source_queries = select_by_run(supabase, run_id, "source_queries", "provider,endpoint,status,response_count")
     api_usage = select_by_run(supabase, run_id, "api_usage", "provider,endpoint,rate_limit")
     raw_payloads = select_by_run(supabase, run_id, "raw_payloads", "provider,endpoint,external_id")
-    paid_ads = select_by_run(supabase, run_id, "paid_ads", "id,ad_id,headline,video,thumbnail")
+    paid_ads = select_by_run(supabase, run_id, "paid_ads", "paid_ad_row_id,id,ad_id,headline,video,thumbnail,hook,analyzed_at")
     ugc_items = select_by_run(supabase, run_id, "ugc_items", "external_id,video_id,video_url,views,subtitles")
+    paid_ad_transcripts: list[dict[str, Any]] = []
+    paid_ad_row_ids = [str(row.get("paid_ad_row_id")) for row in paid_ads if row.get("paid_ad_row_id")]
+    if paid_ad_row_ids:
+        paid_ad_transcripts = supabase.select(
+            "paid_ad_transcripts",
+            {
+                "select": "paid_ad_row_id,transcript_source",
+                "paid_ad_row_id": f"in.({','.join(paid_ad_row_ids)})",
+            },
+        )
+    analyzed_paid_ads = [row for row in paid_ads if row.get("analyzed_at")]
 
     paid_allocated = sum(int(row.get("target_paid_count") or 0) for row in keywords)
     ugc_allocated = sum(int(row.get("target_ugc_count") or 0) for row in keywords)
@@ -271,6 +306,10 @@ def verify_database_state(
         warnings.append(f"Apify returned {len(paid_ads)} paid ads for target {expected_paid_total}")
     if expect_topyappers and len(ugc_items) < expected_ugc_total:
         warnings.append(f"TopYappers returned {len(ugc_items)} UGC items for target {expected_ugc_total}")
+    if expect_enrichment and paid_ads and not analyzed_paid_ads:
+        failures.append("enrichment ran but no paid_ads rows have analyzed_at set")
+    if expect_enrichment and paid_ads and not paid_ad_transcripts:
+        warnings.append("no paid_ad_transcripts rows were written (ads may have no speech or video fetch failed)")
 
     if failures:
         raise RuntimeError("; ".join(failures))
@@ -282,6 +321,8 @@ def verify_database_state(
             "api_usage": len(api_usage),
             "raw_payloads": len(raw_payloads),
             "paid_ads": len(paid_ads),
+            "paid_ads_analyzed": len(analyzed_paid_ads),
+            "paid_ad_transcripts": len(paid_ad_transcripts),
             "ugc_items": len(ugc_items),
         },
         "warnings": warnings,

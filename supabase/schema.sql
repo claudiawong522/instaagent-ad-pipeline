@@ -108,6 +108,31 @@ create table if not exists paid_ads (
   publisher_platform jsonb,
   timestamped_transcription jsonb,
   time_product_was_mentioned numeric,
+  hook text,
+  main_category text,
+  content_category text,
+  content_format text,
+  content_tone text,
+  primary_emotion text,
+  target_demographic text,
+  video_topic text,
+  visual_style text,
+  production_quality text,
+  setting text,
+  color_palette jsonb,
+  has_face boolean,
+  face_count integer,
+  gender text,
+  age integer,
+  race text,
+  hair_color text,
+  has_product boolean,
+  has_text_overlay boolean,
+  is_ai_generated boolean,
+  is_trending_format boolean,
+  brand_mentioned jsonb,
+  analysis_model text,
+  analyzed_at timestamptz,
   source_metrics jsonb not null default '{}'::jsonb,
   saved_to_supabase_at timestamptz not null default now(),
   unique (run_id, id)
@@ -216,6 +241,9 @@ create index if not exists paid_ads_ad_id_idx on paid_ads(ad_id);
 create index if not exists paid_ads_brand_id_idx on paid_ads(brand_id);
 create index if not exists paid_ads_saved_to_supabase_at_idx on paid_ads(saved_to_supabase_at desc);
 create index if not exists paid_ads_product_category_idx on paid_ads(product_category);
+create index if not exists paid_ads_analyzed_at_idx on paid_ads(analyzed_at);
+create index if not exists paid_ads_content_category_idx on paid_ads(content_category);
+create index if not exists paid_ads_video_topic_idx on paid_ads(video_topic);
 create index if not exists ugc_items_run_id_idx on ugc_items(run_id);
 create index if not exists ugc_items_external_idx on ugc_items(external_id);
 create index if not exists ugc_items_video_id_idx on ugc_items(video_id);
@@ -224,3 +252,4 @@ create index if not exists ugc_items_content_category_idx on ugc_items(content_c
 create index if not exists ugc_items_virality_idx on ugc_items(virality_score desc);
 create index if not exists ugc_items_saved_to_supabase_at_idx on ugc_items(saved_to_supabase_at desc);
 create unique index if not exists ugc_transcripts_item_source_idx on ugc_transcripts(ugc_item_id, transcript_source);
+create unique index if not exists paid_ad_transcripts_row_source_idx on paid_ad_transcripts(paid_ad_row_id, transcript_source);

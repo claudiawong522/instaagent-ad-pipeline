@@ -1,0 +1,20 @@
+{
+  "id": "gen-1234567890",
+  "model": "google/gemini-3-flash",
+  "object": "chat.completion",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "{\"transcript_text\": \"I switched to this gentle cleanser and my skin has never been calmer.\", \"transcript_segments\": [{\"start\": 0.0, \"end\": 3.2, \"text\": \"I switched to this gentle cleanser\"}, {\"start\": 3.2, \"end\": 6.8, \"text\": \"and my skin has never been calmer.\"}], \"hook\": \"I switched to this gentle cleanser\", \"main_category\": \"beauty\", \"content_category\": \"skincare\", \"content_format\": \"ugc_testimonial\", \"content_tone\": \"casual\", \"primary_emotion\": \"relief\", \"target_demographic\": \"women 25-34 with sensitive skin\", \"video_topic\": \"gentle cleanser review\", \"visual_style\": \"handheld selfie\", \"production_quality\": \"medium\", \"setting\": \"bathroom\", \"color_palette\": [\"white\", \"beige\"], \"has_face\": true, \"face_count\": 1, \"gender\": \"female\", \"age\": 28, \"race\": null, \"hair_color\": \"brown\", \"has_product\": true, \"has_text_overlay\": true, \"is_ai_generated\": false, \"is_trending_format\": true, \"brand_mentioned\": [\"QE\"], \"persona\": \"sensitive-skin skincare beginner\", \"emotional_drivers\": [\"relief\", \"social proof\"], \"market_target\": \"US\", \"product_category\": \"skincare\", \"creative_targeting\": \"speaks directly to viewers with reactive skin\", \"niches\": [\"sensitive skin\", \"minimalist skincare\"], \"time_product_was_mentioned\": 1.5}"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 9120,
+    "completion_tokens": 410,
+    "total_tokens": 9530
+  }
+}

@@ -14,6 +14,8 @@ class Config:
     apify_api_key: str | None
     claude_api_key: str | None
     claude_model: str
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "google/gemini-3-flash-preview"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -26,6 +28,8 @@ class Config:
             apify_api_key=os.getenv("APIFY_API_KEY") or os.getenv("APIFY_TOKEN"),
             claude_api_key=os.getenv("CLAUDE_API_KEY"),
             claude_model=os.getenv("CLAUDE_MODEL", "claude-haiku-4-5"),
+            openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
+            openrouter_model=os.getenv("OPENROUTER_MODEL", "google/gemini-3-flash-preview"),
         )
 
 

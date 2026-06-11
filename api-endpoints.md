@@ -87,7 +87,7 @@ search_terms=<keyword>
 | `startDateFormatted` / `startDate` | `paid_ads.started_running` | Stored as epoch milliseconds. |
 | `endDateFormatted` / `endDate` | `paid_ads.running_duration` | Duration in days, computed locally from start/end or start/current time for active ads. |
 | `publisherPlatform` | `paid_ads.publisher_platform` | Meta publisher platforms. |
-| transcript fields | `paid_ads.full_transcription`, `paid_ads.timestamped_transcription` | Left null; this actor does not document video transcripts. |
+| transcript fields | `paid_ads.full_transcription`, `paid_ads.timestamped_transcription` | Left null by ingestion; the OpenRouter enrichment stage writes transcripts to `paid_ad_transcripts` instead. |
 | unmapped provider fields | `paid_ads.source_metrics` | JSONB overflow for provider-specific fields that are not promoted to columns. |
 | full item JSON | `raw_payloads.payload_json` | Raw source of truth. |
 
@@ -228,6 +228,40 @@ TopYappers provider subtitles map as follows:
 
 One transcript row is upserted per `(ugc_item_id, transcript_source)`.
 
+## OpenRouter: Paid Ad Video Enrichment
+
+- Provider: `openrouter:<model>` (default model `google/gemini-3-flash-preview`, override with `OPENROUTER_MODEL`)
+- Method: `POST`
+- Endpoint: `https://openrouter.ai/api/v1/chat/completions`
+- Auth: `Authorization: Bearer` header from `OPENROUTER_API_KEY`
+- Code path: `enrich-paid-ads`, auto-triggered after live `ingest-apify-ads` (`--skip-enrichment` to disable, `--enrichment-limit` / `--enrichment-timeout` to tune)
+- Purpose: one call per paid ad that both transcribes the ad video and extracts ugc_items-parity creative metadata.
+
+Candidates are `paid_ads` rows for the run with a non-null `video` URL and `analyzed_at` null. OpenRouter does not forward arbitrary video URLs to Gemini, so the code fetches the signed CDN mp4 into memory (100 MB cap, never written to disk) and sends it as a base64 `data:` URL in a `video_url` content part. Because CDN URLs are signed and expire within days, run enrichment soon after ingestion; per-row failures are logged in `source_queries` and do not stop the batch.
+
+### Input Columns / Body Fields
+
+| Field | Type | Required | Used by Code | Notes |
+| --- | --- | --- | --- | --- |
+| `model` | string | yes | yes | `OPENROUTER_MODEL`, default `google/gemini-3-flash-preview`. |
+| `messages[0].content[0].video_url.url` | string | yes | yes | `data:video/mp4;base64,<bytes>` fetched from `paid_ads.video`. |
+| `messages[0].content[1].text` | string | yes | yes | Extraction prompt plus ad copy context (headline, description, CTA, page name, link URL, display format). |
+| `response_format.json_schema` | object | yes | yes | Strict structured-output schema guaranteeing parseable JSON. |
+
+### Output Columns / Response Fields
+
+| Response Field | Supabase Destination | Notes |
+| --- | --- | --- |
+| `transcript_text` | `paid_ad_transcripts.transcript_text` | Verbatim spoken transcript; null when the ad has no speech (no transcript row is written). |
+| `transcript_segments` | `paid_ad_transcripts.transcript_segments` | `{start, end, text}` objects in seconds. |
+| model identity | `paid_ad_transcripts.transcript_source` | Stored as `openrouter:<model>`. |
+| analysis fields | `paid_ads` analysis columns | `hook`, `persona`, `target_demographic`, `content_format`, `content_tone`, `primary_emotion`, `visual_style`, `production_quality`, `setting`, `color_palette`, `has_face`, `face_count`, `gender`, `age`, `race`, `hair_color`, `has_product`, `has_text_overlay`, `is_ai_generated`, `is_trending_format`, `brand_mentioned`, `emotional_drivers`, `market_target`, `product_category`, `creative_targeting`, `niches`, `main_category`, `content_category`, `video_topic`, `time_product_was_mentioned`. |
+| bookkeeping | `paid_ads.analysis_model`, `paid_ads.analyzed_at` | Which model ran and when. |
+| `usage` | `api_usage.rate_limit.usage` | Token counts per call. |
+| full response JSON | `raw_payloads.payload_json` | Raw source of truth. |
+
+One transcript row is upserted per `(paid_ad_row_id, transcript_source)`.
+
 ## Supabase Tables Written by Current Commands
 
 | Table | Written By | Purpose |
@@ -237,10 +271,10 @@ One transcript row is upserted per `(ugc_item_id, transcript_source)`.
 | `keywords` | `init-run` | Claude-generated or manual keyword terms plus per-keyword paid ad and UGC target allocations. |
 | `source_queries` | all external API commands | Request/response/error logging per API page or transcript actor run. |
 | `raw_payloads` | external API commands | Preserved raw source item JSON. |
-| `paid_ads` | `ingest-apify-ads` | Apify Meta Ad Library paid ad rows. |
+| `paid_ads` | `ingest-apify-ads`, `enrich-paid-ads` | Apify Meta Ad Library paid ad rows; enrichment fills the analysis columns. |
 | `ugc_items` | `ingest-topyappers-viral`, `ingest-topyappers-videos` | TopYappers-shaped UGC candidate rows. Use `ingest-topyappers-viral` when `video_url` is required. |
 | `api_usage` | live LLM, ingestion, and transcript commands | Claude keyword-generation usage plus provider HTTP status, response count, selected rate-limit/usage headers, and credits used when exposed. |
-| `paid_ad_transcripts` | created by schema only | Later paid-ad transcript processing stage. |
+| `paid_ad_transcripts` | `enrich-paid-ads` (auto after `ingest-apify-ads`) | Paid ad transcript rows from the OpenRouter enrichment call. |
 | `ugc_transcripts` | `backfill-ugc-transcripts` | UGC transcript rows from Apify fallback results. |
 
 ## UGC Save Timestamp
