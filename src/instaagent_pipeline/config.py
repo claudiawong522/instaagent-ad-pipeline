@@ -16,6 +16,8 @@ class Config:
     claude_model: str
     openrouter_api_key: str | None = None
     openrouter_model: str = "google/gemini-3-flash-preview"
+    voyage_api_key: str | None = None
+    embedding_model: str = "voyage-4-lite"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -30,6 +32,8 @@ class Config:
             claude_model=os.getenv("CLAUDE_MODEL", "claude-haiku-4-5"),
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
             openrouter_model=os.getenv("OPENROUTER_MODEL", "google/gemini-3-flash-preview"),
+            voyage_api_key=os.getenv("VOYAGE_API_KEY"),
+            embedding_model=os.getenv("EMBEDDING_MODEL", "voyage-4-lite"),
         )
 
 

@@ -97,6 +97,15 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli backfill-ugc-transcripts \
   --dry-run
 ```
 
+Generate icp/format/hook embeddings for analyzed items into `item_embeddings` (run `supabase/migrations/013_item_embeddings.sql` first):
+
+```bash
+PYTHONPATH=src python3 -m instaagent_pipeline.cli embed-items \
+  --run-id "<pipeline_run_id>" \
+  --source all \
+  --limit 1000
+```
+
 ## Required Environment Variables
 
 - `SUPABASE_URL`
@@ -106,12 +115,16 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli backfill-ugc-transcripts \
 - `CLAUDE_API_KEY`
 - `APIFY_API_KEY`
   - Required for `ingest-apify-ads` and Apify-backed UGC transcript fallback.
+- `VOYAGE_API_KEY`
+  - Required for `embed-items`.
 
 Optional:
 
 - `TOPYAPPERS_BASE_URL`
 - `CLAUDE_MODEL`
   - Defaults to `claude-haiku-4-5`.
+- `EMBEDDING_MODEL`
+  - Defaults to `voyage-4-lite` (1024-dim vectors; the `item_embeddings.embedding` column is `vector(1024)`).
 - `INSTAAGENT_INSECURE_SSL=1`
   - Local dev workaround only if this Python install cannot verify HTTPS certificates.
   - Do not use this in production.

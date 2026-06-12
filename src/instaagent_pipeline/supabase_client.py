@@ -50,7 +50,12 @@ class SupabaseClient:
             return response.body
         return {}
 
-    def upsert(self, table: str, payload: dict[str, Any], conflict_columns: str) -> dict[str, Any]:
+    def upsert(
+        self,
+        table: str,
+        payload: dict[str, Any] | list[dict[str, Any]],
+        conflict_columns: str,
+    ) -> dict[str, Any]:
         headers = dict(self._headers)
         headers["Prefer"] = "resolution=merge-duplicates,return=representation"
         response = request_json(

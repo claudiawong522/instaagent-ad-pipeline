@@ -262,6 +262,36 @@ Candidates are `paid_ads` rows for the run with a non-null `video` URL and `anal
 
 One transcript row is upserted per `(paid_ad_row_id, transcript_source)`.
 
+## Voyage AI: Item Embeddings
+
+- Provider: `voyage:<model>` (default model `voyage-4-lite`, override with `EMBEDDING_MODEL` or `--model`)
+- Method: `POST`
+- Endpoint: `https://api.voyageai.com/v1/embeddings`
+- Auth: `Authorization: Bearer` header from `VOYAGE_API_KEY`
+- Code path: `embed-items` (standalone; requires migration `013_item_embeddings.sql`)
+- Purpose: turn the analyzed icp/format/hook text of each item into vectors for the clustering and dedupe stages.
+
+Candidates are `paid_ads` rows with `analyzed_at` set and all `ugc_items` rows for the run (`--source paid|ugc|all`). For each item, up to three texts are built — `icp` from `persona` + `target_demographic`, `format` from `content_format`/`content_category`/`visual_style`/`setting`, `hook` verbatim — and spaces with no usable text are skipped. Texts are sent in batches of up to 128 with `input_type: "document"`.
+
+### Input Body Fields
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `input` | string[] | yes | The batch of source texts, order-aligned with the response. |
+| `model` | string | yes | Voyage model name. |
+| `input_type` | string | yes | Always `document`; queries against the corpus would use `query`. |
+
+### Output Fields
+
+| Response Field | Supabase Destination | Notes |
+| --- | --- | --- |
+| `data[].embedding` | `item_embeddings.embedding` | 1024-dim vector, serialized as the pgvector text literal. Re-ordered by `data[].index`. |
+| model identity | `item_embeddings.embedding_model` | Stored as the bare model name. |
+| source text | `item_embeddings.source_text` | Exactly what was embedded, for debugging and dedupe. |
+| `usage` | `api_usage.rate_limit.usage` | `total_tokens` per call. |
+
+One row is upserted per `(item_type, item_id, space, embedding_model)`, so re-runs are idempotent. Raw responses are not stored in `raw_payloads` (vectors are large and fully captured in `item_embeddings`).
+
 ## Supabase Tables Written by Current Commands
 
 | Table | Written By | Purpose |
@@ -276,6 +306,7 @@ One transcript row is upserted per `(paid_ad_row_id, transcript_source)`.
 | `api_usage` | live LLM, ingestion, and transcript commands | Claude keyword-generation usage plus provider HTTP status, response count, selected rate-limit/usage headers, and credits used when exposed. |
 | `paid_ad_transcripts` | `enrich-paid-ads` (auto after `ingest-apify-ads`) | Paid ad transcript rows from the OpenRouter enrichment call. |
 | `ugc_transcripts` | `backfill-ugc-transcripts` | UGC transcript rows from Apify fallback results. |
+| `item_embeddings` | `embed-items` | One pgvector row per item per embedding space (icp/format/hook) per model. |
 
 ## UGC Save Timestamp
 
