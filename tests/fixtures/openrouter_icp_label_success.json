@@ -1,0 +1,20 @@
+{
+  "id": "gen-icp-label-1",
+  "model": "google/gemini-3-flash",
+  "object": "chat.completion",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "{\"persona\": \"APAC women 18-30 with reactive, eczema-prone, or chronically dry skin\", \"pains\": [\"skin feels tight or stripped after washing\", \"burned by trendy actives, fragrance, or harsh soap\", \"wants derm-credentialed pharmacy basics, not 10-step routines\"], \"scrolls_for\": [\"derm-fronted explainers\", \"pharmacy finds\", \"eczema/barrier talk\", \"honest product reviews\"], \"quote\": \"if it has fragrance, my face will react.\"}"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 820,
+    "completion_tokens": 140,
+    "total_tokens": 960
+  }
+}

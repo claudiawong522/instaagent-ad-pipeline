@@ -13,6 +13,7 @@ from .apify_transcripts import (
 )
 from .config import Config
 from .ad_enrichment import enrich_paid_ads
+from .clustering import cluster_items
 from .embeddings import embed_items
 from .keywords import (
     active_keyword_allocations,
@@ -30,7 +31,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     config = Config.from_env()
     dry_run = getattr(args, "dry_run", False)
-    dry_run_needs_supabase = args.command in {"backfill-ugc-transcripts", "enrich-paid-ads", "embed-items"}
+    dry_run_needs_supabase = args.command in {
+        "backfill-ugc-transcripts",
+        "enrich-paid-ads",
+        "embed-items",
+        "cluster-items",
+    }
     supabase = build_supabase(config, dry_run=dry_run and not dry_run_needs_supabase)
 
     if args.command == "init-run":
@@ -160,6 +166,20 @@ def main(argv: list[str] | None = None) -> int:
             input_json=args.input_json,
             timeout=args.timeout,
         )
+    elif args.command == "cluster-items":
+        result = cluster_items(
+            config=config,
+            supabase=supabase,
+            run_id=args.run_id,
+            source=args.source,
+            min_cluster_size=args.min_cluster_size,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            no_label=args.no_label,
+            model=args.model,
+            input_json=args.input_json,
+            timeout=args.timeout,
+        )
     else:
         parser.error("Unknown command")
         return 2
@@ -255,6 +275,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--input-json",
         type=Path,
         help="Use a saved Voyage embeddings response instead of calling Voyage. Intended for one-batch tests.",
+    )
+
+    cluster = subparsers.add_parser(
+        "cluster-items",
+        help="Cluster icp embeddings per source via HDBSCAN and label clusters via OpenRouter.",
+    )
+    cluster.add_argument("--run-id", required=True)
+    cluster.add_argument("--source", choices=["paid", "ugc", "all"], default="all")
+    cluster.add_argument(
+        "--min-cluster-size",
+        type=int,
+        default=5,
+        help="HDBSCAN minimum cluster size. Cells with fewer items are skipped.",
+    )
+    cluster.add_argument("--limit", type=int, default=1000, help="Maximum embeddings to fetch per source.")
+    cluster.add_argument("--no-label", action="store_true", help="Skip the OpenRouter cluster-labeling step.")
+    cluster.add_argument("--model", help="OpenRouter labeling model. Defaults to OPENROUTER_MODEL.")
+    cluster.add_argument("--timeout", type=int, default=120)
+    cluster.add_argument("--dry-run", action="store_true")
+    cluster.add_argument(
+        "--input-json",
+        type=Path,
+        help="Use a saved OpenRouter chat-completions response instead of calling OpenRouter. Intended for label tests.",
     )
 
     return parser

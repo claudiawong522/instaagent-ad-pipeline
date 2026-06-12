@@ -3,7 +3,10 @@ name = "instaagent-ad-pipeline"
 version = "0.1.0"
 description = "Lean Step 1/2 ingestion foundation for InstaAgent ad selection."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "numpy>=1.26",
+    "scikit-learn>=1.4",
+]
 
 [project.scripts]
 instaagent-pipeline = "instaagent_pipeline.cli:main"
