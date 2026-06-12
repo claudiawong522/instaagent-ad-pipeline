@@ -261,3 +261,81 @@ class FakeSupabase:
             raise self.upsert_error
         self.upserts.append((table, payload, conflict_columns))
         return {"id": f"{table}_id", **payload}
+
+
+def test_transcribe_request_with_retry_retries_network_errors(monkeypatch: Any) -> None:
+    from instaagent_pipeline import apify_transcripts
+
+    attempts: list[int] = []
+    sleeps: list[float] = []
+
+    def fake_request_json(method: str, url: str, **kwargs: Any) -> str:
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise HttpClientError("Network error: Remote end closed connection")
+        return "ok"
+
+    monkeypatch.setattr(apify_transcripts, "request_json", fake_request_json)
+    monkeypatch.setattr(apify_transcripts.time, "sleep", sleeps.append)
+
+    result = apify_transcripts.transcribe_request_with_retry(
+        "https://api.apify.com/v2/acts/x/run-sync",
+        params={"token": "t"},
+        body={"start_urls": "https://tiktok.com/v/1"},
+        timeout=10,
+    )
+
+    assert result == "ok"
+    assert len(attempts) == 3
+    assert sleeps == [5, 10]
+
+
+def test_transcribe_request_with_retry_gives_up_after_max_attempts(monkeypatch: Any) -> None:
+    from instaagent_pipeline import apify_transcripts
+
+    attempts: list[int] = []
+
+    def fake_request_json(method: str, url: str, **kwargs: Any) -> str:
+        attempts.append(1)
+        raise HttpClientError("Network error", status=None)
+
+    monkeypatch.setattr(apify_transcripts, "request_json", fake_request_json)
+    monkeypatch.setattr(apify_transcripts.time, "sleep", lambda _: None)
+
+    try:
+        apify_transcripts.transcribe_request_with_retry(
+            "https://api.apify.com/v2/acts/x/run-sync",
+            params={"token": "t"},
+            body={},
+            timeout=10,
+        )
+    except HttpClientError:
+        pass
+    else:
+        raise AssertionError("expected HttpClientError")
+    assert len(attempts) == 3
+
+
+def test_transcribe_request_with_retry_does_not_retry_client_errors(monkeypatch: Any) -> None:
+    from instaagent_pipeline import apify_transcripts
+
+    attempts: list[int] = []
+
+    def fake_request_json(method: str, url: str, **kwargs: Any) -> str:
+        attempts.append(1)
+        raise HttpClientError("HTTP 400", status=400)
+
+    monkeypatch.setattr(apify_transcripts, "request_json", fake_request_json)
+
+    try:
+        apify_transcripts.transcribe_request_with_retry(
+            "https://api.apify.com/v2/acts/x/run-sync",
+            params={"token": "t"},
+            body={},
+            timeout=10,
+        )
+    except HttpClientError:
+        pass
+    else:
+        raise AssertionError("expected HttpClientError")
+    assert len(attempts) == 1

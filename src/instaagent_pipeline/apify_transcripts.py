@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,11 @@ ANOXVANZI_ACTOR_NAME = "tictechid/anoxvanzi-transcriber"
 ANOXVANZI_ENDPOINT = f"/acts/{ANOXVANZI_ACTOR_ID}/run-sync-get-dataset-items"
 ANOXVANZI_TRANSCRIPT_SOURCE = f"apify:{ANOXVANZI_ACTOR_NAME}"
 TOPYAPPERS_TRANSCRIPT_SOURCE = "topyappers:subtitles"
+# The run-sync Apify endpoint occasionally drops the connection on long
+# transcriptions; retry transient failures before recording the candidate as failed.
+TRANSCRIBE_MAX_ATTEMPTS = 3
+TRANSCRIBE_RETRY_DELAY_SECONDS = 5
+RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 
 SUPPORTED_VIDEO_HOSTS = {
     "instagram.com",
@@ -300,8 +306,7 @@ def transcribe_candidate(
         if input_json:
             body = json.loads(input_json.read_text())
         else:
-            response = request_json(
-                "POST",
+            response = transcribe_request_with_retry(
                 f"https://api.apify.com/v2{ANOXVANZI_ENDPOINT}",
                 params={"token": config.apify_api_key},
                 body={"start_urls": candidate.video_url},
@@ -387,6 +392,30 @@ def transcribe_candidate(
 
     upsert_or_insert_transcript(supabase, payload)
     return True
+
+
+def transcribe_request_with_retry(
+    url: str,
+    *,
+    params: dict[str, Any],
+    body: Any,
+    timeout: int,
+    max_attempts: int = TRANSCRIBE_MAX_ATTEMPTS,
+    retry_delay_seconds: float = TRANSCRIBE_RETRY_DELAY_SECONDS,
+):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return request_json("POST", url, params=params, body=body, timeout=timeout)
+        except HttpClientError as exc:
+            if not is_retryable_error(exc) or attempt == max_attempts:
+                raise
+            time.sleep(retry_delay_seconds * attempt)
+    raise RuntimeError("unreachable")  # pragma: no cover
+
+
+def is_retryable_error(exc: HttpClientError) -> bool:
+    # status None means a network-level failure (dropped connection, DNS, timeout).
+    return exc.status is None or exc.status in RETRYABLE_HTTP_STATUSES
 
 
 def upsert_or_insert_transcript(supabase: SupabaseClient, payload: dict[str, Any]) -> None:

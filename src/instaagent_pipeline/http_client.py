@@ -7,8 +7,13 @@ from dataclasses import dataclass
 from http.client import RemoteDisconnected
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
+
+
+# Query params whose values must never appear in error messages, which are
+# persisted verbatim to source_queries.error_message.
+SENSITIVE_QUERY_PARAMS = {"token", "key", "apikey", "api_key", "access_token", "secret"}
 
 
 @dataclass
@@ -65,10 +70,22 @@ def request_json(
             parsed = json.loads(raw) if raw else None
         except json.JSONDecodeError:
             parsed = raw
-        raise HttpClientError(f"HTTP {exc.code} for {url}", status=exc.code, body=parsed) from exc
+        raise HttpClientError(f"HTTP {exc.code} for {redact_url(url)}", status=exc.code, body=parsed) from exc
     except (URLError, RemoteDisconnected) as exc:
         reason = getattr(exc, "reason", exc)
-        raise HttpClientError(f"Network error for {url}: {reason}") from exc
+        raise HttpClientError(f"Network error for {redact_url(url)}: {reason}") from exc
+
+
+def redact_url(url: str) -> str:
+    parts = urlsplit(url)
+    if not parts.query:
+        return url
+    pairs = parse_qsl(parts.query, keep_blank_values=True)
+    redacted = [
+        (key, "***" if key.lower() in SENSITIVE_QUERY_PARAMS else value)
+        for key, value in pairs
+    ]
+    return urlunsplit(parts._replace(query=urlencode(redacted, doseq=True)))
 
 
 def ssl_context() -> ssl.SSLContext:
