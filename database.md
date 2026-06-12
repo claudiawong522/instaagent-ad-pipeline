@@ -34,9 +34,13 @@ products ── pipeline_runs ── keywords  (Claude Haiku splits paid/UGC tar
                     └─ else video_url ──► Apify transcriber ──► ugc_transcripts (apify:…)
 
 every external call ──► source_queries + api_usage;  every raw response ──► raw_payloads
+
+        └─ embed-items (after analysis)
+              paid_ads + ugc_items descriptor columns ──► Voyage AI ──► item_embeddings
+              (three vectors per item: icp / format / hook)
 ```
 
-End state per run: both content tables carry comparable transcript and ICP/format/hook metadata — the shape the later stages (embeddings, clustering, top-K selection) consume.
+End state per run: both content tables carry comparable transcript and ICP/format/hook metadata, and `item_embeddings` carries one pgvector row per item per embedding space — the shape the later stages (clustering, top-K selection) consume.
 
 ## Tables
 
@@ -316,6 +320,24 @@ Stores transcript rows attached to normalized UGC items.
 
 Unique index: `ugc_transcripts_item_source_idx` on `(ugc_item_id, transcript_source)`.
 
+### `item_embeddings`
+
+Stores one embedding vector per item per embedding space, written by `embed-items` (Voyage AI; migration `013_item_embeddings.sql`, requires the `vector` extension). Items are embedded from their analyzed descriptor columns; spaces with no usable text are skipped. Upserts are idempotent on `(item_type, item_id, space, embedding_model)`.
+
+| Column | Type | Constraints / default | Notes |
+| --- | --- | --- | --- |
+| `id` | `uuid` | Primary key, default `gen_random_uuid()` | Embedding row identifier. |
+| `run_id` | `uuid` | Not null, references `pipeline_runs(id)` on delete cascade | Parent run. |
+| `item_type` | `text` | Not null, check in (`paid_ad`, `ugc_item`) | Which content table the item lives in. |
+| `item_id` | `uuid` | Not null | `paid_ads.paid_ad_row_id` or `ugc_items.id` (no FK — points at one of two tables). |
+| `space` | `text` | Not null, check in (`icp`, `format`, `hook`) | Embedding space. Never concatenated across spaces. |
+| `embedding_model` | `text` | Not null | Voyage model name, e.g. `voyage-4-lite`. |
+| `source_text` | `text` | Not null | The exact text that was embedded, for debugging and dedupe. |
+| `embedding` | `vector(1024)` | Not null | pgvector embedding. |
+| `created_at` | `timestamptz` | Not null, default `now()` | Creation timestamp. |
+
+Unique constraint on `(item_type, item_id, space, embedding_model)`.
+
 ## Indexes
 
 | Index | Table | Columns / expression | Purpose |
@@ -333,3 +355,5 @@ Unique index: `ugc_transcripts_item_source_idx` on `(ugc_item_id, transcript_sou
 | `ugc_items_external_idx` | `ugc_items` | `external_id` | Lookup by provider id. |
 | `ugc_items_virality_idx` | `ugc_items` | `virality_score desc` | Rank UGC items by virality. |
 | `ugc_transcripts_item_source_idx` | `ugc_transcripts` | `ugc_item_id, transcript_source` | Upsert one transcript per item/source and support transcript lookup by UGC item. |
+| `item_embeddings_run_idx` | `item_embeddings` | `run_id` | Find embeddings for a run. |
+| `item_embeddings_space_idx` | `item_embeddings` | `item_type, space` | Pull one embedding space per source for clustering. |

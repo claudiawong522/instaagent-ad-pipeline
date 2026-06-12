@@ -203,6 +203,8 @@ Provider-specific fields that are not promoted to first-class columns are stored
 
 After live TopYappers ingestion, the CLI first copies non-empty `ugc_items.subtitles` values into `ugc_transcripts` with `transcript_source = 'topyappers:subtitles'`. It then selects `ugc_items` for the same run where `video_url` is present, `subtitles` is null or empty, and no transcript row exists, and sends supported public social video URLs to Apify. The standalone `backfill-ugc-transcripts` command runs the same two-stage transcript flow. Supported URL hosts are Instagram, TikTok, YouTube, and Facebook.
 
+Transient failures (dropped connections from the synchronous actor endpoint, HTTP 429/5xx) are retried up to 3 attempts with increasing backoff before the candidate is recorded as failed; 4xx errors fail immediately. Failed candidates remain transcript-less, so re-running `backfill-ugc-transcripts` retries exactly those rows.
+
 ### Input Columns / Body Fields
 
 | Field | Type | Required | Used by Code | Notes |

@@ -41,3 +41,15 @@ These are good ideas intentionally deferred to keep the first version lean.
 ## Compliance/IP Review
 
 - Flag risky medical/beauty claims, direct competitor copying, creator likeness reuse, trademark risk, and platform policy issues.
+
+## Static Image Ads
+
+- The Meta Ad Library scrape URL currently hard-codes `media_type=video` (`apify_ads.py`), so photo-only ads never enter the pipeline.
+- To include them: parameterize `media_type` (CLI `--media-type`, default `all`), and extend `enrich-paid-ads` to send the ad image + caption through the same OpenRouter descriptor schema when there is no video (transcript fields null).
+- Embeddings need no changes — `embed-items` works off descriptor columns regardless of media type, and same-schema distillation keeps image and video ads clustering by creative pattern instead of input modality.
+- Deferred because every scraped ad so far is a video ad and InstaAgent clones video creatives first.
+
+## UGC LLM Analysis Parity
+
+- UGC embedding inputs come from TopYappers-provided fields, which are coarser than the Gemini-distilled paid-ad descriptors (e.g. `target_demographic = "all_ages"` vs a full persona phrase).
+- Running UGC transcripts/metadata through the same enrichment schema would sharpen UGC ICP clusters. Already listed in PLAN.md step 4 as not yet implemented.

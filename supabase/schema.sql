@@ -1,4 +1,5 @@
 create extension if not exists pgcrypto;
+create extension if not exists vector;
 
 create table if not exists products (
   id uuid primary key default gen_random_uuid(),
@@ -232,6 +233,19 @@ create table if not exists ugc_transcripts (
   created_at timestamptz not null default now()
 );
 
+create table if not exists item_embeddings (
+  id uuid primary key default gen_random_uuid(),
+  run_id uuid not null references pipeline_runs(id) on delete cascade,
+  item_type text not null check (item_type in ('paid_ad', 'ugc_item')),
+  item_id uuid not null,
+  space text not null check (space in ('icp', 'format', 'hook')),
+  embedding_model text not null,
+  source_text text not null,
+  embedding vector(1024) not null,
+  created_at timestamptz not null default now(),
+  unique (item_type, item_id, space, embedding_model)
+);
+
 create index if not exists keywords_run_id_idx on keywords(run_id);
 create index if not exists source_queries_run_id_idx on source_queries(run_id);
 create index if not exists raw_payloads_run_id_idx on raw_payloads(run_id);
@@ -253,3 +267,5 @@ create index if not exists ugc_items_virality_idx on ugc_items(virality_score de
 create index if not exists ugc_items_saved_to_supabase_at_idx on ugc_items(saved_to_supabase_at desc);
 create unique index if not exists ugc_transcripts_item_source_idx on ugc_transcripts(ugc_item_id, transcript_source);
 create unique index if not exists paid_ad_transcripts_row_source_idx on paid_ad_transcripts(paid_ad_row_id, transcript_source);
+create index if not exists item_embeddings_run_idx on item_embeddings(run_id);
+create index if not exists item_embeddings_space_idx on item_embeddings(item_type, space);

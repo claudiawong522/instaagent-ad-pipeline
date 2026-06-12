@@ -62,3 +62,48 @@ If you mean Meta's ad archive ID instead of the Supabase row UUID:
 ```sql
 where pa.id = '<META_AD_ARCHIVE_ID>';
 ```
+
+## Find The Most Similar Hooks Across Paid Ads And UGC
+
+`item_embeddings` stores one pgvector row per item per space (`icp`/`format`/`hook`). `<=>` is cosine distance (smaller = more similar).
+
+```sql
+select
+  a.item_type as type_a,
+  b.item_type as type_b,
+  a.source_text as hook_a,
+  b.source_text as hook_b,
+  a.embedding <=> b.embedding as cosine_distance
+from item_embeddings a
+join item_embeddings b
+  on b.space = a.space
+  and b.embedding_model = a.embedding_model
+  and b.id > a.id
+where a.run_id = '<RUN_UUID>'
+  and b.run_id = '<RUN_UUID>'
+  and a.space = 'hook'
+order by cosine_distance asc
+limit 10;
+```
+
+## Find Items Missing Embeddings For A Run
+
+Spaces are skipped when an item has no usable text, so missing rows are expected for sparse metadata; this shows what got skipped.
+
+```sql
+select pa.paid_ad_row_id as item_id, 'paid_ad' as item_type, s.space
+from paid_ads pa
+cross join (values ('icp'), ('format'), ('hook')) as s(space)
+left join item_embeddings ie
+  on ie.item_type = 'paid_ad' and ie.item_id = pa.paid_ad_row_id and ie.space = s.space
+where pa.run_id = '<RUN_UUID>' and ie.id is null
+
+union all
+
+select ui.id, 'ugc_item', s.space
+from ugc_items ui
+cross join (values ('icp'), ('format'), ('hook')) as s(space)
+left join item_embeddings ie
+  on ie.item_type = 'ugc_item' and ie.item_id = ui.id and ie.space = s.space
+where ui.run_id = '<RUN_UUID>' and ie.id is null;
+```
