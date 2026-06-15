@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Strategy · InstaAgent</title>
+<style>
+  :root {
+    --coral: #ef7b65;
+    --coral-soft: #fbe4dd;
+    --coral-line: #f3c9bd;
+    --ink: #1c1c1e;
+    --muted: #6b7280;
+    --faint: #9ca3af;
+    --bg: #f4f4f5;
+    --card: #ffffff;
+    --chip: #ededf0;
+    --border: #e7e7ea;
+    --radius: 16px;
+    --sidebar-w: 248px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- Layout ---------- */
+  .app { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: var(--sidebar-w);
+    flex-shrink: 0;
+    background: var(--card);
+    border-right: 1px solid var(--border);
+    padding: 22px 16px;
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+  }
+  .main { flex: 1; min-width: 0; }      /* min-width:0 so children can scroll */
+  .topbar {
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 36px;
+  }
+  .content { padding: 8px 36px 60px; max-width: 1700px; }
+
+  /* ---------- Sidebar ---------- */
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 22px; letter-spacing: -0.5px; margin-bottom: 28px; padding: 0 6px; }
+  .brand .a { color: var(--coral); }
+  .campaign-pill {
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--coral-soft); border: 1px solid var(--coral-line);
+    border-radius: 12px; padding: 12px 14px; margin-bottom: 22px; cursor: pointer;
+  }
+  .campaign-pill .name { font-weight: 700; font-size: 14px; }
+  .badge-active { background: #1f9d55; color:#fff; font-size: 10px; font-weight:700; padding: 3px 8px; border-radius: 999px; letter-spacing:.5px; }
+  .nav { display: flex; flex-direction: column; gap: 4px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 11px 14px; border-radius: 12px; color: var(--muted);
+    font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none;
+  }
+  .nav-item .count { margin-left: auto; color: var(--faint); font-weight: 600; }
+  .nav-item:hover { background: #f6f6f7; }
+  .nav-item.active { background: var(--coral); color: #fff; }
+  .nav-item.active .count { color: rgba(255,255,255,.8); }
+  .nav-item .ic { width: 18px; text-align:center; }
+  .nav-sep { flex: 1; }
+  .profile { display: flex; align-items: center; gap: 10px; padding: 12px 8px; border-top: 1px solid var(--border); }
+  .avatar { width: 32px; height: 32px; border-radius: 50%; background: conic-gradient(from 180deg, #ef7b65, #c084fc, #60a5fa, #ef7b65); }
+  .profile .pname { font-size: 13px; font-weight: 700; }
+  .profile .psub { font-size: 11px; color: var(--faint); }
+
+  /* ---------- Topbar ---------- */
+  .product-chip { display: flex; align-items:center; gap: 8px; font-weight: 600; font-size: 14px; color:#374151; border:1px solid var(--border); background:#fff; padding: 7px 14px; border-radius: 999px; }
+  .product-chip .logo { width:20px;height:20px;border-radius:6px;background:linear-gradient(135deg,#60a5fa,#a78bfa); }
+  .btn-new {
+    background: linear-gradient(90deg, #f0995f, #ec5f8a);
+    color: #fff; border: none; font-weight: 700; font-size: 14px;
+    padding: 11px 20px; border-radius: 999px; cursor: pointer;
+    box-shadow: 0 6px 16px rgba(236,95,138,.32);
+  }
+
+  /* ---------- Header ---------- */
+  h1.page-title { font-size: 40px; font-weight: 800; letter-spacing: -1px; margin: 4px 0 4px; }
+  .subtitle { color: var(--muted); font-size: 15px; margin-bottom: 22px; }
+  .subtitle b { color: var(--ink); }
+
+  /* ---------- Source toggle ---------- */
+  .source-toggle { display:inline-flex; background: var(--chip); border-radius: 999px; padding: 4px; margin-bottom: 18px; gap: 4px; }
+  .source-toggle button {
+    border:none; background:transparent; cursor:pointer; font-size: 14px; font-weight: 700;
+    color:#374151; padding: 8px 20px; border-radius: 999px;
+  }
+  .source-toggle button.active { background: #fff; color: var(--coral); box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .source-toggle button .n { color: var(--faint); font-weight: 600; margin-left:6px; }
+
+  /* ---------- Filter chips ---------- */
+  .filters { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 22px; }
+  .filter {
+    display:flex; align-items:center; gap:8px; background: var(--chip);
+    border:none; border-radius: 999px; padding: 9px 16px; font-size: 14px;
+    font-weight: 600; color: #374151; cursor: pointer; text-align:left;
+  }
+  .filter .n { background: rgba(0,0,0,.08); border-radius: 999px; padding: 1px 9px; font-size: 12px; }
+  .filter.active { background: var(--coral); color:#fff; }
+  .filter.active .n { background: rgba(255,255,255,.25); }
+
+  /* ---------- Persona accordion ---------- */
+  .persona { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; overflow: hidden; }
+  .persona.open { border-color: var(--coral-line); box-shadow: 0 1px 0 rgba(239,123,101,.15); }
+  .persona-head { display:flex; align-items:center; gap: 12px; padding: 22px 26px; cursor: pointer; user-select:none; }
+  .persona-head .caret { color: var(--faint); transition: transform .18s ease; font-size: 12px; }
+  .persona.open .persona-head .caret { transform: rotate(90deg); color: var(--coral); }
+  .persona-head .ptitle { font-size: 18px; font-weight: 700; line-height:1.3; }
+  .persona-body { display: none; padding: 0 26px 26px; }
+  .persona.open .persona-body { display: grid; grid-template-columns: 320px 300px minmax(0, 1fr); gap: 22px; align-items: start; }
+
+  .col { min-width: 0; }               /* min-width:0 so the rail can scroll */
+  .col-card { background: #fbfbfc; border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
+  .label { font-size: 12px; font-weight: 800; letter-spacing: 1.2px; color: var(--faint); margin-bottom: 12px; }
+  .persona-text { font-size: 14px; line-height: 1.5; color: #374151; }
+  .persona-text .h { font-weight: 800; font-size: 12px; letter-spacing: .8px; color: var(--faint); margin: 18px 0 8px; }
+  ul.pains { margin: 0; padding-left: 18px; color: #374151; font-size: 14px; line-height: 1.55; }
+  .quote { margin-top: 18px; background:#f0f0f2; border-radius: 12px; padding: 14px 16px; font-style: italic; color:#4b5563; font-size: 13.5px; }
+
+  .pillars-intro { font-size: 14px; color:#374151; margin-bottom: 16px; line-height:1.5; }
+  .pillars-intro b { font-weight: 800; }
+  .tags { display: flex; flex-wrap: wrap; gap: 10px; }
+  .tag { background: var(--coral); color: #fff; font-size: 13.5px; font-weight: 600; padding: 8px 14px; border-radius: 999px; }
+
+  /* ---------- Proven format rail ---------- */
+  .pf-head { display:flex; align-items:center; justify-content:space-between; margin-bottom: 12px; }
+  .rail-wrap { position: relative; }
+  .rail {
+    display: flex; gap: 10px; overflow-x: auto; overflow-y: hidden; scroll-behavior: smooth;
+    padding-bottom: 10px; scrollbar-width: thin; scrollbar-color: var(--coral) #eee;
+  }
+  .rail::-webkit-scrollbar { height: 8px; }
+  .rail::-webkit-scrollbar-thumb { background: var(--coral); border-radius: 999px; }
+  .rail::-webkit-scrollbar-track { background: #eee; border-radius: 999px; }
+
+  .vcard {
+    position: relative; flex: 0 0 auto; width: 132px; height: 320px;
+    border-radius: 12px; overflow: hidden; cursor: pointer; background:#2a2a2e;
+    box-shadow: 0 2px 8px rgba(0,0,0,.12);
+  }
+  .vcard.featured { width: 210px; }
+  .vcard img.thumb { width: 100%; height: 100%; object-fit: cover; display:block; }
+  .vcard .overlay {
+    position:absolute; inset:0;
+    background: linear-gradient(180deg, rgba(0,0,0,.35) 0%, rgba(0,0,0,0) 30%, rgba(0,0,0,0) 55%, rgba(0,0,0,.78) 100%);
+  }
+  .vcard .handle { position:absolute; bottom: 32px; left: 10px; right: 10px; color:#fff; font-size: 12px; font-weight: 700; text-shadow: 0 1px 4px rgba(0,0,0,.6); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .vcard .views { position:absolute; bottom: 12px; left: 10px; right:10px; color:#fff; font-size: 11px; opacity:.95; text-shadow: 0 1px 4px rgba(0,0,0,.6); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .vcard .play {
+    position:absolute; top:50%; left:50%; transform: translate(-50%,-50%);
+    width: 46px; height: 46px; border-radius: 50%; background: rgba(0,0,0,.45);
+    display:flex; align-items:center; justify-content:center; opacity:0; transition: opacity .15s;
+  }
+  .vcard:hover .play { opacity: 1; }
+  .vcard .play svg { width: 18px; height: 18px; fill:#fff; margin-left: 2px; }
+  .vcard .picked { position:absolute; top:10px; left:10px; background: var(--coral); color:#fff; font-size:11px; font-weight:700; padding:4px 9px; border-radius: 999px; display:flex; align-items:center; gap:4px; }
+  .vcard .tier { position:absolute; bottom:10px; right:10px; background: rgba(255,255,255,.9); color:#b45309; font-size:10px; font-weight:800; padding:3px 8px; border-radius:6px; letter-spacing:.5px; }
+
+  .pf-caption { margin-top: 14px; font-size: 13.5px; color:#4b5563; line-height: 1.55; }
+
+  .rail-btn {
+    position:absolute; top: 140px; width: 36px; height: 36px; border-radius:50%;
+    background:#fff; border:1px solid var(--border); box-shadow: 0 4px 12px rgba(0,0,0,.14);
+    cursor:pointer; display:flex; align-items:center; justify-content:center; z-index: 3; font-size: 18px; color:#374151;
+  }
+  .rail-btn.left { left: -8px; }
+  .rail-btn.right { right: -8px; }
+
+  /* ---------- Modal ---------- */
+  .modal-back {
+    position: fixed; inset: 0; background: rgba(15,15,18,.74);
+    display: none; align-items: center; justify-content: center; z-index: 50;
+    backdrop-filter: blur(4px); padding: 24px;
+  }
+  .modal-back.show { display: flex; }
+  .modal {
+    background:#111; border-radius: 18px; overflow:hidden; display:flex;
+    max-width: 880px; width: 100%; max-height: 88vh; box-shadow: 0 30px 80px rgba(0,0,0,.5); position:relative;
+  }
+  .modal .player { width: 340px; flex:0 0 340px; height: 88vh; max-height: 700px; background:#000; }
+  .modal .player iframe { width:100%; height:100%; border:0; display:block; }
+  .modal .meta { flex:1; min-width:0; padding: 28px; color:#e5e7eb; overflow-y:auto; }
+  .modal .meta h3 { margin: 0 0 4px; color:#fff; font-size: 19px; line-height:1.3; }
+  .modal .meta .mh { color: var(--coral); font-weight: 700; font-size: 14px; margin-bottom: 18px; }
+  .modal .meta .stat-row { display:flex; gap: 22px; margin: 18px 0; flex-wrap:wrap; }
+  .modal .meta .stat .v { font-size: 19px; font-weight: 800; color:#fff; }
+  .modal .meta .stat .k { font-size: 11px; color:#9ca3af; text-transform:uppercase; letter-spacing:.6px; }
+  .modal .meta .desc { font-size: 14px; line-height: 1.6; color:#cbd5e1; }
+  .modal .meta .openlink { display:inline-block; margin-top: 20px; color:#fff; background:#27272a; text-decoration:none; padding: 9px 16px; border-radius: 10px; font-size: 13px; font-weight:600; }
+  .modal .meta .openlink:hover { background:#34343a; }
+  .modal .close {
+    position:absolute; top:16px; right:16px; width:38px;height:38px;border-radius:50%;
+    background:rgba(255,255,255,.15); color:#fff; border:none; font-size:18px; cursor:pointer; z-index:51;
+  }
+  @media (max-width: 1200px){ .persona.open .persona-body { grid-template-columns: minmax(0,1fr); } }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="brand">Insta<span class="a">A</span>gent</div>
+    <div class="campaign-pill">
+      <span class="name">QV Summer …</span>
+      <span class="badge-active">ACTIVE</span>
+    </div>
+    <nav class="nav">
+      <a class="nav-item"><span class="ic">⌂</span> Overview <span class="count">0</span></a>
+      <a class="nav-item active"><span class="ic">📈</span> Strategy <span class="count">1</span></a>
+      <a class="nav-item"><span class="ic">✦</span> Variants <span class="count">2</span></a>
+      <a class="nav-item"><span class="ic">▥</span> Analytics <span class="count">3</span></a>
+      <a class="nav-item" style="margin-top:14px"><span class="ic">▦</span> Other Campaigns <span class="count">4</span></a>
+    </nav>
+    <div class="nav-sep"></div>
+    <div class="profile">
+      <div class="avatar"></div>
+      <div><div class="pname">Brand Manager</div><div class="psub">Brands · Profile</div></div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div class="main">
+    <div class="topbar">
+      <div class="product-chip"><span class="logo"></span> <span id="productName">QV (Ego Pharmaceuticals)</span></div>
+      <button class="btn-new">＋ New Campaign</button>
+    </div>
+
+    <div class="content">
+      <h1 class="page-title">Strategy</h1>
+      <div class="subtitle" id="subtitle"></div>
+
+      <div class="source-toggle" id="sourceToggle"></div>
+      <div class="filters" id="filters"></div>
+      <div id="personas"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Video modal -->
+<div class="modal-back" id="modalBack">
+  <div class="modal">
+    <button class="close" id="modalClose">✕</button>
+    <div class="player" id="mPlayer"></div>
+    <div class="meta">
+      <div class="mh" id="mHandle"></div>
+      <h3 id="mTitle"></h3>
+      <div class="stat-row">
+        <div class="stat"><div class="v" id="mViews"></div><div class="k">Views</div></div>
+        <div class="stat"><div class="v" id="mRegion"></div><div class="k">Region</div></div>
+        <div class="stat"><div class="v" id="mScore"></div><div class="k">Virality</div></div>
+      </div>
+      <div class="desc" id="mDesc"></div>
+      <a class="openlink" id="mOpen" target="_blank" rel="noopener">Open original ↗</a>
+    </div>
+  </div>
+</div>
+
+<!-- Live data generated from Supabase by build_strategy.py -->
+<script src="strategy_data.js"></script>
+<script>
+const DATA = window.STRATEGY_DATA || { sources: [] };
+const SOURCES = DATA.sources || [];
+let ICPS = [];            // ICPs of the active source
+
+document.getElementById('productName').textContent = DATA.product || "Product";
+
+const filtersEl = document.getElementById('filters');
+const personasEl = document.getElementById('personas');
+
+// ---- Source toggle (UGC / Paid Ads) ----
+const toggleEl = document.getElementById('sourceToggle');
+SOURCES.forEach((s, si) => {
+  const b = document.createElement('button');
+  b.className = si===0 ? 'active' : '';
+  b.innerHTML = `${s.label} <span class="n">${s.persona_count}</span>`;
+  b.onclick = () => {
+    toggleEl.querySelectorAll('button').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    renderSource(s);
+  };
+  toggleEl.appendChild(b);
+});
+
+function renderSource(s) {
+  ICPS = s.icps || [];
+  document.getElementById('subtitle').innerHTML =
+    `for <b>${DATA.campaign || "Campaign"}</b> · ${s.persona_count} personas · ${s.generation_count} generations`;
+  renderFilters(s);
+  renderPersonas();
+}
+
+// ---- Filters ----
+function renderFilters(s) {
+  filtersEl.innerHTML = "";
+  const allFilters = [{name:"All", count: s.generation_count, all:true}, ...ICPS];
+  allFilters.forEach((f, idx) => {
+    const b = document.createElement('button');
+    b.className = 'filter' + (idx===0?' active':'');
+    const short = f.all ? "All" : (f.name.length > 46 ? f.name.slice(0,46)+"…" : f.name);
+    b.innerHTML = `<span>${short}</span> <span class="n">${f.count}</span>`;
+    b.onclick = () => {
+      filtersEl.querySelectorAll('.filter').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+      document.querySelectorAll('.persona').forEach((p, pi) => {
+        p.style.display = (f.all || ICPS[pi] === f) ? '' : 'none';
+      });
+      if (!f.all) {
+        const idx2 = ICPS.indexOf(f);
+        const target = document.querySelectorAll('.persona')[idx2];
+        document.querySelectorAll('.persona').forEach(p=>p.classList.remove('open'));
+        if (target) target.classList.add('open');
+      }
+    };
+    filtersEl.appendChild(b);
+  });
+}
+
+// ---- Personas ----
+function renderPersonas() {
+personasEl.innerHTML = "";
+ICPS.forEach((p, pi) => {
+  const wrap = document.createElement('div');
+  wrap.className = 'persona' + (pi===0?' open':'');
+
+  const videosHtml = p.videos.map((v, vi) => `
+    <div class="vcard ${v.picked?'featured':''}" data-pi="${pi}" data-vi="${vi}">
+      ${v.cover ? `<img class="thumb" src="${v.cover}" alt="" loading="lazy" referrerpolicy="no-referrer"
+            onerror="this.style.display='none'" />` : ``}
+      <div class="overlay"></div>
+      ${v.picked ? `<div class="picked">✓ Picked</div>` : ``}
+      <div class="play"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+      <div class="handle">${v.handle}</div>
+      <div class="views">${v.country} · ${v.metric} ${v.unit}</div>
+      ${v.tier ? `<div class="tier">${v.tier}</div>` : ``}
+    </div>`).join('');
+
+  const featured = p.videos[0];
+  const caption = featured ? (featured.hook || featured.description || "") : "";
+  const scrolls = (p.scrolls_for || []).join(", ");
+
+  wrap.innerHTML = `
+    <div class="persona-head">
+      <span class="caret">▶</span>
+      <span class="ptitle">${p.name}</span>
+    </div>
+    <div class="persona-body">
+      <div class="col">
+        <div class="col-card">
+          <div class="label">PERSONA</div>
+          <div class="persona-text">
+            ${p.persona || p.name}
+            ${p.pains && p.pains.length ? `<div class="h">PAINS</div>
+              <ul class="pains">${p.pains.map(x=>`<li>${x}</li>`).join('')}</ul>` : ``}
+            ${scrolls ? `<div class="h">SCROLLS FOR</div>${scrolls}` : ``}
+            ${p.quote ? `<div class="quote">"${p.quote}"</div>` : ``}
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="col-card">
+          <div class="label">TRENDING PILLARS</div>
+          <div class="pillars-intro">What <b>${p.name.length>40?p.name.slice(0,40)+"…":p.name}</b> Scrolls</div>
+          <div class="tags">${(p.tags||[]).map(t=>`<span class="tag">#${t}</span>`).join('') || '<span style="color:var(--faint);font-size:13px">No hashtags on these clips</span>'}</div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="pf-head"><div class="label" style="margin:0">PROVEN FORMAT</div></div>
+        <div class="rail-wrap">
+          <button class="rail-btn left" data-dir="-1">‹</button>
+          <div class="rail">${videosHtml}</div>
+          <button class="rail-btn right" data-dir="1">›</button>
+        </div>
+        <div class="pf-caption">${caption}</div>
+      </div>
+    </div>`;
+
+  wrap.querySelector('.persona-head').addEventListener('click', () => wrap.classList.toggle('open'));
+  personasEl.appendChild(wrap);
+});
+
+// rebind rail buttons + card clicks for the freshly rendered DOM
+personasEl.querySelectorAll('.rail-btn').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const rail = btn.parentElement.querySelector('.rail');
+    rail.scrollBy({ left: btn.dataset.dir * 360, behavior: 'smooth' });
+  });
+});
+personasEl.querySelectorAll('.vcard').forEach(card => {
+  card.addEventListener('click', () => {
+    openModal(ICPS[card.dataset.pi].videos[card.dataset.vi]);
+  });
+});
+}
+
+// ---- Video modal ----
+const modalBack = document.getElementById('modalBack');
+const mPlayer = document.getElementById('mPlayer');
+function openModal(v) {
+  document.getElementById('mHandle').textContent = v.handle;
+  document.getElementById('mTitle').textContent = v.nickname || v.handle;
+  document.getElementById('mViews').textContent = v.metric;
+  document.getElementById('mRegion').textContent = v.country;
+  document.getElementById('mScore').textContent = v.tier || (v.score!=null?Math.round(v.score):"—");
+  document.getElementById('mDesc').textContent = v.hook || v.description || "";
+  const open = document.getElementById('mOpen');
+  open.href = v.video_url || "#";
+  if (v.direct_video) {
+    // paid ads: try the direct mp4; Meta's signed URLs expire / are referrer-
+    // locked, so fall back to the poster + Ad Library link if it won't load.
+    mPlayer.innerHTML = `<video id="mVid" src="${v.direct_video}" poster="${v.cover||''}" controls autoplay playsinline
+        style="width:100%;height:100%;object-fit:contain;background:#000"></video>`;
+    const vid = document.getElementById('mVid');
+    vid.addEventListener('error', () => {
+      mPlayer.innerHTML = `<div style="position:relative;width:100%;height:100%;background:#000">
+        ${v.cover?`<img src="${v.cover}" style="width:100%;height:100%;object-fit:cover;opacity:.55">`:''}
+        <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#e5e7eb;padding:20px;gap:12px">
+          <div style="font-size:13px;line-height:1.5">This ad's video link has expired.<br>View it on Meta Ad Library.</div>
+          <a href="${v.video_url}" target="_blank" rel="noopener"
+             style="color:#fff;background:var(--coral);text-decoration:none;padding:9px 16px;border-radius:10px;font-size:13px;font-weight:700">Open in Ad Library ↗</a>
+        </div></div>`;
+    }, { once: true });
+  } else if (v.embed_url) {
+    mPlayer.innerHTML = `<iframe src="${v.embed_url}" allow="autoplay; encrypted-media; fullscreen"
+        allowfullscreen scrolling="no"></iframe>`;
+  } else {
+    mPlayer.innerHTML = `<div style="color:#9ca3af;display:flex;height:100%;align-items:center;justify-content:center;padding:20px;text-align:center">No embeddable preview.<br>Use “Open original”.</div>`;
+  }
+  modalBack.classList.add('show');
+}
+function closeModal() {
+  modalBack.classList.remove('show');
+  mPlayer.innerHTML = "";   // stop playback
+}
+document.getElementById('modalClose').addEventListener('click', closeModal);
+modalBack.addEventListener('click', (e) => { if (e.target === modalBack) closeModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+// ---- Initial render ----
+if (SOURCES.length) renderSource(SOURCES[0]);
+</script>
+</body>
+</html>
