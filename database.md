@@ -1,6 +1,6 @@
 # Database
 
-This document reflects the current checked-in working tree at the time it was written, especially `supabase/schema.sql` and `supabase/migrations/001_split_paid_ads_and_ugc.sql`. The repo had uncommitted database and pipeline edits, so confirm against Supabase before treating this as a deployed-production snapshot.
+`supabase/schema.sql` is the canonical schema for a clean Supabase project. `supabase/migrations/` contains incremental changes for existing projects. Before building search or clustering on a live database, verify the live schema against the committed schema and migrations. If the live database drifted from manual edits or out-of-order migration runs, rebuild the schema cleanly in the same project after exporting anything you need, then start a fresh run as the canonical corpus. Add a second Supabase project later only for production isolation.
 
 ## Data Flow
 
@@ -12,6 +12,7 @@ This document reflects the current checked-in working tree at the time it was wr
 6. Current provider transcript text stays on `ugc_items.subtitles` when TopYappers returns it. After paid-ad ingestion, the LLM enrichment stage (`enrich-paid-ads`, auto-triggered by `ingest-apify-ads`) fetches each `paid_ads.video` mp4 into memory and sends it base64-encoded to OpenRouter (default model `google/gemini-3-flash-preview`) in a single call that returns the spoken transcript plus creative analysis metadata. Transcripts go to `paid_ad_transcripts`; analysis fields go to columns on `paid_ads` (`hook`, `persona`, `target_demographic`, `content_format`, and the rest of the analysis columns), with `analysis_model` and `analyzed_at` recording the run.
 7. Live TopYappers ingestion and `backfill-ugc-transcripts` both copy non-empty `ugc_items.subtitles` into `ugc_transcripts`.
 8. The same transcript stage finds remaining UGC rows without `subtitles`, sends supported public social video URLs to Apify, stores raw Apify output in `raw_payloads`, and writes cleaned transcript text plus parsed timestamp segments to `ugc_transcripts`.
+9. `embed-items` writes separate ICP, format, and hook vectors to `item_embeddings`. `cluster-items` clusters ICP vectors per source, writes item assignments to `item_clusters`, and writes cluster summaries, centroids, exemplars, and optional OpenRouter labels to `clusters`.
 
 ### Diagram
 
@@ -38,9 +39,13 @@ every external call ──► source_queries + api_usage;  every raw response �
         └─ embed-items (after analysis)
               paid_ads + ugc_items descriptor columns ──► Voyage AI ──► item_embeddings
               (three vectors per item: icp / format / hook)
+
+        └─ cluster-items
+              item_embeddings.icp ──► HDBSCAN ──► item_clusters + clusters
+              optional OpenRouter labels ──► clusters.label_json + clusters.label_text
 ```
 
-End state per run: both content tables carry comparable transcript and ICP/format/hook metadata, and `item_embeddings` carries one pgvector row per item per embedding space — the shape the later stages (clustering, top-K selection) consume.
+End state per run: both content tables carry comparable transcript and ICP/format/hook metadata, `item_embeddings` carries one pgvector row per item per embedding space, and `clusters` / `item_clusters` carry the implemented ICP grouping layer that later top-K selection can consume.
 
 ## Tables
 
@@ -338,6 +343,48 @@ Stores one embedding vector per item per embedding space, written by `embed-item
 
 Unique constraint on `(item_type, item_id, space, embedding_model)`.
 
+### `item_clusters`
+
+Stores one clustering assignment per embedded item and embedding space, written by `cluster-items` (migration `014_item_clusters.sql`). The command currently clusters ICP vectors only, but `space` is kept for parity with `item_embeddings`.
+
+| Column | Type | Constraints / default | Notes |
+| --- | --- | --- | --- |
+| `id` | `uuid` | Primary key, default `gen_random_uuid()` | Assignment row identifier. |
+| `run_id` | `uuid` | Not null, references `pipeline_runs(id)` on delete cascade | Parent run. |
+| `item_type` | `text` | Not null, check in (`paid_ad`, `ugc_item`) | Source table represented by `item_id`. |
+| `item_id` | `uuid` | Not null | `paid_ads.paid_ad_row_id` or `ugc_items.id`. |
+| `space` | `text` | Not null, check in (`icp`, `format`, `hook`) | Embedding space; currently `icp`. |
+| `cluster_label` | `integer` | Not null | HDBSCAN label; `-1` means noise. |
+| `distance_to_centroid` | `double precision` | Nullable | Cosine distance to the cluster centroid for clustered items. |
+| `clustering_params` | `text` | Not null | Parameter string, e.g. `hdbscan:min_cluster_size=5`. |
+| `created_at` | `timestamptz` | Not null, default `now()` | Creation timestamp. |
+
+Unique constraint on `(item_type, item_id, space)`.
+
+### `clusters`
+
+Stores one discovered cluster per run, source, and space, written by `cluster-items`. It keeps centroid/exemplar metadata and optional OpenRouter labels for ICP clusters.
+
+| Column | Type | Constraints / default | Notes |
+| --- | --- | --- | --- |
+| `id` | `uuid` | Primary key, default `gen_random_uuid()` | Cluster row identifier. |
+| `run_id` | `uuid` | Not null, references `pipeline_runs(id)` on delete cascade | Parent run. |
+| `item_type` | `text` | Not null, check in (`paid_ad`, `ugc_item`) | Source being clustered. |
+| `space` | `text` | Not null, check in (`icp`, `format`, `hook`) | Embedding space; currently `icp`. |
+| `cluster_label` | `integer` | Not null | HDBSCAN cluster label. |
+| `name` | `text` | Nullable | Short label, currently the labeled persona when labeling succeeds. |
+| `label_json` | `jsonb` | Nullable | Structured OpenRouter label with persona, pains, scroll topics, and quote. |
+| `label_text` | `text` | Nullable | Human-readable label render. |
+| `centroid` | `vector(1024)` | Nullable | Cluster centroid. |
+| `member_count` | `integer` | Not null | Number of items in the cluster. |
+| `exemplar_item_ids` | `jsonb` | Nullable | Closest item IDs used as labeling exemplars. |
+| `silhouette` | `double precision` | Nullable | Cell-level silhouette score when defined. |
+| `label_model` | `text` | Nullable | OpenRouter model used for labeling. |
+| `clustering_params` | `text` | Not null | Parameter string, e.g. `hdbscan:min_cluster_size=5`. |
+| `created_at` | `timestamptz` | Not null, default `now()` | Creation timestamp. |
+
+Unique constraint on `(run_id, item_type, space, cluster_label)`.
+
 ## Indexes
 
 | Index | Table | Columns / expression | Purpose |
@@ -351,9 +398,21 @@ Unique constraint on `(item_type, item_id, space, embedding_model)`.
 | `paid_ads_brand_id_idx` | `paid_ads` | `brand_id` | Find ads for a Meta page id. |
 | `paid_ads_product_category_idx` | `paid_ads` | `product_category` | Filter paid ads when product category is populated by a later stage. |
 | `paid_ads_saved_to_supabase_at_idx` | `paid_ads` | `saved_to_supabase_at desc` | Find recently saved paid ads. |
+| `paid_ads_analyzed_at_idx` | `paid_ads` | `analyzed_at` | Find rows still needing enrichment or rows already analyzed. |
+| `paid_ads_content_category_idx` | `paid_ads` | `content_category` | Filter enriched paid ads by content category. |
+| `paid_ads_video_topic_idx` | `paid_ads` | `video_topic` | Filter enriched paid ads by video topic. |
 | `ugc_items_run_id_idx` | `ugc_items` | `run_id` | Find UGC items for a run. |
 | `ugc_items_external_idx` | `ugc_items` | `external_id` | Lookup by provider id. |
+| `ugc_items_video_id_idx` | `ugc_items` | `video_id` | Lookup TopYappers video IDs. |
+| `ugc_items_video_topic_idx` | `ugc_items` | `video_topic` | Filter UGC by provider video topic. |
+| `ugc_items_content_category_idx` | `ugc_items` | `content_category` | Filter UGC by provider content category. |
 | `ugc_items_virality_idx` | `ugc_items` | `virality_score desc` | Rank UGC items by virality. |
+| `ugc_items_saved_to_supabase_at_idx` | `ugc_items` | `saved_to_supabase_at desc` | Find recently saved UGC items. |
 | `ugc_transcripts_item_source_idx` | `ugc_transcripts` | `ugc_item_id, transcript_source` | Upsert one transcript per item/source and support transcript lookup by UGC item. |
+| `paid_ad_transcripts_row_source_idx` | `paid_ad_transcripts` | `paid_ad_row_id, transcript_source` | Upsert one transcript per paid ad/source. |
 | `item_embeddings_run_idx` | `item_embeddings` | `run_id` | Find embeddings for a run. |
 | `item_embeddings_space_idx` | `item_embeddings` | `item_type, space` | Pull one embedding space per source for clustering. |
+| `item_clusters_run_idx` | `item_clusters` | `run_id` | Find cluster assignments for a run. |
+| `item_clusters_cluster_idx` | `item_clusters` | `item_type, space, cluster_label` | Find members of a source/space cluster. |
+| `clusters_run_idx` | `clusters` | `run_id` | Find cluster summaries for a run. |
+| `clusters_lookup_idx` | `clusters` | `item_type, space` | Lookup cluster summaries by source and space. |

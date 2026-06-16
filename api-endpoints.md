@@ -7,7 +7,9 @@ The current design keeps paid ads and UGC separate:
 - Apify Meta Ad Library paid ads write to `paid_ads`.
 - TopYappers UGC writes to `ugc_items`.
 - Apify UGC transcript fallback writes to `ugc_transcripts`.
-- Raw source JSON from external providers still writes to `raw_payloads`.
+- Voyage embeddings write to `item_embeddings`.
+- ICP clustering writes to `item_clusters` and `clusters`.
+- Raw source JSON from ingestion, transcript, and paid-ad enrichment providers writes to `raw_payloads` where noted below.
 
 ## Provider Keyword Strategy
 
@@ -294,6 +296,40 @@ Candidates are `paid_ads` rows with `analyzed_at` set and all `ugc_items` rows f
 
 One row is upserted per `(item_type, item_id, space, embedding_model)`, so re-runs are idempotent. Raw responses are not stored in `raw_payloads` (vectors are large and fully captured in `item_embeddings`).
 
+## OpenRouter: ICP Cluster Labels
+
+- Provider: `openrouter:<model>` (default model `google/gemini-3-flash-preview`, override with `OPENROUTER_MODEL` or `--model`)
+- Method: `POST`
+- Endpoint: `https://openrouter.ai/api/v1/chat/completions`
+- Auth: `Authorization: Bearer` header from `OPENROUTER_API_KEY`
+- Code path: `cluster-items` (standalone; requires migration `014_item_clusters.sql`)
+- Purpose: cluster ICP embeddings per source and optionally label each discovered cluster from representative source texts.
+
+`cluster-items` first loads `item_embeddings` rows for the run with `space = 'icp'`, separately for `paid_ad` and `ugc_item`. It runs HDBSCAN locally through scikit-learn, upserts every item assignment into `item_clusters`, and upserts each discovered non-noise cluster into `clusters`. If `--no-label` is not passed, it sends up to five closest exemplar ICP texts to OpenRouter and stores the parsed label on `clusters`.
+
+### Input Body Fields
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `model` | string | yes | `OPENROUTER_MODEL` or `--model`, default `google/gemini-3-flash-preview`. |
+| `messages[0].content` | string | yes | Prompt containing representative ICP source texts for one cluster. |
+| `response_format.json_schema` | object | yes | Strict JSON schema for persona, pains, scroll topics, and quote. |
+
+### Output Fields
+
+| Response Field | Supabase Destination | Notes |
+| --- | --- | --- |
+| local HDBSCAN labels | `item_clusters.cluster_label` | `-1` means noise. |
+| local centroid distance | `item_clusters.distance_to_centroid` | Null for noise rows. |
+| local centroid | `clusters.centroid` | `vector(1024)` centroid for the discovered cluster. |
+| exemplar IDs | `clusters.exemplar_item_ids` | Closest item IDs used for labeling. |
+| `persona` | `clusters.name`, `clusters.label_json.persona`, `clusters.label_text` | Persona is also rendered into the readable label text. |
+| `pains`, `scrolls_for`, `quote` | `clusters.label_json`, `clusters.label_text` | Structured and readable label output. |
+| model identity | `clusters.label_model` | Stored only when labeling succeeds. |
+| `usage` | `api_usage.rate_limit.usage` | Token counts per label call. |
+
+Cluster label API calls are logged in `source_queries` and `api_usage`. Raw label responses are not stored in `raw_payloads`; the parsed cluster label is stored directly in `clusters.label_json` and `clusters.label_text`.
+
 ## Supabase Tables Written by Current Commands
 
 | Table | Written By | Purpose |
@@ -309,6 +345,8 @@ One row is upserted per `(item_type, item_id, space, embedding_model)`, so re-ru
 | `paid_ad_transcripts` | `enrich-paid-ads` (auto after `ingest-apify-ads`) | Paid ad transcript rows from the OpenRouter enrichment call. |
 | `ugc_transcripts` | `backfill-ugc-transcripts` | UGC transcript rows from Apify fallback results. |
 | `item_embeddings` | `embed-items` | One pgvector row per item per embedding space (icp/format/hook) per model. |
+| `item_clusters` | `cluster-items` | One cluster assignment per embedded item for the ICP space. |
+| `clusters` | `cluster-items` | Cluster summaries, centroids, exemplars, and optional OpenRouter labels. |
 
 ## UGC Save Timestamp
 

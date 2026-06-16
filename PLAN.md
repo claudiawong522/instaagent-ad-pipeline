@@ -1,6 +1,6 @@
 # InstaAgent Ad Selection Pipeline
 
-This is the full future plan for the InstaAgent ad selection pipeline. The current implementation covers Step 1 and Step 2 foundations, a first known-URL UGC transcript fallback for Step 3, and Step 5 embeddings via Voyage AI.
+This is the full future plan for the InstaAgent ad selection pipeline. The current implementation covers Step 1 and Step 2 foundations, paid-ad video enrichment, a first known-URL UGC transcript fallback for Step 3, Step 5 embeddings via Voyage AI, and ICP clustering for Step 6.
 
 ## Goal
 
@@ -56,10 +56,11 @@ Given a product and keyword set, collect paid ads and UGC/organic content, analy
      - paid ICP, paid format, paid hook.
      - UGC ICP, UGC format, UGC hook.
    - Store cluster labels, centroids, member distances, and repeatedness counts.
+   - Implemented now: `cluster-items` clusters ICP embeddings only (`space = 'icp'`) per source with HDBSCAN, writes assignments to `item_clusters`, writes summaries to `clusters`, and can label clusters through OpenRouter.
 
 7. Selection
-   - Paid ads: select top K per cluster by longevity, using `running_duration_days DESC`.
-   - UGC: select top K per cluster by TopYappers `viralityScore DESC`.
+   - Paid ads: select top K per cluster by longevity, using `paid_ads.running_duration DESC`.
+   - UGC: select top K per cluster by TopYappers `virality_score DESC`.
    - Normalize per ICP so broad ICPs do not dominate.
    - Dedupe exact URLs/source ids first, then near-duplicate transcripts/hooks.
 
@@ -69,7 +70,7 @@ Given a product and keyword set, collect paid ads and UGC/organic content, analy
 
 ## Current Implementation Scope
 
-Step 1, Step 2, the first UGC transcript backfill path in Step 3, and Step 5 embeddings are implemented now.
+Step 1, Step 2, paid-ad enrichment, the first UGC transcript backfill path in Step 3, Step 5 embeddings, and Step 6 ICP clustering are implemented now.
 
 Included:
 
@@ -81,13 +82,14 @@ Included:
 - CLI to backfill missing UGC transcripts from public social video URLs through Apify into `ugc_transcripts`.
 - OpenRouter paid-ad enrichment: one call per ad video producing the transcript (`paid_ad_transcripts`) and creative analysis metadata (`paid_ads` columns), auto-run after `ingest-apify-ads` and available standalone as `enrich-paid-ads`.
 - Voyage AI embeddings: `embed-items` generates icp/format/hook vectors for analyzed paid ads and UGC items into the pgvector `item_embeddings` table (migration 013).
+- ICP clustering: `cluster-items` clusters `item_embeddings` rows per source with HDBSCAN, writes assignments to `item_clusters`, writes cluster summaries to `clusters`, and optionally labels clusters with OpenRouter (migration 014).
 - Endpoint documentation that matches the ingestion code.
 
 Not included yet:
 
 - Downloaded media/audio transcription for UGC rows not covered by provider subtitles or Apify URL actors.
 - LLM analysis for UGC items beyond the provider-supplied TopYappers fields.
-- Clustering.
+- Format and hook clustering.
 - Ranking/selection outputs.
 - Dedupe.
 - Exports.

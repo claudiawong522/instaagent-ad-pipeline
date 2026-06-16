@@ -246,6 +246,38 @@ create table if not exists item_embeddings (
   unique (item_type, item_id, space, embedding_model)
 );
 
+create table if not exists item_clusters (
+  id uuid primary key default gen_random_uuid(),
+  run_id uuid not null references pipeline_runs(id) on delete cascade,
+  item_type text not null check (item_type in ('paid_ad', 'ugc_item')),
+  item_id uuid not null,
+  space text not null check (space in ('icp', 'format', 'hook')),
+  cluster_label integer not null,
+  distance_to_centroid double precision,
+  clustering_params text not null,
+  created_at timestamptz not null default now(),
+  unique (item_type, item_id, space)
+);
+
+create table if not exists clusters (
+  id uuid primary key default gen_random_uuid(),
+  run_id uuid not null references pipeline_runs(id) on delete cascade,
+  item_type text not null check (item_type in ('paid_ad', 'ugc_item')),
+  space text not null check (space in ('icp', 'format', 'hook')),
+  cluster_label integer not null,
+  name text,
+  label_json jsonb,
+  label_text text,
+  centroid vector(1024),
+  member_count integer not null,
+  exemplar_item_ids jsonb,
+  silhouette double precision,
+  label_model text,
+  clustering_params text not null,
+  created_at timestamptz not null default now(),
+  unique (run_id, item_type, space, cluster_label)
+);
+
 create index if not exists keywords_run_id_idx on keywords(run_id);
 create index if not exists source_queries_run_id_idx on source_queries(run_id);
 create index if not exists raw_payloads_run_id_idx on raw_payloads(run_id);
@@ -269,3 +301,7 @@ create unique index if not exists ugc_transcripts_item_source_idx on ugc_transcr
 create unique index if not exists paid_ad_transcripts_row_source_idx on paid_ad_transcripts(paid_ad_row_id, transcript_source);
 create index if not exists item_embeddings_run_idx on item_embeddings(run_id);
 create index if not exists item_embeddings_space_idx on item_embeddings(item_type, space);
+create index if not exists item_clusters_run_idx on item_clusters(run_id);
+create index if not exists item_clusters_cluster_idx on item_clusters(item_type, space, cluster_label);
+create index if not exists clusters_run_idx on clusters(run_id);
+create index if not exists clusters_lookup_idx on clusters(item_type, space);
