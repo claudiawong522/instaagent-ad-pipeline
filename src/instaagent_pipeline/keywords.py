@@ -56,12 +56,19 @@ def generate_keyword_allocations(
         "temperature": 0.2,
         "system": (
             "You create search keywords for paid ad and UGC discovery. "
-            "Generate at most 5 keywords and aim for 3 highly relevant keywords. "
-            "Every keyword_text must be exactly one word. Do not return phrases or multi-word keywords. "
-            "Choose words whose search results are likely to contain directly relevant ads or reusable creative formats. "
-            "For a cleanser campaign, cleanser is a good keyword because it directly matches the product; "
-            "skincare is also good because many skincare ads use formats that can inspire cleanser ads; "
-            "asmr is bad because most ASMR videos are not applicable to a cleanser ad even if ASMR is a possible format. "
+            "Generate 3-5 keywords and aim for 4. "
+            "Every keyword_text must be exactly ONE word with no spaces: the discovery APIs match the keyword "
+            "as a substring of short video topics, so multi-word phrases return zero results. "
+            "Choose CONCRETE, common single-word nouns that name the product, its category, or a key "
+            "ingredient (e.g. cleanser, moisturizer, serum, toner, niacinamide, acne). Never concatenate "
+            "multiple words into one token: write 'cleanser', never 'facewash' or 'skincareroutine' (invented "
+            "compounds appear in no video topics and return zero results). Do NOT use adjectives or generic "
+            "descriptors (e.g. gentle, clean, fresh, natural, glow) — as standalone words their search results "
+            "are dominated by unrelated trending content. "
+            "For a gentle cleanser: 'cleanser' is good (it names the product); 'skincare' is acceptable (an "
+            "on-domain category); 'gentle' is BAD because it matches 'gentle giant' animal videos and "
+            "'gentleman' memes; 'asmr' is BAD because it is a format, not the product. "
+            "Prefer specific product or category nouns over broad ones. "
             "Return strict JSON only. Do not include markdown."
         ),
         "messages": [
@@ -195,11 +202,12 @@ Campaign guidelines: {campaign_guidelines or ""}
 Target paid ads: {target_paid_count}
 Target UGC videos: {target_ugc_count}
 
-Create 3-5 concise single-word search keywords for provider API discovery.
-Aim for 3 highly relevant keywords; use 4 or 5 only when the extra keywords clearly improve coverage.
-Use broad category, benefit, pain-point, audience, ingredient, use-case, or content-format terms.
-Avoid exact brand/product terms unless they are clearly useful for owned-brand or competitor lookup.
-Each keyword_text must contain exactly one word with no spaces.
+Create 3-5 single-word search keywords for provider API discovery.
+Aim for 4 keywords. Each keyword_text must be exactly one word with no spaces.
+Use concrete, common single-word nouns (e.g. cleanser, moisturizer, serum, toner, niacinamide, acne).
+Never concatenate words into one token (write "cleanser", never "facewash" or "skincareroutine").
+Avoid adjectives and generic descriptors (e.g. gentle, clean, fresh, natural, glow) — as single words they
+match unrelated trending content. Prefer specific nouns over broad ones.
 
 Allocate target_paid_count and target_ugc_count across the keywords.
 The sum of all target_paid_count values must equal {target_paid_count}.
