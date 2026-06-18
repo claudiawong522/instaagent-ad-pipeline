@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,10 @@ from .ingestion import complete_query, log_api_usage, log_failed_query, start_qu
 from .supabase_client import SupabaseClient
 
 
+logger = logging.getLogger(__name__)
+
+STORAGE_BUCKET = "ad-videos"
+
 OPENROUTER_PROVIDER = "openrouter"
 OPENROUTER_BASE_URL = "https://openrouter.ai"
 OPENROUTER_CHAT_COMPLETIONS_ENDPOINT = "/api/v1/chat/completions"
@@ -26,7 +31,12 @@ INLINE_VIDEO_MAX_BYTES = 100 * 1024 * 1024
 # paid_ads columns written by the enrichment response, in addition to
 # analysis_model/analyzed_at bookkeeping. Keys absent from the model JSON
 # stay untouched; explicit nulls are written as null.
+# Trimmed analysis set (see plan): the vision-generated ai_description (the search
+# payload) plus 20 high-value fields. Dropped (noisy/low-payoff/optics): race,
+# hair_color, gender, age, has_face, face_count, color_palette, creative_targeting,
+# market_target, is_ai_generated. Their columns remain in the DB but go unpopulated.
 PAID_AD_ANALYSIS_COLUMNS = (
+    "ai_description",
     "hook",
     "main_category",
     "content_category",
@@ -38,23 +48,13 @@ PAID_AD_ANALYSIS_COLUMNS = (
     "visual_style",
     "production_quality",
     "setting",
-    "color_palette",
-    "has_face",
-    "face_count",
-    "gender",
-    "age",
-    "race",
-    "hair_color",
     "has_product",
     "has_text_overlay",
-    "is_ai_generated",
     "is_trending_format",
     "brand_mentioned",
     "persona",
     "emotional_drivers",
-    "market_target",
     "product_category",
-    "creative_targeting",
     "niches",
     "time_product_was_mentioned",
 )
@@ -83,6 +83,7 @@ ENRICHMENT_SCHEMA: dict[str, Any] = {
                 "required": ["start", "end", "text"],
             },
         },
+        "ai_description": NULLABLE_STRING,
         "hook": NULLABLE_STRING,
         "main_category": NULLABLE_STRING,
         "content_category": NULLABLE_STRING,
@@ -94,23 +95,13 @@ ENRICHMENT_SCHEMA: dict[str, Any] = {
         "visual_style": NULLABLE_STRING,
         "production_quality": NULLABLE_STRING,
         "setting": NULLABLE_STRING,
-        "color_palette": NULLABLE_STRING_ARRAY,
-        "has_face": NULLABLE_BOOLEAN,
-        "face_count": NULLABLE_INTEGER,
-        "gender": NULLABLE_STRING,
-        "age": NULLABLE_INTEGER,
-        "race": NULLABLE_STRING,
-        "hair_color": NULLABLE_STRING,
         "has_product": NULLABLE_BOOLEAN,
         "has_text_overlay": NULLABLE_BOOLEAN,
-        "is_ai_generated": NULLABLE_BOOLEAN,
         "is_trending_format": NULLABLE_BOOLEAN,
         "brand_mentioned": NULLABLE_STRING_ARRAY,
         "persona": NULLABLE_STRING,
         "emotional_drivers": NULLABLE_STRING_ARRAY,
-        "market_target": NULLABLE_STRING,
         "product_category": NULLABLE_STRING,
-        "creative_targeting": NULLABLE_STRING,
         "niches": NULLABLE_STRING_ARRAY,
         "time_product_was_mentioned": NULLABLE_NUMBER,
     },
@@ -118,36 +109,44 @@ ENRICHMENT_SCHEMA: dict[str, Any] = {
 }
 
 ENRICHMENT_PROMPT = """
-You analyze a paid social video ad for a creative-intelligence pipeline.
-Watch the video and use the ad copy below for context.
+You analyze a social video ad/clip for a creative-intelligence + search pipeline.
+Watch the video and use the copy below for context.
 
 Tasks:
 1. Transcribe all spoken audio verbatim into transcript_text. Provide
    transcript_segments with start/end seconds per spoken sentence. If there
    is no speech, set transcript_text to null and transcript_segments to null.
-2. Extract creative metadata. Use null for anything not inferable.
+
+2. Write ai_description: a detailed, concrete, present-tense visual description of
+   the whole video, optimized for semantic search. Use a consistent structure:
+   - Narrate the video chronologically, scene by scene ("The video opens with... then... next...").
+   - Note camera work / framing when notable (angles, zoom, close-ups, orientation).
+   - Identify the subject: apparent age range, gender, ethnicity/region, and any visible condition.
+   - Describe every product/tool and how it is applied, in order (motions, textures, foam, pads, devices, steam).
+   - Explicitly call out scroll-stopping / visceral moments (e.g. a close-up of sebum on cotton pads).
+   - Note on-screen text/overlays, setting, and tone when relevant.
+   - End with a 1-2 sentence summary of the overall arc (problem -> result / before -> after)
+     and the single most eye-catching element.
+   Write specific visual prose, no marketing fluff.
+
+3. Extract creative metadata. Use null for anything not inferable.
    - hook: the attention-grabbing opening line or visual device, quoted or described in one sentence.
-   - persona: the ICP (ideal customer profile) this ad targets, one concise phrase.
+   - persona: the ICP (ideal customer profile) this content targets, one concise phrase.
    - target_demographic: audience descriptor such as "women 25-34 with sensitive skin".
-   - content_format: e.g. talking_head, ugc_testimonial, demo, before_after, voiceover_broll, skit, unboxing, tutorial.
+   - content_format: e.g. talking_head, ugc_testimonial, demo, before_after, voiceover_broll, skit, unboxing, tutorial, asmr, grwm.
    - content_tone, content_category, main_category, video_topic, visual_style, setting: short lowercase phrases.
-   - primary_emotion: dominant emotion the ad evokes.
+   - primary_emotion: dominant emotion the video evokes.
    - emotional_drivers: list of persuasion levers, e.g. ["fear of missing out", "social proof"].
-   - market_target: market/region/segment if inferable.
    - product_category: e.g. skincare, supplements, apparel.
-   - creative_targeting: who the creative itself addresses and how.
    - niches: list of niche descriptors.
-   - color_palette: list of dominant colors as lowercase names or hex.
    - production_quality: one of low, medium, high, professional.
-   - has_face/face_count/gender/age/race/hair_color: about the primary on-screen person; gender is one of female, male, mixed, none; age is the approximate age of the primary person.
-   - has_product: whether the product is shown on screen.
+   - has_product: whether a product is shown on screen.
    - has_text_overlay: whether burned-in captions or text overlays appear.
-   - is_ai_generated: whether the footage or voice appears AI-generated.
-   - is_trending_format: whether the ad uses a recognizable trending social format.
+   - is_trending_format: whether the video uses a recognizable trending social format.
    - time_product_was_mentioned: seconds into the video when the product is first mentioned or shown, null if never.
    - brand_mentioned: list of brand names spoken or shown.
 
-Ad copy context:
+Copy context:
 {ad_copy}
 """.strip()
 
@@ -157,6 +156,7 @@ class PaidAdEnrichmentCandidate:
     paid_ad_row_id: str
     ad_archive_id: str
     video_url: str
+    thumbnail_url: str | None = None
     ad_copy: dict[str, Any] = field(default_factory=dict)
 
 
@@ -260,7 +260,7 @@ def paid_ad_enrichment_candidates(
         "paid_ads",
         {
             "select": (
-                "paid_ad_row_id,id,video,headline,description,cta_title,cta_type,"
+                "paid_ad_row_id,id,video,thumbnail,image,headline,description,cta_title,cta_type,"
                 "name,link_url,display_format"
             ),
             "run_id": f"eq.{run_id}",
@@ -287,6 +287,7 @@ def paid_ad_enrichment_candidates(
                 paid_ad_row_id=paid_ad_row_id,
                 ad_archive_id=str(row.get("id") or ""),
                 video_url=video_url,
+                thumbnail_url=str(row.get("thumbnail") or row.get("image") or "") or None,
                 ad_copy={
                     key: row.get(key)
                     for key in ("headline", "description", "cta_title", "cta_type", "name", "link_url", "display_format")
@@ -333,6 +334,17 @@ def enrich_paid_ad(
             body = json.loads(input_json.read_text())
         else:
             video_bytes = fetch_video_bytes(candidate.video_url, timeout=timeout)
+            persist_media(
+                supabase,
+                run_id=run_id,
+                item_table="paid_ads",
+                id_column="paid_ad_row_id",
+                item_id=candidate.paid_ad_row_id,
+                video_bytes=video_bytes,
+                thumbnail_url=candidate.thumbnail_url,
+                subdir="paid",
+                timeout=timeout,
+            )
             response = request_json(
                 "POST",
                 f"{OPENROUTER_BASE_URL}{endpoint}",
@@ -494,6 +506,44 @@ def openrouter_usage(body: Any) -> dict[str, Any]:
 def is_probable_video_url(url: str) -> bool:
     parsed = urlparse(url)
     return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+
+
+def persist_media(
+    supabase: SupabaseClient,
+    *,
+    run_id: str,
+    item_table: str,
+    id_column: str,
+    item_id: str,
+    video_bytes: bytes,
+    thumbnail_url: str | None,
+    subdir: str,
+    timeout: int,
+) -> dict[str, str]:
+    """Persist the video (and provider thumbnail) to Supabase Storage and record the
+    public URLs on the item row. Resilient: upload failures are logged, not raised, so
+    enrichment still proceeds. Shared by paid + UGC enrichment."""
+    updates: dict[str, str] = {}
+    try:
+        updates["storage_video_url"] = supabase.upload_object(
+            STORAGE_BUCKET, f"{run_id}/{subdir}/{item_id}.mp4", video_bytes, "video/mp4", timeout=timeout
+        )
+    except (HttpClientError, RuntimeError) as exc:
+        logger.warning("Video persist failed for %s %s: %s", item_table, item_id, exc)
+    if thumbnail_url:
+        try:
+            thumb_bytes = fetch_video_bytes(thumbnail_url, timeout=timeout)
+            updates["storage_thumb_url"] = supabase.upload_object(
+                STORAGE_BUCKET, f"{run_id}/{subdir}/{item_id}.jpg", thumb_bytes, "image/jpeg", timeout=timeout
+            )
+        except (HttpClientError, RuntimeError) as exc:
+            logger.warning("Thumbnail persist failed for %s %s: %s", item_table, item_id, exc)
+    if updates:
+        try:
+            supabase.update_by_column(item_table, id_column, item_id, updates)
+        except (HttpClientError, RuntimeError) as exc:
+            logger.warning("Storage URL update failed for %s %s: %s", item_table, item_id, exc)
+    return updates
 
 
 def fetch_video_bytes(url: str, *, timeout: int) -> bytes:

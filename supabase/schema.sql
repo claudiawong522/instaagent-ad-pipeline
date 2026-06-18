@@ -238,7 +238,7 @@ create table if not exists item_embeddings (
   run_id uuid not null references pipeline_runs(id) on delete cascade,
   item_type text not null check (item_type in ('paid_ad', 'ugc_item')),
   item_id uuid not null,
-  space text not null check (space in ('icp', 'format', 'hook')),
+  space text not null check (space in ('icp', 'format', 'hook', 'search')),
   embedding_model text not null,
   source_text text not null,
   embedding vector(1024) not null,
@@ -305,3 +305,53 @@ create index if not exists item_clusters_run_idx on item_clusters(run_id);
 create index if not exists item_clusters_cluster_idx on item_clusters(item_type, space, cluster_label);
 create index if not exists clusters_run_idx on clusters(run_id);
 create index if not exists clusters_lookup_idx on clusters(item_type, space);
+
+-- Search layer (see migrations/015): vision-generated description, persisted media,
+-- analysis-column parity for ugc_items, a cosine KNN index + function for query search.
+alter table paid_ads add column if not exists ai_description text;
+alter table paid_ads add column if not exists storage_video_url text;
+alter table paid_ads add column if not exists storage_thumb_url text;
+alter table ugc_items add column if not exists ai_description text;
+alter table ugc_items add column if not exists storage_video_url text;
+alter table ugc_items add column if not exists storage_thumb_url text;
+alter table ugc_items add column if not exists persona jsonb;
+alter table ugc_items add column if not exists niches jsonb;
+alter table ugc_items add column if not exists emotional_drivers jsonb;
+alter table ugc_items add column if not exists time_product_was_mentioned numeric;
+alter table ugc_items add column if not exists analyzed_at timestamptz;
+alter table ugc_items add column if not exists analysis_model text;
+
+create index if not exists item_embeddings_search_hnsw
+  on item_embeddings using hnsw (embedding vector_cosine_ops)
+  where space = 'search';
+
+create or replace function match_item_embeddings(
+  p_query vector(1024),
+  p_space text default 'search',
+  p_item_type text default null,
+  p_model text default 'voyage-4-lite',
+  p_run_id uuid default null,
+  p_limit int default 20
+)
+returns table (
+  item_type text,
+  item_id uuid,
+  source_text text,
+  similarity double precision
+)
+language sql
+stable
+as $$
+  select
+    ie.item_type,
+    ie.item_id,
+    ie.source_text,
+    1 - (ie.embedding <=> p_query) as similarity
+  from item_embeddings ie
+  where ie.space = p_space
+    and ie.embedding_model = p_model
+    and (p_item_type is null or ie.item_type = p_item_type)
+    and (p_run_id is null or ie.run_id = p_run_id)
+  order by ie.embedding <=> p_query
+  limit p_limit;
+$$;

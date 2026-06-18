@@ -562,3 +562,157 @@ def days_since_timestamp(value: str | None) -> int | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return max((datetime.now(UTC) - parsed).days, 0)
+
+
+# ── UGC: Apify TikTok (clockworks) + Instagram (data-slayer) → ugc_items ──
+#
+# These replace TopYappers as the UGC source. The Apify scrapers provide engagement
+# + creator metadata only; the analysis columns (hook, content_format, persona, ...)
+# are filled later by the UGC vision enrichment, so they are left null here. virality
+# is recomputed from engagement since these providers do not supply a virality score.
+
+
+def recompute_virality(
+    *,
+    views: int | None,
+    likes: int | None,
+    comments: int | None,
+    shares: int | None,
+) -> tuple[float | None, str | None]:
+    """Engagement-rate heuristic standing in for TopYappers' virality_score."""
+    if not views or views <= 0:
+        return None, None
+    engagement = (likes or 0) + (comments or 0) + (shares or 0)
+    score = round(engagement / views * 100, 2)
+    if score >= 15:
+        tier = "high"
+    elif score >= 7:
+        tier = "medium"
+    elif score > 0:
+        tier = "low"
+    else:
+        tier = None
+    return score, tier
+
+
+def tiktok_download_url(item: dict[str, Any]) -> str | None:
+    media = item.get("mediaUrls")
+    if isinstance(media, list) and media:
+        return str(media[0])
+    video_meta = item.get("videoMeta")
+    if isinstance(video_meta, dict) and video_meta.get("downloadAddr"):
+        return str(video_meta["downloadAddr"])
+    return None
+
+
+def tiktok_hashtags(item: dict[str, Any]) -> list[str] | None:
+    tags = item.get("hashtags")
+    if isinstance(tags, list):
+        names = [t.get("name") if isinstance(t, dict) else t for t in tags]
+        cleaned = [str(n) for n in names if n]
+        return cleaned or None
+    return None
+
+
+TIKTOK_FIRST_CLASS_KEYS = {
+    "id", "authorMeta", "videoMeta", "musicMeta", "playCount", "diggCount",
+    "commentCount", "shareCount", "text", "hashtags", "webVideoUrl", "mediaUrls",
+    "createTimeISO", "createTime", "covers",
+}
+
+
+def normalize_tiktok_item(item: dict[str, Any], run_id: str, raw_payload_id: str | None) -> dict[str, Any]:
+    author = item.get("authorMeta") if isinstance(item.get("authorMeta"), dict) else {}
+    video_meta = item.get("videoMeta") if isinstance(item.get("videoMeta"), dict) else {}
+    music_meta = item.get("musicMeta") if isinstance(item.get("musicMeta"), dict) else {}
+    views = as_int(item.get("playCount"))
+    likes = as_int(item.get("diggCount"))
+    comments = as_int(item.get("commentCount"))
+    shares = as_int(item.get("shareCount"))
+    score, tier = recompute_virality(views=views, likes=likes, comments=comments, shares=shares)
+    music_name = music_meta.get("musicName") or music_meta.get("musicAuthor")
+    return {
+        "run_id": run_id,
+        "raw_payload_id": raw_payload_id,
+        "external_id": str(first_present(item, "id", "webVideoUrl") or ""),
+        "source": "tiktok",
+        "video_id": stringify_if_needed(item.get("id")),
+        "video_url": tiktok_download_url(item),
+        "cover": first_present(video_meta, "coverUrl", "originalCoverUrl") or first_present(item, "covers"),
+        "description": item.get("text"),
+        "hashtags": tiktok_hashtags(item),
+        "followers": as_int(author.get("fans")),
+        "handle": author.get("name"),
+        "user_handle": author.get("name"),
+        "user_id": stringify_if_needed(author.get("id")),
+        "nickname": author.get("nickName"),
+        "avatar": author.get("avatar"),
+        "views": views,
+        "likes": likes,
+        "comments": comments,
+        "shares": shares,
+        "music": {"title": music_name} if music_name else None,
+        "date_created": as_timestamp(first_present(item, "createTimeISO", "createTime")),
+        "virality_score": score,
+        "virality_tier": tier,
+        "source_metrics": source_metrics_from_unmapped(
+            item,
+            TIKTOK_FIRST_CLASS_KEYS,
+            extra={"endpoint_kind": "apify_tiktok", "page_url": item.get("webVideoUrl")},
+        ),
+    }
+
+
+INSTAGRAM_FIRST_CLASS_KEYS = {
+    "id", "pk", "code", "user", "video_url", "thumbnail_url", "caption", "play_count",
+    "ig_play_count", "like_count", "comment_count", "share_count", "taken_at",
+    "image_versions",
+}
+
+
+def instagram_caption_text(item: dict[str, Any]) -> str | None:
+    caption = item.get("caption")
+    if isinstance(caption, dict):
+        return caption.get("text")
+    if isinstance(caption, str):
+        return caption or None
+    return None
+
+
+def normalize_instagram_reel(item: dict[str, Any], run_id: str, raw_payload_id: str | None) -> dict[str, Any]:
+    user = item.get("user") if isinstance(item.get("user"), dict) else {}
+    code = item.get("code")
+    views = as_int(first_present(item, "play_count", "ig_play_count"))
+    likes = as_int(item.get("like_count"))
+    comments = as_int(item.get("comment_count"))
+    shares = as_int(item.get("share_count"))
+    score, tier = recompute_virality(views=views, likes=likes, comments=comments, shares=shares)
+    page_url = f"https://www.instagram.com/reel/{code}/" if code else None
+    return {
+        "run_id": run_id,
+        "raw_payload_id": raw_payload_id,
+        "external_id": str(first_present(item, "id", "pk", "code") or ""),
+        "source": "instagram",
+        "video_id": stringify_if_needed(first_present(item, "code", "id")),
+        "video_url": item.get("video_url"),
+        "cover": item.get("thumbnail_url"),
+        "description": instagram_caption_text(item),
+        "handle": user.get("username"),
+        "user_handle": user.get("username"),
+        "user_id": stringify_if_needed(first_present(user, "pk", "id")),
+        "nickname": user.get("full_name"),
+        "avatar": user.get("profile_pic_url"),
+        "followers": as_int(user.get("follower_count")),
+        "views": views,
+        "likes": likes,
+        "comments": comments,
+        "shares": shares,
+        "date_created": as_timestamp(item.get("taken_at")),
+        "virality_score": score,
+        "virality_tier": tier,
+        "source_metrics": source_metrics_from_unmapped(
+            item,
+            INSTAGRAM_FIRST_CLASS_KEYS,
+            extra={"endpoint_kind": "apify_instagram", "page_url": page_url},
+        ),
+    }

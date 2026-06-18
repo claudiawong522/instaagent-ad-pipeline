@@ -145,7 +145,8 @@ def test_enrich_paid_ad_writes_transcript_then_updates_paid_ads() -> None:
     assert update["hook"] == "I switched to this gentle cleanser"
     assert update["persona"] == "sensitive-skin skincare beginner"
     assert update["target_demographic"] == "women 25-34 with sensitive skin"
-    assert update["has_face"] is True
+    assert "has_face" not in update  # dropped from the trimmed schema
+    assert "race" not in update  # dropped from the trimmed schema
     assert update["emotional_drivers"] == ["relief", "social proof"]
     assert update["analysis_model"] == "google/gemini-3-flash"
     assert update["analyzed_at"]

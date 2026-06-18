@@ -18,13 +18,21 @@ VOYAGE_EMBEDDINGS_ENDPOINT = "/v1/embeddings"
 EMBEDDING_BATCH_SIZE = 128
 
 EMBEDDING_SPACES = ("icp", "format", "hook")
+SEARCH_SPACE = "search"
+ALL_SPACES = ("icp", "format", "hook", "search")
 
+# Columns the space builders read. Includes the extra fields the 'search' space
+# needs (ai_description + the tag block); selecting them is harmless for the other
+# spaces. niches/persona on ugc_items exist after migration 015.
 PAID_AD_SELECT_COLUMNS = (
     "paid_ad_row_id,persona,target_demographic,content_format,content_category,"
-    "visual_style,setting,hook"
+    "visual_style,setting,hook,ai_description,main_category,product_category,"
+    "video_topic,niches,primary_emotion,brand_mentioned"
 )
 UGC_SELECT_COLUMNS = (
-    "id,target_demographic,content_format,content_category,visual_style,setting,hook"
+    "id,persona,target_demographic,content_format,content_category,visual_style,"
+    "setting,hook,ai_description,main_category,product_category,video_topic,"
+    "niches,primary_emotion,brand_mentioned"
 )
 
 
@@ -53,6 +61,7 @@ def embed_items(
     supabase: SupabaseClient | None,
     run_id: str,
     source: str = "all",
+    spaces: tuple[str, ...] | None = None,
     limit: int = 1000,
     dry_run: bool = False,
     model: str | None = None,
@@ -65,6 +74,10 @@ def embed_items(
         raise ValueError("--limit must be greater than 0.")
     if source not in {"paid", "ugc", "all"}:
         raise ValueError("--source must be one of paid, ugc, all.")
+    target_spaces = spaces or EMBEDDING_SPACES
+    unknown = [space for space in target_spaces if space not in SPACE_TEXT_BUILDERS]
+    if unknown:
+        raise ValueError(f"Unknown embedding space(s): {', '.join(unknown)}.")
 
     embedding_model = model or config.embedding_model
     existing = existing_embedding_keys(supabase, run_id=run_id, embedding_model=embedding_model)
@@ -82,7 +95,7 @@ def embed_items(
                 "limit": str(limit),
             },
         )
-        collect_candidates(rows, item_type="paid_ad", id_column="paid_ad_row_id", existing=existing, result=result, out=candidates)
+        collect_candidates(rows, item_type="paid_ad", id_column="paid_ad_row_id", spaces=target_spaces, existing=existing, result=result, out=candidates)
     if source in {"ugc", "all"}:
         rows = supabase.select(
             "ugc_items",
@@ -93,7 +106,7 @@ def embed_items(
                 "limit": str(limit),
             },
         )
-        collect_candidates(rows, item_type="ugc_item", id_column="id", existing=existing, result=result, out=candidates)
+        collect_candidates(rows, item_type="ugc_item", id_column="id", spaces=target_spaces, existing=existing, result=result, out=candidates)
 
     result.candidates = len(candidates)
     if dry_run:
@@ -138,6 +151,7 @@ def collect_candidates(
     *,
     item_type: str,
     id_column: str,
+    spaces: tuple[str, ...],
     existing: set[tuple[str, str, str]],
     result: EmbedResult,
     out: list[EmbeddingCandidate],
@@ -146,7 +160,7 @@ def collect_candidates(
         item_id = str(row.get(id_column) or "")
         if not item_id:
             continue
-        for space in EMBEDDING_SPACES:
+        for space in spaces:
             if (item_type, item_id, space) in existing:
                 result.skipped_existing += 1
                 continue
@@ -356,11 +370,65 @@ def build_hook_text(row: dict[str, Any]) -> str | None:
     return clean_text(row.get("hook"))
 
 
+# The search space embeds the rich vision-generated ai_description plus a compact
+# labeled tag block of the highest-value searchable fields, so the exact words users
+# type (ASMR, before/after, cleanser) appear in the embedded text. Raw transcript is
+# deliberately excluded. Field order is fixed so cosine distances stay comparable.
+SEARCH_TAG_FIELDS = (
+    ("format", "content_format"),
+    ("category", "main_category"),
+    ("subcategory", "content_category"),
+    ("product", "product_category"),
+    ("topic", "video_topic"),
+    ("niches", "niches"),
+    ("hook", "hook"),
+    ("setting", "setting"),
+    ("emotion", "primary_emotion"),
+    ("brands", "brand_mentioned"),
+)
+
+
+def build_search_text(row: dict[str, Any]) -> str | None:
+    description = clean_text(row.get("ai_description"))
+    if not description:
+        return None
+    tags = []
+    for label, column in SEARCH_TAG_FIELDS:
+        value = flatten_jsonish(row.get(column))
+        if value:
+            tags.append(f"{label}: {value}")
+    if tags:
+        return f"{description}\n\n{'; '.join(tags)}"
+    return description
+
+
 SPACE_TEXT_BUILDERS: dict[str, Callable[[dict[str, Any]], str | None]] = {
     "icp": build_icp_text,
     "format": build_format_text,
     "hook": build_hook_text,
+    "search": build_search_text,
 }
+
+
+def embed_query(
+    config: Config,
+    query: str,
+    *,
+    model: str | None = None,
+    timeout: int = 30,
+) -> list[float]:
+    """Embed a search query with Voyage using input_type='query' (asymmetric retrieval)."""
+    embedding_model = model or config.embedding_model
+    if not config.voyage_api_key:
+        raise RuntimeError("VOYAGE_API_KEY is required to embed a search query.")
+    response = request_json(
+        "POST",
+        f"{VOYAGE_BASE_URL}{VOYAGE_EMBEDDINGS_ENDPOINT}",
+        headers={"Authorization": f"Bearer {config.voyage_api_key}"},
+        body={"input": [query], "model": embedding_model, "input_type": "query"},
+        timeout=timeout,
+    )
+    return parse_voyage_response(response.body, expected_count=1)[0]
 
 
 def clean_text(value: Any) -> str | None:

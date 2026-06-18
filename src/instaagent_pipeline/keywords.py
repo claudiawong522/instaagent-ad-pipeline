@@ -66,9 +66,13 @@ def generate_keyword_allocations(
             "descriptors (e.g. gentle, clean, fresh, natural, glow) — as standalone words their search results "
             "are dominated by unrelated trending content. "
             "For a gentle cleanser: 'cleanser' is good (it names the product); 'skincare' is acceptable (an "
-            "on-domain category); 'gentle' is BAD because it matches 'gentle giant' animal videos and "
-            "'gentleman' memes; 'asmr' is BAD because it is a format, not the product. "
-            "Prefer specific product or category nouns over broad ones. "
+            "on-domain category); 'acne' is good (the core problem the product solves — adjacent results like "
+            "acne-treatment ads are still useful inspiration); 'gentle' is BAD because it matches 'gentle giant' "
+            "animal videos and 'gentleman' memes; 'asmr' is BAD because it is a format, not the product. "
+            "Aim for the sweet spot: broad enough that the discovery APIs return results, specific enough that "
+            "those results stay on-topic (adjacent items — a face-wash or moisturizer ad for 'cleanser' — are fine "
+            "as references). Cover DISTINCT angles — the product, its category, and its core problem or benefit — "
+            "not synonyms of one word. Prefer specific product, category, or problem nouns over vague ones. "
             "Return strict JSON only. Do not include markdown."
         ),
         "messages": [

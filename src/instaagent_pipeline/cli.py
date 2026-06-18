@@ -11,10 +11,12 @@ from .apify_transcripts import (
     backfill_ugc_transcripts_from_provider_subtitles,
     backfill_ugc_transcripts_with_apify,
 )
+from .apify_ugc import backfill_instagram_followers, ingest_instagram, ingest_tiktok
 from .config import Config
 from .ad_enrichment import enrich_paid_ads
+from .ugc_enrichment import enrich_ugc_items
 from .clustering import cluster_items
-from .embeddings import embed_items
+from .embeddings import ALL_SPACES, embed_items
 from .keywords import (
     active_keyword_allocations,
     allocate_manual_keywords,
@@ -67,6 +69,47 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             supabase=supabase,
             args=args,
+        )
+    elif args.command in ("ingest-tiktok", "ingest-instagram"):
+        ingest_func = ingest_tiktok if args.command == "ingest-tiktok" else ingest_instagram
+        if args.keyword:
+            result = ingest_func(
+                config=config,
+                supabase=supabase,
+                run_id=args.run_id,
+                keyword=args.keyword,
+                target_count=args.target_count,
+                page_size=getattr(args, "page_size", 0),
+                dry_run=args.dry_run,
+                input_json=args.input_json,
+                extra_params=parse_extra_params(args.extra_param),
+            )
+        else:
+            result = ingest_allocated_keywords(
+                config=config,
+                supabase=supabase,
+                args=args,
+                target_field="target_ugc_count",
+                ingest_func=ingest_func,
+            )
+    elif args.command == "enrich-ugc":
+        result = enrich_ugc_items(
+            config=config,
+            supabase=supabase,
+            run_id=args.run_id,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            input_json=args.input_json,
+            timeout=args.timeout,
+        )
+    elif args.command == "backfill-ig-followers":
+        result = backfill_instagram_followers(
+            config=config,
+            supabase=supabase,
+            run_id=args.run_id,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            input_json=args.input_json,
         )
     elif args.command == "ingest-topyappers-viral":
         if args.keyword:
@@ -160,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
             supabase=supabase,
             run_id=args.run_id,
             source=args.source,
+            spaces=ALL_SPACES if args.space == "all" else (args.space,),
             limit=args.limit,
             dry_run=args.dry_run,
             model=args.model,
@@ -212,6 +256,33 @@ def build_parser() -> argparse.ArgumentParser:
     apify_ads.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
     apify_ads.add_argument("--target-count", type=int, default=1000)
 
+    tiktok = subparsers.add_parser(
+        "ingest-tiktok",
+        help="Ingest UGC from the Apify clockworks/tiktok-scraper by keyword into ugc_items.",
+    )
+    add_ingest_common_args(tiktok)
+    tiktok.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
+    tiktok.add_argument("--target-count", type=int, default=2500)
+    tiktok.add_argument("--page-size", type=int, default=0)
+
+    instagram = subparsers.add_parser(
+        "ingest-instagram",
+        help="Ingest UGC reels from the Apify data-slayer/instagram-search-reels by keyword into ugc_items.",
+    )
+    add_ingest_common_args(instagram)
+    instagram.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
+    instagram.add_argument("--target-count", type=int, default=2500)
+    instagram.add_argument("--page-size", type=int, default=0)
+
+    ig_followers = subparsers.add_parser(
+        "backfill-ig-followers",
+        help="Fill Instagram follower counts (omitted by discovery) via apify/instagram-profile-scraper.",
+    )
+    ig_followers.add_argument("--run-id", required=True)
+    ig_followers.add_argument("--limit", type=int, default=500)
+    ig_followers.add_argument("--dry-run", action="store_true")
+    ig_followers.add_argument("--input-json", type=Path, help="Use a saved profile-scraper response instead of calling Apify.")
+
     viral = subparsers.add_parser(
         "ingest-topyappers-viral",
         help="Ingest URL-backed TopYappers viral-content candidates.",
@@ -261,12 +332,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use a saved OpenRouter chat-completions response instead of calling OpenRouter. Intended for one-row tests.",
     )
 
+    enrich_ugc = subparsers.add_parser(
+        "enrich-ugc",
+        help="Transcribe and analyze UGC videos via OpenRouter into ugc_transcripts and ugc_items columns.",
+    )
+    enrich_ugc.add_argument("--run-id", required=True)
+    enrich_ugc.add_argument("--limit", type=int, default=100)
+    enrich_ugc.add_argument("--timeout", type=int, default=300)
+    enrich_ugc.add_argument("--dry-run", action="store_true")
+    enrich_ugc.add_argument(
+        "--input-json",
+        type=Path,
+        help="Use a saved OpenRouter chat-completions response instead of calling OpenRouter. Intended for one-row tests.",
+    )
+
     embed = subparsers.add_parser(
         "embed-items",
         help="Generate icp/format/hook embeddings for analyzed items via Voyage AI into item_embeddings.",
     )
     embed.add_argument("--run-id", required=True)
     embed.add_argument("--source", choices=["paid", "ugc", "all"], default="all")
+    embed.add_argument(
+        "--space",
+        choices=[*ALL_SPACES, "all"],
+        default="all",
+        help="Embedding space(s) to build. 'all' builds icp/format/hook/search; use 'search' to backfill only the search vectors.",
+    )
     embed.add_argument("--limit", type=int, default=1000, help="Maximum items to fetch per source.")
     embed.add_argument("--model", help="Voyage embedding model. Defaults to EMBEDDING_MODEL or voyage-4-lite.")
     embed.add_argument("--timeout", type=int, default=120)

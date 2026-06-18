@@ -84,6 +84,7 @@ def test_collect_candidates_skips_existing_and_empty_spaces() -> None:
         rows,
         item_type="paid_ad",
         id_column="paid_ad_row_id",
+        spaces=("icp", "format", "hook"),
         existing={("paid_ad", "ad-1", "icp")},
         result=result,
         out=out,

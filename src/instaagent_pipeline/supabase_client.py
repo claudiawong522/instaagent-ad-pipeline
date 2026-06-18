@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
+from urllib.request import Request, urlopen
 
-from .http_client import request_json
+from .http_client import HttpClientError, request_json, ssl_context
 
 
 class SupabaseClient:
@@ -70,6 +72,55 @@ class SupabaseClient:
         if isinstance(response.body, dict):
             return response.body
         return {}
+
+    def upload_object(
+        self,
+        bucket: str,
+        path: str,
+        data: bytes,
+        content_type: str,
+        *,
+        timeout: int = 120,
+    ) -> str:
+        """Upload raw bytes to Supabase Storage (upsert) and return the public URL."""
+        url = f"{self.url}/storage/v1/object/{bucket}/{path}"
+        request = Request(
+            url,
+            data=data,
+            method="POST",
+            headers={
+                "apikey": self.key,
+                "Authorization": f"Bearer {self.key}",
+                "Content-Type": content_type,
+                "x-upsert": "true",
+            },
+        )
+        try:
+            with urlopen(request, timeout=timeout, context=ssl_context()) as response:
+                response.read()
+        except HTTPError as exc:
+            raise HttpClientError(
+                f"Storage upload failed (HTTP {exc.code}) for {bucket}/{path}", status=exc.code
+            ) from exc
+        except URLError as exc:
+            raise HttpClientError(
+                f"Storage upload network error for {bucket}/{path}: {getattr(exc, 'reason', exc)}"
+            ) from exc
+        return f"{self.url}/storage/v1/object/public/{bucket}/{path}"
+
+    def rpc(self, fn: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        # Calls a Postgres function exposed through PostgREST, e.g. pgvector KNN.
+        response = request_json(
+            "POST",
+            f"{self.url}/rest/v1/rpc/{fn}",
+            headers=self._headers,
+            body=params,
+        )
+        if isinstance(response.body, list):
+            return [row for row in response.body if isinstance(row, dict)]
+        if isinstance(response.body, dict):
+            return [response.body]
+        return []
 
     def select(self, table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         response = request_json(
