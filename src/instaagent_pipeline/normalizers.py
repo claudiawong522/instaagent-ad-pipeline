@@ -48,101 +48,6 @@ APIFY_AD_FIRST_CLASS_KEYS = {
 }
 
 
-TOPYAPPERS_FIRST_CLASS_KEYS = {
-    "id",
-    "iv_id",
-    "account_type",
-    "age",
-    "avatar",
-    "bio",
-    "brand_mentioned",
-    "categories",
-    "color_palette",
-    "comments",
-    "comment_count",
-    "commentCount",
-    "comments_to_views_ratio",
-    "content_category",
-    "category",
-    "content_format",
-    "content_tone",
-    "country",
-    "cover",
-    "thumbnailUrl",
-    "thumbnail_url",
-    "coverUrl",
-    "cover_url",
-    "creator_avg_views",
-    "creator_engagement_rate",
-    "creator_language",
-    "creatorUsername",
-    "cta_type",
-    "date_added",
-    "date_created",
-    "createdAt",
-    "created_at",
-    "date_created_timestamp",
-    "description",
-    "caption",
-    "face_count",
-    "follower_tier",
-    "followers",
-    "followerCount",
-    "gender",
-    "hair_color",
-    "handle",
-    "has_face",
-    "has_product",
-    "has_text_overlay",
-    "hashtags",
-    "hook",
-    "is_ai_generated",
-    "is_branded",
-    "is_promotional",
-    "is_trending_format",
-    "likes",
-    "like_count",
-    "likeCount",
-    "likes_to_views_ratio",
-    "main_category",
-    "music",
-    "musicTitle",
-    "music_title",
-    "nickname",
-    "primary_emotion",
-    "product_category",
-    "production_quality",
-    "race",
-    "setting",
-    "shares",
-    "share_count",
-    "shareCount",
-    "shares_to_views_ratio",
-    "source",
-    "subtitles",
-    "target_demographic",
-    "user_followers",
-    "user_handle",
-    "user_id",
-    "video_id",
-    "videoId",
-    "video_url",
-    "videoUrl",
-    "webVideoUrl",
-    "url",
-    "video_ranges",
-    "video_topic",
-    "views",
-    "play_count",
-    "playCount",
-    "views_to_avg_ratio",
-    "viralityScore",
-    "virality_score",
-    "virality_tier",
-    "visual_style",
-}
-
-
 def result_items(response: Any) -> list[dict[str, Any]]:
     if isinstance(response, list):
         return [item for item in response if isinstance(item, dict)]
@@ -218,8 +123,6 @@ def normalize_apify_ad(item: dict[str, Any], run_id: str, raw_payload_id: str | 
         "image": apify_image_url(snapshot, cards),
         "video": apify_video_url(snapshot, cards),
         "avatar": snapshot.get("pageProfilePictureUrl"),
-        "niches": None,
-        "persona": None,
         "brand_id": stringify_if_needed(first_present(item, "pageID", "pageId") or snapshot.get("pageId")),
         "cta_type": first_present(snapshot, "ctaType") or first_card_value(cards, "ctaType"),
         "headline": apify_text_value(snapshot.get("title")) or first_card_value(cards, "title"),
@@ -229,108 +132,12 @@ def normalize_apify_ad(item: dict[str, Any], run_id: str, raw_payload_id: str | 
         "thumbnail": apify_thumbnail_url(snapshot, cards),
         "categories": item.get("categories") or snapshot.get("pageCategories"),
         "description": apify_text_value(snapshot.get("body")) or first_card_value(cards, "body"),
-        "market_target": None,
-        "content_filter": None,
         "display_format": stringify_if_needed(snapshot.get("displayFormat")),
         "video_duration": as_number(first_present(item, "videoDuration", "video_duration")),
         "started_running": epoch_millis(start_datetime),
-        "product_category": None,
         "running_duration": apify_running_duration_days(start_datetime, end_datetime, live),
-        "emotional_drivers": None,
-        "creative_targeting": None,
-        "full_transcription": None,
         "publisher_platform": first_present(item, "publisherPlatform", "publisher_platform"),
-        "timestamped_transcription": None,
-        "time_product_was_mentioned": None,
         "source_metrics": source_metrics_from_unmapped(item, APIFY_AD_FIRST_CLASS_KEYS),
-    }
-
-
-def normalize_topyappers_item(
-    item: dict[str, Any],
-    run_id: str,
-    raw_payload_id: str | None,
-    *,
-    endpoint_kind: str,
-) -> dict[str, Any]:
-    external_id = str(first_present(item, "id", "iv_id", "video_id", "videoId"))
-    date_created_timestamp = as_number(item.get("date_created_timestamp"))
-
-    return {
-        "run_id": run_id,
-        "raw_payload_id": raw_payload_id,
-        "external_id": external_id,
-        "topyappers_id": item.get("id"),
-        "iv_id": item.get("iv_id"),
-        "account_type": item.get("account_type"),
-        "age": as_int(item.get("age")),
-        "avatar": item.get("avatar"),
-        "bio": item.get("bio"),
-        "brand_mentioned": item.get("brand_mentioned"),
-        "categories": item.get("categories"),
-        "color_palette": item.get("color_palette"),
-        "comments": as_int(first_present(item, "comments", "comment_count", "commentCount")),
-        "comments_to_views_ratio": as_number(item.get("comments_to_views_ratio")),
-        "content_category": first_present(item, "content_category", "category"),
-        "content_format": item.get("content_format"),
-        "content_tone": item.get("content_tone"),
-        "country": item.get("country"),
-        "cover": first_present(item, "cover", "thumbnailUrl", "thumbnail_url", "coverUrl", "cover_url"),
-        "creator_avg_views": as_number(item.get("creator_avg_views")),
-        "creator_engagement_rate": as_number(item.get("creator_engagement_rate")),
-        "creator_language": item.get("creator_language"),
-        "cta_type": item.get("cta_type"),
-        "date_added": as_timestamp(item.get("date_added")),
-        "date_created": as_timestamp(first_present(item, "date_created", "createdAt", "created_at")),
-        "date_created_timestamp": date_created_timestamp,
-        "description": first_present(item, "description", "caption"),
-        "face_count": as_int(item.get("face_count")),
-        "follower_tier": item.get("follower_tier"),
-        "followers": as_int(first_present(item, "followers", "followerCount")),
-        "gender": item.get("gender"),
-        "hair_color": item.get("hair_color"),
-        "handle": first_present(item, "handle", "creatorUsername"),
-        "has_face": as_bool(item.get("has_face")),
-        "has_product": as_bool(item.get("has_product")),
-        "has_text_overlay": as_bool(item.get("has_text_overlay")),
-        "hashtags": item.get("hashtags"),
-        "hook": item.get("hook"),
-        "is_ai_generated": as_bool(item.get("is_ai_generated")),
-        "is_branded": as_bool(item.get("is_branded")),
-        "is_promotional": as_bool(item.get("is_promotional")),
-        "is_trending_format": as_bool(item.get("is_trending_format")),
-        "likes": as_int(first_present(item, "likes", "like_count", "likeCount")),
-        "likes_to_views_ratio": as_number(item.get("likes_to_views_ratio")),
-        "main_category": first_present(item, "main_category", "category"),
-        "music": music_value(item),
-        "nickname": item.get("nickname"),
-        "primary_emotion": item.get("primary_emotion"),
-        "product_category": item.get("product_category"),
-        "production_quality": item.get("production_quality"),
-        "race": item.get("race"),
-        "setting": item.get("setting"),
-        "shares": as_int(first_present(item, "shares", "share_count", "shareCount")),
-        "shares_to_views_ratio": as_number(item.get("shares_to_views_ratio")),
-        "source": item.get("source"),
-        "subtitles": item.get("subtitles"),
-        "target_demographic": item.get("target_demographic"),
-        "user_followers": as_int(item.get("user_followers")),
-        "user_handle": first_present(item, "user_handle", "handle", "creatorUsername"),
-        "user_id": item.get("user_id"),
-        "video_id": first_present(item, "video_id", "videoId"),
-        "video_url": first_present(item, "video_url", "videoUrl", "webVideoUrl", "url") or derived_video_url(item),
-        "video_ranges": item.get("video_ranges"),
-        "video_topic": item.get("video_topic"),
-        "views": as_int(first_present(item, "views", "play_count", "playCount")),
-        "views_to_avg_ratio": as_number(item.get("views_to_avg_ratio")),
-        "virality_score": as_number(first_present(item, "viralityScore", "virality_score")),
-        "virality_tier": item.get("virality_tier"),
-        "visual_style": item.get("visual_style"),
-        "source_metrics": source_metrics_from_unmapped(
-            item,
-            TOPYAPPERS_FIRST_CLASS_KEYS,
-            extra={"endpoint_kind": endpoint_kind},
-        ),
     }
 
 
@@ -470,41 +277,6 @@ def apify_thumbnail_url(snapshot: dict[str, Any], cards: Any) -> str | None:
         or first_card_value(cards, "videoPreviewImageUrl", "resizedImageUrl", "originalImageUrl")
         or apify_image_url(snapshot, cards)
     )
-
-
-def music_value(item: dict[str, Any]) -> Any:
-    music = item.get("music")
-    if music not in (None, ""):
-        return music
-    title = first_present(item, "musicTitle", "music_title")
-    if title is None:
-        return None
-    return {"title": title}
-
-
-def derived_video_url(item: dict[str, Any]) -> str | None:
-    source = stringify_if_needed(item.get("source"))
-    video_id = stringify_if_needed(first_present(item, "video_id", "videoId"))
-    if not source or not video_id:
-        return None
-
-    source = source.lower()
-    if source == "youtube":
-        return f"https://www.youtube.com/watch?v={video_id}"
-
-    if source == "instagram":
-        normalized_id = video_id.strip("/")
-        if normalized_id.startswith(("p/", "reel/", "tv/")):
-            return f"https://www.instagram.com/{normalized_id}/"
-        return f"https://www.instagram.com/reel/{normalized_id}/"
-
-    if source == "tiktok":
-        handle = stringify_if_needed(first_present(item, "user_handle", "handle", "creatorUsername"))
-        if not handle:
-            return None
-        return f"https://www.tiktok.com/@{handle.lstrip('@')}/video/{video_id}"
-
-    return None
 
 
 def as_int(value: Any) -> int | None:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from instaagent_pipeline.ingestion import complete_query, log_api_usage
 from instaagent_pipeline.keywords import KeywordAllocation, KeywordGenerationResult, claude_provider, log_claude_keyword_usage
-from instaagent_pipeline.normalizers import normalize_apify_ad, normalize_topyappers_item, result_items
+from instaagent_pipeline.normalizers import normalize_apify_ad, result_items
 
 
 def test_normalize_apify_ad_maps_actual_response_fields() -> None:
@@ -26,8 +26,6 @@ def test_normalize_apify_ad_maps_actual_response_fields() -> None:
         "image",
         "video",
         "avatar",
-        "niches",
-        "persona",
         "brand_id",
         "cta_type",
         "headline",
@@ -37,21 +35,27 @@ def test_normalize_apify_ad_maps_actual_response_fields() -> None:
         "thumbnail",
         "categories",
         "description",
-        "market_target",
-        "content_filter",
         "display_format",
         "video_duration",
         "started_running",
-        "product_category",
         "running_duration",
+        "publisher_platform",
+        "source_metrics",
+    }
+    # Keys dropped in the Foreplay→Apify refactor must no longer be emitted.
+    for removed_key in (
+        "niches",
+        "persona",
+        "market_target",
+        "content_filter",
         "emotional_drivers",
         "creative_targeting",
         "full_transcription",
-        "publisher_platform",
         "timestamped_transcription",
         "time_product_was_mentioned",
-        "source_metrics",
-    }
+        "product_category",
+    ):
+        assert removed_key not in normalized
     assert normalized["id"] == "1204694134935316"
     assert normalized["ad_id"] == "1204694134935316"
     assert normalized["name"] == "QE Skincare"
@@ -66,76 +70,8 @@ def test_normalize_apify_ad_maps_actual_response_fields() -> None:
     assert normalized["publisher_platform"] == ["FACEBOOK", "INSTAGRAM"]
     assert normalized["started_running"] == 1767600000000
     assert normalized["running_duration"] == 21.0
-    assert normalized["full_transcription"] is None
     assert normalized["source_metrics"]["inputUrl"].startswith("https://www.facebook.com/ads/library/")
     assert normalized["source_metrics"]["snapshot"]["pageName"] == "QE Skincare"
-
-
-def test_normalize_topyappers_video_leaves_video_url_empty_when_endpoint_omits_it() -> None:
-    body = json.loads(Path("tests/fixtures/topyappers_videos.json").read_text())
-    item = result_items(body)[0]
-
-    normalized = normalize_topyappers_item(item, "run_1", "raw_1", endpoint_kind="videos")
-
-    assert normalized["external_id"] == "video_test_1"
-    assert normalized["iv_id"] == "video_test_1"
-    assert normalized["video_id"] == "7280000000"
-    assert normalized["video_url"] is None
-    assert normalized["views"] == 250000
-    assert normalized["subtitles"] == "Gentle cleanser review with sensitive skin."
-    assert normalized["source_metrics"] == {"endpoint_kind": "videos"}
-
-
-def test_normalize_topyappers_viral_maps_url_backed_fields() -> None:
-    body = json.loads(Path("tests/fixtures/topyappers_viral.json").read_text())
-    item = result_items(body)[0]
-
-    normalized = normalize_topyappers_item(item, "run_1", "raw_1", endpoint_kind="viral-content")
-
-    assert normalized["external_id"] == "ugc_test_1"
-    assert normalized["video_url"] == "https://example.com/reel.mp4"
-    assert normalized["cover"] == "https://example.com/reel-thumb.jpg"
-    assert normalized["description"] == "Trying a gentle cleanser for my skin barrier."
-    assert normalized["handle"] == "skincarecreator"
-    assert normalized["user_handle"] == "skincarecreator"
-    assert normalized["date_created"] == "2026-06-01T00:00:00Z"
-    assert normalized["content_category"] == "beauty"
-    assert normalized["main_category"] == "beauty"
-    assert normalized["music"] == {"title": "Original audio"}
-    assert normalized["source"] is None
-    assert normalized["source_metrics"]["endpoint_kind"] == "viral-content"
-    assert "creatorUsername" not in normalized["source_metrics"]
-    assert "caption" not in normalized["source_metrics"]
-    assert "musicTitle" not in normalized["source_metrics"]
-
-
-def test_normalize_topyappers_viral_derives_video_url_when_provider_omits_url() -> None:
-    item = {
-        "id": "ugc_live_shape_1",
-        "source": "tiktok",
-        "handle": "skincarecreator",
-        "video_id": "7621528611052408086",
-        "views": 419300,
-    }
-
-    normalized = normalize_topyappers_item(item, "run_1", "raw_1", endpoint_kind="viral-content")
-
-    assert normalized["video_url"] == "https://www.tiktok.com/@skincarecreator/video/7621528611052408086"
-    assert normalized["user_handle"] == "skincarecreator"
-
-
-def test_normalize_topyappers_viral_derives_instagram_url() -> None:
-    item = {
-        "id": "ugc_live_shape_2",
-        "source": "instagram",
-        "handle": "skincarecreator",
-        "video_id": "p/DY1ZLysRaPk",
-        "views": 958533,
-    }
-
-    normalized = normalize_topyappers_item(item, "run_1", "raw_1", endpoint_kind="viral-content")
-
-    assert normalized["video_url"] == "https://www.instagram.com/p/DY1ZLysRaPk/"
 
 
 class RecordingSupabase:
