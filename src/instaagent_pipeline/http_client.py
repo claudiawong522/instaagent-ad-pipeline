@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import ssl
+import time
 from dataclasses import dataclass
 from http.client import RemoteDisconnected
 from typing import Any
@@ -30,6 +31,10 @@ class HttpClientError(RuntimeError):
         self.body = body
 
 
+# HTTP statuses worth retrying: rate limit (429) and transient server errors.
+RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
 def request_json(
     method: str,
     url: str,
@@ -38,6 +43,9 @@ def request_json(
     params: dict[str, Any] | None = None,
     body: Any = None,
     timeout: int = 60,
+    retries: int = 0,
+    retry_backoff: float = 2.0,
+    max_retry_sleep: float = 60.0,
 ) -> JsonResponse:
     if params:
         query = urlencode({k: v for k, v in params.items() if v is not None}, doseq=True)
@@ -55,25 +63,46 @@ def request_json(
         request_headers.setdefault("Content-Type", "application/json")
 
     request = Request(url, data=encoded_body, method=method.upper(), headers=request_headers)
-    try:
-        with urlopen(request, timeout=timeout, context=ssl_context()) as response:
-            raw = response.read().decode("utf-8")
-            parsed = json.loads(raw) if raw else None
-            return JsonResponse(
-                status=response.status,
-                headers=dict(response.headers.items()),
-                body=parsed,
-            )
-    except HTTPError as exc:
-        raw = exc.read().decode("utf-8")
+    attempt = 0
+    while True:
         try:
-            parsed = json.loads(raw) if raw else None
-        except json.JSONDecodeError:
-            parsed = raw
-        raise HttpClientError(f"HTTP {exc.code} for {redact_url(url)}", status=exc.code, body=parsed) from exc
-    except (URLError, RemoteDisconnected) as exc:
-        reason = getattr(exc, "reason", exc)
-        raise HttpClientError(f"Network error for {redact_url(url)}: {reason}") from exc
+            with urlopen(request, timeout=timeout, context=ssl_context()) as response:
+                raw = response.read().decode("utf-8")
+                parsed = json.loads(raw) if raw else None
+                return JsonResponse(
+                    status=response.status,
+                    headers=dict(response.headers.items()),
+                    body=parsed,
+                )
+        except HTTPError as exc:
+            raw = exc.read().decode("utf-8")
+            try:
+                parsed = json.loads(raw) if raw else None
+            except json.JSONDecodeError:
+                parsed = raw
+            if exc.code in RETRYABLE_STATUSES and attempt < retries:
+                time.sleep(_retry_delay(exc, attempt, retry_backoff, max_retry_sleep))
+                attempt += 1
+                continue
+            raise HttpClientError(f"HTTP {exc.code} for {redact_url(url)}", status=exc.code, body=parsed) from exc
+        except (URLError, RemoteDisconnected) as exc:
+            if attempt < retries:
+                time.sleep(min(retry_backoff ** attempt, max_retry_sleep))
+                attempt += 1
+                continue
+            reason = getattr(exc, "reason", exc)
+            raise HttpClientError(f"Network error for {redact_url(url)}: {reason}") from exc
+
+
+def _retry_delay(exc: HTTPError, attempt: int, backoff: float, ceiling: float) -> float:
+    """Prefer the server's Retry-After hint (seconds), else exponential backoff."""
+    retry_after = exc.headers.get("Retry-After") if exc.headers else None
+    if retry_after:
+        try:
+            return min(float(retry_after), ceiling)
+        except ValueError:
+            pass
+    return min(backoff ** attempt, ceiling)
 
 
 def redact_url(url: str) -> str:

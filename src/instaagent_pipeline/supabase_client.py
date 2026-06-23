@@ -1,17 +1,45 @@
 from __future__ import annotations
 
+import os
+import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from .http_client import HttpClientError, request_json, ssl_context
+import requests
+from requests.adapters import HTTPAdapter
+
+from .http_client import HttpClientError, JsonResponse, redact_url, request_json, ssl_context
 
 
 class SupabaseClient:
     def __init__(self, url: str, key: str) -> None:
         self.url = normalize_supabase_url(url)
         self.key = key
+        self._verify = os.getenv("INSTAAGENT_INSECURE_SSL") != "1"
+        # A pooled keep-alive session for the read path (select/rpc). PostgREST is
+        # remote, so a fresh TLS handshake per call dominates latency; reusing
+        # connections cuts ~0.5s off every read. pool_maxsize covers the enrichment
+        # thread pool; requests.Session is thread-safe for concurrent requests.
+        self._session = self._build_session()
+
+    def _build_session(self) -> requests.Session:
+        session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=16, pool_maxsize=32, max_retries=0)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        return session
+
+    def _reset_session(self) -> None:
+        """Drop all pooled connections and start fresh. Used to escape a PostgREST
+        replica whose schema cache is stale (it 404s a freshly-added RPC); a new
+        connection may land on a healthy replica."""
+        try:
+            self._session.close()
+        except Exception:
+            pass
+        self._session = self._build_session()
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -21,6 +49,41 @@ class SupabaseClient:
             "Content-Type": "application/json",
             "Prefer": "return=representation",
         }
+
+    def _session_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: Any = None,
+        timeout: int = 60,
+    ) -> JsonResponse:
+        """Perform a read over the pooled session, mirroring request_json's contract
+        (returns JsonResponse, raises HttpClientError) so callers are unchanged."""
+        clean_params = {k: v for k, v in (params or {}).items() if v is not None}
+        try:
+            resp = self._session.request(
+                method.upper(),
+                url,
+                headers=self._headers,
+                params=clean_params or None,
+                json=json_body,
+                timeout=timeout,
+                verify=self._verify,
+            )
+        except requests.RequestException as exc:
+            raise HttpClientError(f"Network error for {redact_url(url)}: {exc}") from exc
+        if resp.status_code >= 400:
+            try:
+                body = resp.json()
+            except ValueError:
+                body = resp.text
+            raise HttpClientError(
+                f"HTTP {resp.status_code} for {redact_url(resp.url)}", status=resp.status_code, body=body
+            )
+        body = resp.json() if resp.content else None
+        return JsonResponse(status=resp.status_code, headers=dict(resp.headers), body=body)
 
     def insert(self, table: str, payload: dict[str, Any]) -> dict[str, Any]:
         response = request_json(
@@ -108,14 +171,28 @@ class SupabaseClient:
             ) from exc
         return f"{self.url}/storage/v1/object/public/{bucket}/{path}"
 
+    # PostgREST runs behind a load balancer; a replica with a stale schema cache 404s
+    # a recently-added function. Retry on a fresh connection (new replica) before giving up.
+    RPC_SCHEMA_RETRY_STATUSES = frozenset({404, 502, 503, 504})
+    RPC_MAX_ATTEMPTS = 6
+
     def rpc(self, fn: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         # Calls a Postgres function exposed through PostgREST, e.g. pgvector KNN.
-        response = request_json(
-            "POST",
-            f"{self.url}/rest/v1/rpc/{fn}",
-            headers=self._headers,
-            body=params,
-        )
+        url = f"{self.url}/rest/v1/rpc/{fn}"
+        last_error: HttpClientError | None = None
+        for attempt in range(self.RPC_MAX_ATTEMPTS):
+            try:
+                response = self._session_request("POST", url, json_body=params)
+                break
+            except HttpClientError as exc:
+                if exc.status in self.RPC_SCHEMA_RETRY_STATUSES and attempt < self.RPC_MAX_ATTEMPTS - 1:
+                    last_error = exc
+                    self._reset_session()
+                    time.sleep(0.25 * (attempt + 1))
+                    continue
+                raise
+        else:  # pragma: no cover - loop always breaks or raises
+            raise last_error  # type: ignore[misc]
         if isinstance(response.body, list):
             return [row for row in response.body if isinstance(row, dict)]
         if isinstance(response.body, dict):
@@ -123,10 +200,9 @@ class SupabaseClient:
         return []
 
     def select(self, table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-        response = request_json(
+        response = self._session_request(
             "GET",
             f"{self.url}/rest/v1/{table}",
-            headers=self._headers,
             params=params,
         )
         if isinstance(response.body, list):

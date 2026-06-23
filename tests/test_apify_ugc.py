@@ -85,8 +85,6 @@ def test_ingest_tiktok_drops_no_video(tmp_path) -> None:
     cfg = Config(
         supabase_url=None,
         supabase_key=None,
-        topyappers_api_key=None,
-        topyappers_base_url="https://x",
         apify_api_key=None,
         claude_api_key=None,
         claude_model="claude-haiku-4-5",

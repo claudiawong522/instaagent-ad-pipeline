@@ -25,8 +25,6 @@ def make_config(**overrides: Any) -> Config:
     defaults: dict[str, Any] = {
         "supabase_url": None,
         "supabase_key": None,
-        "topyappers_api_key": None,
-        "topyappers_base_url": "https://api.topyappers.com",
         "apify_api_key": None,
         "claude_api_key": None,
         "claude_model": "claude-haiku-4-5",
@@ -60,6 +58,31 @@ def test_openrouter_request_body_sends_base64_data_url_and_schema() -> None:
     assert response_format["type"] == "json_schema"
     assert response_format["json_schema"]["strict"] is True
     assert response_format["json_schema"]["schema"] is ENRICHMENT_SCHEMA
+
+
+def test_openrouter_request_body_prefers_remote_video_url() -> None:
+    # A remote URL is passed through verbatim so the provider fetches the video
+    # server-side, instead of inlining a base64 data URL.
+    body = openrouter_request_body(
+        model="google/gemini-3-flash",
+        ad_copy={"headline": "Gentle cleanser"},
+        video_url="https://storage.example/run/paid/abc.mp4",
+        video_bytes=b"abc",
+    )
+    parts = body["messages"][0]["content"]
+    assert parts[0] == {
+        "type": "video_url",
+        "video_url": {"url": "https://storage.example/run/paid/abc.mp4"},
+    }
+
+
+def test_openrouter_request_body_requires_a_video_source() -> None:
+    try:
+        openrouter_request_body(model="m", ad_copy={})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError when neither video_url nor video_bytes given")
 
 
 def test_parse_enrichment_response_rejects_invalid_json() -> None:
@@ -106,7 +129,30 @@ def test_paid_ad_enrichment_candidates_skips_bad_urls() -> None:
     assert candidates[0].ad_copy == {"headline": "Gentle cleanser"}
 
 
-def test_enrich_paid_ad_writes_transcript_then_updates_paid_ads() -> None:
+def test_paid_ad_enrichment_candidates_skips_already_enriched() -> None:
+    # Already-enriched rows are now detected via item_enrichments (item_type/item_id/run_id),
+    # not a paid_ads.analyzed_at filter.
+    supabase = FakeSupabase(
+        select_rows={
+            "paid_ads": [
+                {"paid_ad_row_id": "row_1", "id": "ad_1", "video": FBCDN_URL},
+                {"paid_ad_row_id": "row_2", "id": "ad_2", "video": FBCDN_URL},
+            ],
+            "item_enrichments": [{"item_id": "row_1"}],
+        }
+    )
+
+    candidates, skipped_unsupported = paid_ad_enrichment_candidates(
+        supabase,  # type: ignore[arg-type]
+        run_id="run_1",
+        limit=10,
+    )
+
+    assert skipped_unsupported == 0
+    assert [candidate.paid_ad_row_id for candidate in candidates] == ["row_2"]
+
+
+def test_enrich_paid_ad_writes_single_item_enrichment_upsert() -> None:
     supabase = FakeSupabase()
 
     written = enrich_paid_ad(
@@ -126,12 +172,20 @@ def test_enrich_paid_ad_writes_transcript_then_updates_paid_ads() -> None:
     assert written is True
     assert [insert[0] for insert in supabase.inserts] == ["source_queries", "raw_payloads"]
 
+    # Analysis + transcript now land in a single polymorphic item_enrichments upsert.
     assert len(supabase.upserts) == 1
     table, payload, conflict = supabase.upserts[0]
-    assert table == "paid_ad_transcripts"
-    assert conflict == "paid_ad_row_id,transcript_source"
-    assert payload["paid_ad_row_id"] == "row_1"
-    assert payload["transcript_source"] == "openrouter:google/gemini-3-flash"
+    assert table == "item_enrichments"
+    assert conflict == "item_type,item_id"
+
+    # Polymorphic identity + bookkeeping.
+    assert payload["item_type"] == "paid_ad"
+    assert payload["item_id"] == "row_1"
+    assert payload["run_id"] == "run_1"
+    assert payload["analysis_model"] == "google/gemini-3-flash"
+    assert payload["analyzed_at"]
+
+    # Transcript now lives on the enrichment row, not a separate table.
     assert payload["transcript_text"].startswith("I switched to this gentle cleanser")
     assert payload["transcript_segments"][0] == {
         "start": 0.0,
@@ -139,50 +193,17 @@ def test_enrich_paid_ad_writes_transcript_then_updates_paid_ads() -> None:
         "text": "I switched to this gentle cleanser",
     }
 
-    assert len(supabase.column_updates) == 1
-    table, column, value, update = supabase.column_updates[0]
-    assert (table, column, value) == ("paid_ads", "paid_ad_row_id", "row_1")
-    assert update["hook"] == "I switched to this gentle cleanser"
-    assert update["persona"] == "sensitive-skin skincare beginner"
-    assert update["target_demographic"] == "women 25-34 with sensitive skin"
-    assert "has_face" not in update  # dropped from the trimmed schema
-    assert "race" not in update  # dropped from the trimmed schema
-    assert update["emotional_drivers"] == ["relief", "social proof"]
-    assert update["analysis_model"] == "google/gemini-3-flash"
-    assert update["analyzed_at"]
-    assert "transcript_text" not in update
-    assert "transcript_segments" not in update
+    # Analysis fields from the trimmed schema.
+    assert payload["hook"] == "I switched to this gentle cleanser"
+    assert payload["persona"] == "sensitive-skin skincare beginner"
+    assert payload["target_demographic"] == "women 25-34 with sensitive skin"
+    assert payload["emotional_drivers"] == ["relief", "social proof"]
+    assert "has_face" not in payload  # dropped from the trimmed schema
+    assert "race" not in payload  # dropped from the trimmed schema
 
-
-def test_enrich_paid_ad_falls_back_to_insert_when_unique_index_is_missing() -> None:
-    supabase = FakeSupabase(
-        upsert_error=HttpClientError(
-            "HTTP 400",
-            status=400,
-            body={"message": "there is no unique or exclusion constraint matching the ON CONFLICT specification"},
-        )
-    )
-
-    written = enrich_paid_ad(
-        config=make_config(),
-        supabase=supabase,  # type: ignore[arg-type]
-        run_id="run_1",
-        candidate=PaidAdEnrichmentCandidate(
-            paid_ad_row_id="row_1",
-            ad_archive_id="ad_1",
-            video_url=FBCDN_URL,
-        ),
-        input_json=FIXTURE,
-        timeout=300,
-    )
-
-    assert written is True
-    assert [insert[0] for insert in supabase.inserts] == [
-        "source_queries",
-        "raw_payloads",
-        "paid_ad_transcripts",
-    ]
-    assert len(supabase.column_updates) == 1
+    # Nothing is written to the old per-item tables/columns anymore.
+    assert supabase.column_updates == []
+    assert all(insert[0] != "paid_ad_transcripts" for insert in supabase.inserts)
 
 
 def test_enrich_paid_ads_dry_run_lists_candidates_without_writing() -> None:
@@ -224,7 +245,7 @@ def test_enrich_paid_ads_continues_after_single_failure() -> None:
                 {"paid_ad_row_id": "row_2", "id": "ad_2", "video": FBCDN_URL},
             ]
         },
-        fail_update_for={"row_1"},
+        fail_upsert_for={"row_1"},
     )
 
     result = enrich_paid_ads(
@@ -249,10 +270,12 @@ class FakeSupabase:
         select_rows: dict[str, list[dict[str, Any]]] | None = None,
         upsert_error: HttpClientError | None = None,
         fail_update_for: set[str] | None = None,
+        fail_upsert_for: set[str] | None = None,
     ) -> None:
         self.select_rows = select_rows or {}
         self.upsert_error = upsert_error
         self.fail_update_for = fail_update_for or set()
+        self.fail_upsert_for = fail_upsert_for or set()
         self.inserts: list[tuple[str, dict[str, Any]]] = []
         self.upserts: list[tuple[str, dict[str, Any], str]] = []
         self.updates: list[tuple[str, str, dict[str, Any]]] = []
@@ -278,5 +301,7 @@ class FakeSupabase:
     def upsert(self, table: str, payload: dict[str, Any], conflict_columns: str) -> dict[str, Any]:
         if self.upsert_error:
             raise self.upsert_error
+        if str(payload.get("item_id")) in self.fail_upsert_for:
+            raise HttpClientError("HTTP 500", status=500, body={"message": "boom"})
         self.upserts.append((table, payload, conflict_columns))
         return {"id": f"{table}_id", **payload}

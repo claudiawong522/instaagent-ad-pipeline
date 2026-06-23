@@ -10,32 +10,37 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .ad_enrichment import (
-    OPENROUTER_BASE_URL,
+    GEMINI_ENDPOINT,
+    GEMINI_PROVIDER,
     OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
     OPENROUTER_PROVIDER,
     PAID_AD_ANALYSIS_COLUMNS,
     EnrichmentResult,
+    clean_optional_text,
+    existing_enriched_ids,
     fetch_video_bytes,
+    gemini_usage,
     is_probable_video_url,
-    openrouter_request_body,
     openrouter_usage,
     parse_enrichment_response,
+    parse_gemini_response,
     persist_media,
+    request_enrichment,
 )
-from .apify_transcripts import upsert_or_insert
 from .config import Config
-from .http_client import HttpClientError, request_json
+from .http_client import HttpClientError
 from .ingestion import complete_query, log_api_usage, log_failed_query, start_query, utc_now_iso
 from .supabase_client import SupabaseClient
 
 logger = logging.getLogger(__name__)
 
-UGC_SELECT_COLUMNS = "id,video_url,cover,description,handle,user_handle,hashtags,video_topic"
+UGC_SELECT_COLUMNS = "id,video_url,cover,description,handle,user_handle,hashtags"
 
 
 @dataclass
@@ -55,6 +60,7 @@ def enrich_ugc_items(
     dry_run: bool,
     input_json: Path | None = None,
     timeout: int = 300,
+    concurrency: int = 1,
 ) -> EnrichmentResult:
     if supabase is None:
         raise RuntimeError("Supabase credentials are required to load UGC enrichment candidates.")
@@ -71,30 +77,43 @@ def enrich_ugc_items(
         ]
         return result
 
-    if not config.openrouter_api_key and input_json is None:
-        raise RuntimeError("OPENROUTER_API_KEY is required unless --input-json is used.")
+    if input_json is None:
+        if config.enrichment_provider == GEMINI_PROVIDER:
+            if not config.gemini_api_key:
+                raise RuntimeError("GEMINI_API_KEY is required unless --input-json is used.")
+        elif not config.openrouter_api_key:
+            raise RuntimeError("OPENROUTER_API_KEY is required unless --input-json is used.")
 
-    for candidate in candidates:
-        result.attempted += 1
-        try:
-            written = enrich_ugc_item(
-                config=config,
-                supabase=supabase,
-                run_id=run_id,
-                candidate=candidate,
-                input_json=input_json,
-                timeout=timeout,
-            )
-        except (HttpClientError, RuntimeError) as exc:
-            result.failed += 1
-            result.details.append({"ugc_item_id": candidate.ugc_item_id, "status": "failed", "error": str(exc)})
-            continue
-        if written:
-            result.written += 1
-            result.details.append({"ugc_item_id": candidate.ugc_item_id, "status": "written"})
-        else:
-            result.failed += 1
-            result.details.append({"ugc_item_id": candidate.ugc_item_id, "status": "no_analysis"})
+    def _enrich_one(candidate: UgcEnrichmentCandidate) -> bool:
+        return enrich_ugc_item(
+            config=config,
+            supabase=supabase,
+            run_id=run_id,
+            candidate=candidate,
+            input_json=input_json,
+            timeout=timeout,
+        )
+
+    # I/O-bound per item; fan out across threads (SupabaseClient is stateless per request).
+    # Futures are aggregated in the main thread as they complete, so no lock is needed.
+    workers = max(1, concurrency)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(_enrich_one, candidate): candidate for candidate in candidates}
+        for future in as_completed(futures):
+            candidate = futures[future]
+            result.attempted += 1
+            try:
+                written = future.result()
+            except (HttpClientError, RuntimeError) as exc:
+                result.failed += 1
+                result.details.append({"ugc_item_id": candidate.ugc_item_id, "status": "failed", "error": str(exc)})
+                continue
+            if written:
+                result.written += 1
+                result.details.append({"ugc_item_id": candidate.ugc_item_id, "status": "written"})
+            else:
+                result.failed += 1
+                result.details.append({"ugc_item_id": candidate.ugc_item_id, "status": "no_analysis"})
     return result
 
 
@@ -110,17 +129,19 @@ def ugc_enrichment_candidates(
             "select": UGC_SELECT_COLUMNS,
             "run_id": f"eq.{run_id}",
             "video_url": "not.is.null",
-            "analyzed_at": "is.null",
             "order": "saved_to_supabase_at.asc",
             "limit": str(max(limit * 2, limit)),
         },
     )
+    already_enriched = existing_enriched_ids(supabase, run_id, "ugc_item")
     candidates: list[UgcEnrichmentCandidate] = []
     skipped = 0
     for row in rows:
         ugc_item_id = str(row.get("id") or "")
         video_url = str(row.get("video_url") or "")
         if not ugc_item_id:
+            continue
+        if ugc_item_id in already_enriched:
             continue
         if not is_probable_video_url(video_url):
             skipped += 1
@@ -132,7 +153,7 @@ def ugc_enrichment_candidates(
                 thumbnail_url=str(row.get("cover") or "") or None,
                 context={
                     key: row.get(key)
-                    for key in ("description", "handle", "user_handle", "hashtags", "video_topic")
+                    for key in ("description", "handle", "user_handle", "hashtags")
                     if row.get(key) not in (None, "")
                 },
             )
@@ -151,10 +172,13 @@ def enrich_ugc_item(
     input_json: Path | None,
     timeout: int,
 ) -> bool:
-    endpoint = OPENROUTER_CHAT_COMPLETIONS_ENDPOINT
-    provider = f"{OPENROUTER_PROVIDER}:{config.openrouter_model}"
+    is_gemini = config.enrichment_provider == GEMINI_PROVIDER
+    model = config.gemini_model if is_gemini else config.openrouter_model
+    raw_provider = GEMINI_PROVIDER if is_gemini else OPENROUTER_PROVIDER
+    endpoint = GEMINI_ENDPOINT.format(model=model) if is_gemini else OPENROUTER_CHAT_COMPLETIONS_ENDPOINT
+    provider = f"{raw_provider}:{model}"
     request_params = {
-        "model": config.openrouter_model,
+        "model": model,
         "ugc_item_id": candidate.ugc_item_id,
         "video_url": candidate.video_url,
     }
@@ -169,12 +193,15 @@ def enrich_ugc_item(
     )
     response_headers: dict[str, str] = {}
     response_status: int | None = None
+    usage: dict[str, Any] = {}
     try:
         if input_json:
             body = json.loads(input_json.read_text())
+            analysis = parse_gemini_response(body) if is_gemini else parse_enrichment_response(body)
+            usage = gemini_usage(body) if is_gemini else openrouter_usage(body)
         else:
             video_bytes = fetch_video_bytes(candidate.video_url, timeout=timeout)
-            persist_media(
+            media = persist_media(
                 supabase,
                 run_id=run_id,
                 item_table="ugc_items",
@@ -185,22 +212,29 @@ def enrich_ugc_item(
                 subdir="ugc",
                 timeout=timeout,
             )
-            response = request_json(
-                "POST",
-                f"{OPENROUTER_BASE_URL}{endpoint}",
-                headers={"Authorization": f"Bearer {config.openrouter_api_key}"},
-                body=openrouter_request_body(
-                    model=config.openrouter_model,
-                    video_bytes=video_bytes,
-                    ad_copy=candidate.context,
-                ),
+            # OpenRouter fetches the video from its public Storage URL server-side, so
+            # we can drop our copy of the bytes before the (slow) LLM call — keeping
+            # peak memory low and letting concurrency scale. Gemini still needs bytes.
+            storage_video_url = media.get("storage_video_url")
+            if not is_gemini and storage_video_url:
+                video_bytes = None
+            (
+                body,
+                analysis,
+                provider,
+                endpoint,
+                response_headers,
+                response_status,
+                usage,
+                model,
+            ) = request_enrichment(
+                config=config,
+                video_bytes=video_bytes,
+                video_url=None if is_gemini else storage_video_url,
+                ad_copy={},
                 timeout=timeout,
             )
-            body = response.body
-            response_headers = response.headers
-            response_status = response.status
 
-        analysis = parse_enrichment_response(body)
         log_api_usage(
             supabase=supabase,
             dry_run=False,
@@ -210,7 +244,7 @@ def enrich_ugc_item(
             status=response_status,
             response_count=1 if analysis is not None else 0,
             headers=response_headers,
-            metadata={"model": config.openrouter_model, "usage": openrouter_usage(body)},
+            metadata={"model": model, "usage": usage},
         )
         complete_query(
             supabase=supabase,
@@ -230,7 +264,7 @@ def enrich_ugc_item(
                 status=exc.status,
                 response_count=None,
                 headers={},
-                metadata={"model": config.openrouter_model},
+                metadata={"model": model},
             )
         log_failed_query(
             supabase=supabase,
@@ -252,7 +286,7 @@ def enrich_ugc_item(
             {
                 "run_id": run_id,
                 "source_query_id": source_query_id,
-                "provider": OPENROUTER_PROVIDER,
+                "provider": raw_provider,
                 "endpoint": endpoint,
                 "external_id": candidate.ugc_item_id,
                 "payload_json": body,
@@ -261,22 +295,17 @@ def enrich_ugc_item(
     if analysis is None:
         return False
 
-    transcript_text = analysis.get("transcript_text")
-    if isinstance(transcript_text, str) and transcript_text.strip():
-        upsert_or_insert(
-            supabase,
-            "ugc_transcripts",
-            {
-                "ugc_item_id": candidate.ugc_item_id,
-                "transcript_text": transcript_text.strip(),
-                "transcript_segments": analysis.get("transcript_segments") or None,
-                "transcript_source": f"{OPENROUTER_PROVIDER}:{config.openrouter_model}",
-            },
-            "ugc_item_id,transcript_source",
-        )
-
     payload = {key: analysis.get(key) for key in PAID_AD_ANALYSIS_COLUMNS if key in analysis}
-    payload["analysis_model"] = config.openrouter_model
-    payload["analyzed_at"] = utc_now_iso()
-    supabase.update_by_id("ugc_items", candidate.ugc_item_id, payload)
+    payload.update(
+        {
+            "run_id": run_id,
+            "item_type": "ugc_item",
+            "item_id": candidate.ugc_item_id,
+            "transcript_text": clean_optional_text(analysis.get("transcript_text")),
+            "transcript_segments": analysis.get("transcript_segments") or None,
+            "analysis_model": model,
+            "analyzed_at": utc_now_iso(),
+        }
+    )
+    supabase.upsert("item_enrichments", payload, "item_type,item_id")
     return True
