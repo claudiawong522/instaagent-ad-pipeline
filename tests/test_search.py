@@ -12,8 +12,6 @@ def make_config() -> Config:
     return Config(
         supabase_url=None,
         supabase_key=None,
-        topyappers_api_key=None,
-        topyappers_base_url="https://x",
         apify_api_key=None,
         claude_api_key=None,
         claude_model="claude-haiku-4-5",
@@ -40,11 +38,9 @@ class FakeSupabase:
                     "paid_ad_row_id": "p1",
                     "run_id": "r1",
                     "name": "BrandX",
-                    "ai_description": "A clean demo of a cleanser.",
                     "publisher_platform": ["facebook"],
                     "storage_video_url": "https://store/p1.mp4",
                     "storage_thumb_url": "https://store/p1.jpg",
-                    "hook": "Stop using harsh soap",
                 }
             ]
         if table == "ugc_items":
@@ -58,16 +54,38 @@ class FakeSupabase:
                     "views": 321200,
                     "likes": 8307,
                     "virality_score": 42.0,
-                    "ai_description": "ASMR cleanser pump.",
                     "storage_video_url": "https://store/u1.mp4",
                     "storage_thumb_url": "https://store/u1.jpg",
-                    "hook": "Watch this pump",
                 }
             ]
-        if table == "paid_ad_transcripts":
-            return [{"paid_ad_row_id": "p1", "transcript_text": "paid transcript"}]
-        if table == "ugc_transcripts":
-            return [{"ugc_item_id": "u1", "transcript_text": "ugc transcript"}]
+        if table == "item_enrichments":
+            # Enrichment fields + transcript now come from item_enrichments,
+            # keyed by item_type/item_id.
+            if params.get("item_type") == "eq.paid_ad":
+                return [
+                    {
+                        "item_id": "p1",
+                        "ai_description": "A clean demo of a cleanser.",
+                        "hook": "Stop using harsh soap",
+                        "content_format": "demo",
+                        "product_category": "skincare",
+                        "video_topic": "cleanser demo",
+                        "transcript_text": "paid transcript",
+                    }
+                ]
+            if params.get("item_type") == "eq.ugc_item":
+                return [
+                    {
+                        "item_id": "u1",
+                        "ai_description": "ASMR cleanser pump.",
+                        "hook": "Watch this pump",
+                        "content_format": "asmr",
+                        "product_category": "skincare",
+                        "video_topic": "cleanser asmr",
+                        "transcript_text": "ugc transcript",
+                    }
+                ]
+            return []
         return []
 
 
@@ -91,9 +109,20 @@ def test_search_ranks_hydrates_and_attaches_transcripts() -> None:
     assert ugc["platform"] == "tiktok"
     assert ugc["video_url"] == "https://store/u1.mp4"
     assert ugc["views"] == 321200
-    assert ugc["transcript"] == "ugc transcript"
     assert ugc["similarity"] == 0.91
+    # Enrichment fields + transcript hydrate from item_enrichments (same output keys).
+    assert ugc["ai_description"] == "ASMR cleanser pump."
+    assert ugc["hook"] == "Watch this pump"
+    assert ugc["content_format"] == "asmr"
+    assert ugc["product_category"] == "skincare"
+    assert ugc["video_topic"] == "cleanser asmr"
+    assert ugc["transcript"] == "ugc transcript"
     assert paid["platform"] == "facebook"
+    assert paid["ai_description"] == "A clean demo of a cleanser."
+    assert paid["hook"] == "Stop using harsh soap"
+    assert paid["content_format"] == "demo"
+    assert paid["product_category"] == "skincare"
+    assert paid["video_topic"] == "cleanser demo"
     assert paid["transcript"] == "paid transcript"
     assert paid["views"] is None
 

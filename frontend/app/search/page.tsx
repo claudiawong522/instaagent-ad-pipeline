@@ -41,7 +41,6 @@ export default function SearchPage() {
   }, [])
 
   async function runSearch() {
-    if (!query.trim()) return
     setLoading(true)
     setError(null)
     setSearched(true)
@@ -52,7 +51,6 @@ export default function SearchPage() {
         platform: platform || null,
         run_id: runId || null,
         min_views: minViews ? Number(minViews) : null,
-        limit: 24,
       })
       setResults(res.results)
     } catch (e) {
@@ -89,8 +87,8 @@ export default function SearchPage() {
               className="pl-9"
             />
           </div>
-          <Button type="submit" disabled={loading || !query.trim()}>
-            {loading ? <Loader2 className="size-4 animate-spin" /> : 'Search'}
+          <Button type="submit" disabled={loading}>
+            {loading ? <Loader2 className="size-4 animate-spin" /> : query.trim() ? 'Search' : 'Show all'}
           </Button>
         </div>
 

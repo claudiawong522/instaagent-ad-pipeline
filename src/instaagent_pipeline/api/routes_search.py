@@ -17,7 +17,9 @@ class SearchRequest(BaseModel):
     run_id: Optional[str] = None
     min_virality: Optional[float] = None
     min_views: Optional[int] = None
-    limit: int = Field(default=20, ge=1, le=100)
+    # None = no count cap; results are gated by the relevance threshold (search_ads
+    # caps at MAX_RESULTS as a safety bound). A value still caps to that many.
+    limit: Optional[int] = Field(default=None, ge=1, le=1000)
 
 
 def _require_supabase(request: Request):
@@ -30,8 +32,7 @@ def _require_supabase(request: Request):
 @router.post("/search")
 def search(req: SearchRequest, request: Request) -> dict[str, Any]:
     supabase = _require_supabase(request)
-    if not req.query.strip():
-        raise HTTPException(400, "query is required")
+    # An empty query is allowed: search_ads treats it as "browse all ads".
     if req.item_type not in (None, "paid_ad", "ugc_item"):
         raise HTTPException(400, "item_type must be 'paid_ad' or 'ugc_item'")
     try:
