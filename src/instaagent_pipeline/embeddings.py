@@ -17,22 +17,18 @@ VOYAGE_EMBEDDINGS_ENDPOINT = "/v1/embeddings"
 # Voyage accepts up to 1000 inputs per request; 128 keeps request bodies small.
 EMBEDDING_BATCH_SIZE = 128
 
-EMBEDDING_SPACES = ("icp", "format", "hook")
+EMBEDDING_SPACES = ("icp", "search")
 SEARCH_SPACE = "search"
-ALL_SPACES = ("icp", "format", "hook", "search")
+ALL_SPACES = ("icp", "search")
 
-# Columns the space builders read. Includes the extra fields the 'search' space
-# needs (ai_description + the tag block); selecting them is harmless for the other
-# spaces. niches/persona on ugc_items exist after migration 015.
-PAID_AD_SELECT_COLUMNS = (
-    "paid_ad_row_id,persona,target_demographic,content_format,content_category,"
-    "visual_style,setting,hook,ai_description,main_category,product_category,"
-    "video_topic,niches,primary_emotion,brand_mentioned"
-)
-UGC_SELECT_COLUMNS = (
-    "id,persona,target_demographic,content_format,content_category,visual_style,"
-    "setting,hook,ai_description,main_category,product_category,video_topic,"
-    "niches,primary_emotion,brand_mentioned"
+# Columns the space builders read, selected from item_enrichments. The icp builder
+# reads persona + target_demographic; the search builder reads ai_description, the
+# SEARCH_TAG_FIELDS tag block, and the full transcript_text. item_id is the polymorphic
+# key (= paid_ads.paid_ad_row_id or ugc_items.id).
+ENRICHMENT_SELECT_COLUMNS = (
+    "item_id,persona,target_demographic,ai_description,content_format,main_category,"
+    "content_category,product_category,video_topic,niches,hook,setting,primary_emotion,"
+    "brand_mentioned,transcript_text"
 )
 
 
@@ -86,27 +82,28 @@ def embed_items(
     candidates: list[EmbeddingCandidate] = []
     if source in {"paid", "all"}:
         rows = supabase.select(
-            "paid_ads",
+            "item_enrichments",
             {
-                "select": PAID_AD_SELECT_COLUMNS,
+                "select": ENRICHMENT_SELECT_COLUMNS,
                 "run_id": f"eq.{run_id}",
-                "analyzed_at": "not.is.null",
-                "order": "saved_to_supabase_at.asc",
+                "item_type": "eq.paid_ad",
+                "order": "created_at.asc",
                 "limit": str(limit),
             },
         )
-        collect_candidates(rows, item_type="paid_ad", id_column="paid_ad_row_id", spaces=target_spaces, existing=existing, result=result, out=candidates)
+        collect_candidates(rows, item_type="paid_ad", id_column="item_id", spaces=target_spaces, existing=existing, result=result, out=candidates)
     if source in {"ugc", "all"}:
         rows = supabase.select(
-            "ugc_items",
+            "item_enrichments",
             {
-                "select": UGC_SELECT_COLUMNS,
+                "select": ENRICHMENT_SELECT_COLUMNS,
                 "run_id": f"eq.{run_id}",
-                "order": "saved_to_supabase_at.asc",
+                "item_type": "eq.ugc_item",
+                "order": "created_at.asc",
                 "limit": str(limit),
             },
         )
-        collect_candidates(rows, item_type="ugc_item", id_column="id", spaces=target_spaces, existing=existing, result=result, out=candidates)
+        collect_candidates(rows, item_type="ugc_item", id_column="item_id", spaces=target_spaces, existing=existing, result=result, out=candidates)
 
     result.candidates = len(candidates)
     if dry_run:
@@ -355,25 +352,11 @@ def build_icp_text(row: dict[str, Any]) -> str | None:
     return text or None
 
 
-def build_format_text(row: dict[str, Any]) -> str | None:
-    labeled = (
-        ("format", row.get("content_format")),
-        ("category", row.get("content_category")),
-        ("style", row.get("visual_style")),
-        ("setting", row.get("setting")),
-    )
-    parts = [f"{label}: {clean_text(value)}" for label, value in labeled if clean_text(value)]
-    return "; ".join(parts) or None
-
-
-def build_hook_text(row: dict[str, Any]) -> str | None:
-    return clean_text(row.get("hook"))
-
-
 # The search space embeds the rich vision-generated ai_description plus a compact
 # labeled tag block of the highest-value searchable fields, so the exact words users
-# type (ASMR, before/after, cleanser) appear in the embedded text. Raw transcript is
-# deliberately excluded. Field order is fixed so cosine distances stay comparable.
+# type (ASMR, before/after, cleanser) appear in the embedded text. The full transcript
+# text is appended after the tag block (no truncation) so spoken-word queries match.
+# Field order is fixed so cosine distances stay comparable.
 SEARCH_TAG_FIELDS = (
     ("format", "content_format"),
     ("category", "main_category"),
@@ -397,15 +380,17 @@ def build_search_text(row: dict[str, Any]) -> str | None:
         value = flatten_jsonish(row.get(column))
         if value:
             tags.append(f"{label}: {value}")
+    text = description
     if tags:
-        return f"{description}\n\n{'; '.join(tags)}"
-    return description
+        text = f"{text}\n\n{'; '.join(tags)}"
+    transcript = clean_text(row.get("transcript_text"))
+    if transcript:
+        text = f"{text}\n\n{transcript}"
+    return text
 
 
 SPACE_TEXT_BUILDERS: dict[str, Callable[[dict[str, Any]], str | None]] = {
     "icp": build_icp_text,
-    "format": build_format_text,
-    "hook": build_hook_text,
     "search": build_search_text,
 }
 

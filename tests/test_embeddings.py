@@ -5,12 +5,13 @@ from pathlib import Path
 from typing import Any
 
 from instaagent_pipeline.embeddings import (
+    ALL_SPACES,
+    EMBEDDING_SPACES,
     EmbedResult,
     EmbeddingCandidate,
     batched,
-    build_format_text,
-    build_hook_text,
     build_icp_text,
+    build_search_text,
     collect_candidates,
     flatten_jsonish,
     parse_voyage_response,
@@ -42,20 +43,46 @@ def test_build_icp_text_returns_none_without_signal() -> None:
     assert build_icp_text({"persona": None, "target_demographic": "  "}) is None
 
 
-def test_build_format_text_labels_present_fields() -> None:
+def test_embedding_spaces_are_icp_and_search_only() -> None:
+    assert EMBEDDING_SPACES == ("icp", "search")
+    assert ALL_SPACES == ("icp", "search")
+
+
+def test_build_search_text_returns_none_without_description() -> None:
+    assert build_search_text({"ai_description": "", "content_format": "demo"}) is None
+    assert build_search_text({"ai_description": None}) is None
+
+
+def test_build_search_text_combines_description_tags_and_transcript() -> None:
     row = {
+        "ai_description": "A creator demos a gentle cleanser before/after.",
         "content_format": "talking_head",
+        "main_category": "beauty",
         "content_category": "skincare",
-        "visual_style": None,
+        "product_category": "cleanser",
+        "video_topic": "skin barrier",
+        "niches": ["sensitive skin", "redness"],
+        "hook": "Stop washing your face wrong",
         "setting": "bathroom",
+        "primary_emotion": "trust",
+        "brand_mentioned": "QE Skincare",
+        "transcript_text": "Hi, today I am trying this cleanser and my skin feels great.",
     }
-    assert build_format_text(row) == "format: talking_head; category: skincare; setting: bathroom"
+    expected = (
+        "A creator demos a gentle cleanser before/after."
+        "\n\n"
+        "format: talking_head; category: beauty; subcategory: skincare; "
+        "product: cleanser; topic: skin barrier; niches: sensitive skin, redness; "
+        "hook: Stop washing your face wrong; setting: bathroom; emotion: trust; "
+        "brands: QE Skincare"
+        "\n\n"
+        "Hi, today I am trying this cleanser and my skin feels great."
+    )
+    assert build_search_text(row) == expected
 
 
-def test_build_hook_text_strips_and_rejects_empty() -> None:
-    assert build_hook_text({"hook": "  Stop washing your face wrong  "}) == "Stop washing your face wrong"
-    assert build_hook_text({"hook": ""}) is None
-    assert build_hook_text({}) is None
+def test_build_search_text_description_only_when_no_tags_or_transcript() -> None:
+    assert build_search_text({"ai_description": "Just a description."}) == "Just a description."
 
 
 def test_flatten_jsonish_handles_nested_values() -> None:
@@ -66,16 +93,15 @@ def test_flatten_jsonish_handles_nested_values() -> None:
 
 
 def test_collect_candidates_skips_existing_and_empty_spaces() -> None:
+    # icp is already embedded (skipped_existing); search has no ai_description
+    # (skipped_no_text), so this row yields zero new candidates.
     rows: list[dict[str, Any]] = [
         {
-            "paid_ad_row_id": "ad-1",
+            "item_id": "ad-1",
             "persona": "gym goers",
             "target_demographic": None,
+            "ai_description": None,
             "content_format": "demo",
-            "content_category": None,
-            "visual_style": None,
-            "setting": None,
-            "hook": None,
         }
     ]
     result = EmbedResult()
@@ -83,16 +109,47 @@ def test_collect_candidates_skips_existing_and_empty_spaces() -> None:
     collect_candidates(
         rows,
         item_type="paid_ad",
-        id_column="paid_ad_row_id",
-        spaces=("icp", "format", "hook"),
+        id_column="item_id",
+        spaces=("icp", "search"),
         existing={("paid_ad", "ad-1", "icp")},
         result=result,
         out=out,
     )
 
-    assert [(candidate.space, candidate.source_text) for candidate in out] == [("format", "format: demo")]
+    assert out == []
     assert result.skipped_existing == 1
     assert result.skipped_no_text == 1
+
+
+def test_collect_candidates_yields_icp_and_search_for_complete_row() -> None:
+    rows: list[dict[str, Any]] = [
+        {
+            "item_id": "ad-2",
+            "persona": "gym goers",
+            "target_demographic": "men 18-34",
+            "ai_description": "A short demo of a protein shake.",
+            "content_format": "demo",
+        }
+    ]
+    result = EmbedResult()
+    out: list[EmbeddingCandidate] = []
+    collect_candidates(
+        rows,
+        item_type="paid_ad",
+        id_column="item_id",
+        spaces=("icp", "search"),
+        existing=set(),
+        result=result,
+        out=out,
+    )
+
+    # An item now yields up to 2 candidates: icp and search.
+    assert [candidate.space for candidate in out] == ["icp", "search"]
+    assert out[0].source_text == "gym goers; men 18-34"
+    assert out[1].source_text.startswith("A short demo of a protein shake.")
+    assert "format: demo" in out[1].source_text
+    assert result.skipped_existing == 0
+    assert result.skipped_no_text == 0
 
 
 def test_parse_voyage_response_orders_by_index() -> None:
