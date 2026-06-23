@@ -8,11 +8,8 @@ These are good ideas intentionally deferred to keep the first version lean.
 - Useful for customer-specific competitor research.
 - Deferred because the first version should prove the keyword-led category workflow first.
 
-## Apify Fallback
+## Transcription Optimizations
 
-- Use Apify `data-slayer/instagram-search-reels` when TopYappers does not return enough relevant keyword results.
-- Benefits: arbitrary Instagram Reels keyword search, captions, hashtags, creator metadata, engagement metrics, audio metadata, and video URLs.
-- Tradeoff: the actor is not transcript-native, so a separate transcription step is needed.
 - If the broader Apify transcript actor has poor Instagram reliability or cost, compare Apify `apple_yang/instagram-transcripts-scraper` as an Instagram-only alternative. It accepts one public Instagram video URL and returns `text` plus timestamped `segments`.
 - If Apify confirms array input is stable for `tictechid/anoxvanzi-transcriber`, batch multiple known URLs into one actor run to reduce per-run base charges.
 
@@ -49,7 +46,3 @@ These are good ideas intentionally deferred to keep the first version lean.
 - Embeddings need no changes — `embed-items` works off descriptor columns regardless of media type, and same-schema distillation keeps image and video ads clustering by creative pattern instead of input modality.
 - Deferred because every scraped ad so far is a video ad and InstaAgent clones video creatives first.
 
-## UGC LLM Analysis Parity
-
-- UGC embedding inputs come from TopYappers-provided fields, which are coarser than the Gemini-distilled paid-ad descriptors (e.g. `target_demographic = "all_ages"` vs a full persona phrase).
-- Running UGC transcripts/metadata through the same enrichment schema would sharpen UGC ICP clusters. Already listed in PLAN.md step 4 as not yet implemented.

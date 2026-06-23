@@ -1,15 +1,16 @@
 # API Endpoints
 
-This document lists the endpoints used by the ingestion and transcript-backfill implementation, their input fields, output fields, and Supabase mappings.
+This document lists the endpoints used by the ingestion and enrichment implementation, their input fields, output fields, and Supabase mappings.
 
-The current design keeps paid ads and UGC separate:
+The current design keeps paid ads and UGC separate at ingestion, but unifies their transcript + analysis enrichment:
 
 - Apify Meta Ad Library paid ads write to `paid_ads`.
-- TopYappers UGC writes to `ugc_items`.
-- Apify UGC transcript fallback writes to `ugc_transcripts`.
+- Apify TikTok UGC (`ingest-tiktok`) and Apify Instagram reel UGC (`ingest-instagram`) write to `ugc_items`.
+- Instagram follower backfill (`backfill-ig-followers`) fills follower counts on `ugc_items` (source='instagram').
+- OpenRouter (Gemini) vision enrichment for both paid ads and UGC writes transcripts + analysis fields to `item_enrichments` and uploads videos to the Supabase Storage bucket `ad-videos`.
 - Voyage embeddings write to `item_embeddings`.
 - ICP clustering writes to `item_clusters` and `clusters`.
-- Raw source JSON from ingestion, transcript, and paid-ad enrichment providers writes to `raw_payloads` where noted below.
+- Raw source JSON from ingestion and enrichment providers writes to `raw_payloads` where noted below.
 
 ## Provider Keyword Strategy
 
@@ -20,7 +21,8 @@ For a seed such as `QV cleanser`, use examples like:
 | Provider | API field | Recommended input | Why |
 | --- | --- | --- | --- |
 | Apify Meta Ad Library | `search_terms` inside generated Meta Ad Library URL | `gentle cleanser` or `face cleanser` | Finds competitive paid video ads in the cleanser category without over-constraining to exact QV mentions. |
-| TopYappers viral-content | `videoTopicContains` | `cleanser`, then top up with `skincare` if needed | The URL-backed viral endpoint is topic-oriented; broad terms return more UGC candidates with usable video URLs. |
+| Apify TikTok scraper | `searchQueries` | `cleanser`, then top up with `skincare` if needed | Keyword search is topic-oriented; broad terms return more UGC candidates with usable video URLs and native follower counts. |
+| Apify Instagram reel search | `search` | `cleanser`, then top up with `skincare` if needed | Keyword reel search is topic-oriented; broad terms return more reels. Follower counts are often missing and are filled by `backfill-ig-followers`. |
 
 ## Claude: Generate Keyword Allocations
 
@@ -89,57 +91,33 @@ search_terms=<keyword>
 | `startDateFormatted` / `startDate` | `paid_ads.started_running` | Stored as epoch milliseconds. |
 | `endDateFormatted` / `endDate` | `paid_ads.running_duration` | Duration in days, computed locally from start/end or start/current time for active ads. |
 | `publisherPlatform` | `paid_ads.publisher_platform` | Meta publisher platforms. |
-| transcript fields | `paid_ads.full_transcription`, `paid_ads.timestamped_transcription` | Left null by ingestion; the OpenRouter enrichment stage writes transcripts to `paid_ad_transcripts` instead. |
+| transcript + analysis | `item_enrichments` | Not produced by ingestion; the OpenRouter enrichment stage (`enrich-paid-ads`) writes the transcript and analysis fields to `item_enrichments` (`item_type = 'paid_ad'`, `item_id = paid_ads.paid_ad_row_id`). |
+| storage video / thumbnail | `paid_ads.storage_video_url`, `paid_ads.storage_thumb_url` | Filled by enrichment after the video is uploaded to the `ad-videos` Supabase Storage bucket. |
 | unmapped provider fields | `paid_ads.source_metrics` | JSONB overflow for provider-specific fields that are not promoted to columns. |
 | full item JSON | `raw_payloads.payload_json` | Raw source of truth. |
 
-## TopYappers: Viral Content
+## Apify: Search TikTok UGC
 
-- Provider: TopYappers
+- Provider: `apify:clockworks/tiktok-scraper`
 - Method: `POST`
-- Endpoint: `https://api.topyappers.com/api/v1/viral-content`
-- Code path: `ingest-topyappers-viral`
-- Purpose: primary URL-backed UGC ingestion endpoint. Discover viral UGC candidates with free-text topic/category filters, virality metrics, and provider video URLs.
+- Endpoint: `https://api.apify.com/v2/acts/clockworks~tiktok-scraper/run-sync-get-dataset-items`
+- Code path: `ingest-tiktok`
+- Purpose: keyword-search TikTok for UGC candidates with engagement metrics, creator metadata, and provider video URLs. Follower counts are returned natively.
 
 ### Input Columns / Body Fields
 
 | Field | Type | Required | Used by Code | Notes |
 | --- | --- | --- | --- | --- |
-| `videoTopicContains` | string | yes | yes | Primary free-text keyword field. |
-| `contentCategoryContains` | string | no | yes | Optional free-text content category match. |
-| `productCategoryContains` | string | no | yes | Optional free-text product category match. |
-| `brandMentionedContains` | string | no | yes | Optional brand mention search. |
-| `categories` | string[] | no | yes | Use only as helper filters. |
-| `countries` | string[] | no | yes | Country names. |
-| `viewsMin`, `viewsMax` | integer | no | yes | View count filter. |
-| `viralityScoreMin`, `viralityScoreMax` | float | no | yes | Virality score filter. |
-| `followersMin`, `followersMax` | integer | no | yes | Creator size filters if available. |
-| `dateCreatedFrom`, `dateCreatedTo` | string | no | yes | `YYYY-MM-DD`. |
-| `musicTitle` | string | no | yes | Sound/music filter. |
-| `page` | integer | yes | yes | Starts at 1. |
-| `pageSize` | integer | yes | yes | Max 100 per docs. |
+| `searchQueries` | string[] | yes | yes | One or more keyword terms, from `--keyword`. |
+| `resultsPerPage` | integer | yes | yes | Set from the keyword's UGC target count. |
+| `token` | query string | yes | yes | Apify token from `APIFY_API_KEY`. |
+| `--extra-param` overrides | JSON values | no | yes | Optional actor input overrides for debugging or provider-specific tuning. |
 
 ### Output Columns / Response Fields
 
-`ugc_items` stores stable TopYappers viral-content fields as first-class columns, plus DB bookkeeping. The raw TopYappers `id` field is stored as `ugc_items.topyappers_id` because `ugc_items.id` is the database primary key.
+`ugc_items` (source='tiktok') stores the normalized engagement and creator metadata as first-class columns, plus DB bookkeeping. The raw provider video identifier is stored as `ugc_items.video_id`; `ugc_items.id` is the database primary key.
 
-TopYappers viral-content fields stored directly:
-
-```text
-topyappers_id, account_type, age, avatar, bio, brand_mentioned,
-categories, color_palette, comments, comments_to_views_ratio,
-content_category, content_format, content_tone, country, cover,
-creator_avg_views, creator_engagement_rate, creator_language, cta_type,
-date_added, date_created, description, face_count, follower_tier,
-followers, gender, hair_color, handle, has_face, has_product,
-has_text_overlay, hashtags, hook, is_ai_generated, is_branded,
-is_promotional, is_trending_format, likes, likes_to_views_ratio,
-main_category, music, nickname, primary_emotion, product_category,
-production_quality, race, setting, shares, shares_to_views_ratio,
-source, subtitles, target_demographic, user_id, video_id, video_url,
-video_ranges, video_topic, views, views_to_avg_ratio, virality_score,
-virality_tier, visual_style
-```
+The TikTok normalizer provides engagement + creator metadata only (handle, follower count, views, likes, comments, shares, video URL, cover, description, date created, source='tiktok'). It does not supply a virality score, so `virality_score` and `virality_tier` are RECOMPUTED from engagement. Analysis fields (`hook`, `content_category`, etc.) are left null at ingestion and filled later by OpenRouter vision enrichment, which writes them to `item_enrichments`.
 
 DB-only fields:
 
@@ -149,42 +127,30 @@ id, run_id, raw_payload_id, external_id, saved_to_supabase_at
 
 Provider-specific fields that are not promoted to first-class columns are stored in `ugc_items.source_metrics` as JSONB. Full source JSON is also preserved in `raw_payloads.payload_json`.
 
-TopYappers documents `videoUrl` and `thumbnailUrl` on this viral-content endpoint. Use this endpoint when URL-backed UGC records are required. The normalizer maps provider URL fields to `ugc_items.video_url`; when live payloads omit URL fields, it derives public URLs from `source`, `handle`/`user_handle`, and `video_id` for TikTok, Instagram, and YouTube. It also maps `thumbnailUrl` or `cover` to `ugc_items.cover`, `caption` to `ugc_items.description`, `handle` or `creatorUsername` to `ugc_items.handle` and `ugc_items.user_handle`, `createdAt` to `ugc_items.date_created`, `category` to `ugc_items.content_category` and `ugc_items.main_category`, and `musicTitle` to `ugc_items.music`.
+OpenRouter (Gemini) vision enrichment auto-runs after live `ingest-tiktok`; see the enrichment section below.
 
-## TopYappers: Videos
+## Apify: Search Instagram Reel UGC
 
-- Provider: TopYappers
-- Method: `GET`
-- Endpoint: `https://api.topyappers.com/api/v1/videos`
-- Code path: `ingest-topyappers-videos`
-- Purpose: metadata-only UGC fallback. Search video records by keyword and retrieve subtitles, views, follower count, hashtags, and raw video metrics. This endpoint does not return video URLs.
+- Provider: `apify:data-slayer/instagram-search-reels`
+- Method: `POST`
+- Endpoint: `https://api.apify.com/v2/acts/data-slayer~instagram-search-reels/run-sync-get-dataset-items`
+- Code path: `ingest-instagram`
+- Purpose: keyword-search Instagram Reels for UGC candidates with engagement metrics, creator metadata, and provider video URLs.
 
-### Input Columns / Query Fields
+### Input Columns / Body Fields
 
 | Field | Type | Required | Used by Code | Notes |
 | --- | --- | --- | --- | --- |
-| `textSearch` | string | yes | yes | Product/category keyword such as `gentle cleanser`, from `--keyword`. |
-| `page` | integer | yes | yes | Starts at 1. |
-| `perPage` | integer | yes | yes | Page size, from `--page-size`; docs allow up to 100. |
-| `sortBy` | string | yes | yes | Defaults to `views`; can be overridden with `--extra-param sortBy=date_created`. |
-| `sortOrder` | string | yes | yes | Defaults to `desc`; can be overridden with `--extra-param sortOrder=asc`. |
-| `userFollowersMin`, `userFollowersMax` | integer | no | yes | Optional creator size filters. |
-| `viewsMin`, `viewsMax` | integer | no | yes | Optional view count filters. |
-| `likesMin`, `likesMax` | integer | no | yes | Optional like count filters. |
-| `commentsMin`, `commentsMax` | integer | no | yes | Optional comment count filters. |
-| `sharesMin`, `sharesMax` | integer | no | yes | Optional share count filters. |
-| `hashtags` | string | no | yes | Optional comma-separated hashtag filter. |
-| extra JSON params | object | no | yes | Passed through via `--extra-param key=value`. |
+| `search` | string | yes | yes | Keyword reel-search term, from `--keyword`. |
+| `limit` | integer | yes | yes | Set from the keyword's UGC target count. |
+| `token` | query string | yes | yes | Apify token from `APIFY_API_KEY`. |
+| `--extra-param` overrides | JSON values | no | yes | Optional actor input overrides for debugging or provider-specific tuning. |
 
 ### Output Columns / Response Fields
 
-`ugc_items` also stores the TopYappers Videos fields directly. Per the TopYappers docs, `/api/v1/videos` does not return a URL field; `video_url` remains null for this endpoint unless the provider adds one later.
+`ugc_items` (source='instagram') stores the normalized engagement and creator metadata as first-class columns, plus DB bookkeeping. `ugc_items.id` is the database primary key.
 
-```text
-iv_id, comments, date_created_timestamp, description, hashtags, likes,
-shares, source, subtitles, user_followers, user_handle, user_id,
-video_id, views
-```
+The Instagram normalizer provides engagement + creator metadata only. Follower counts are often missing from reel-search results and are filled later by `backfill-ig-followers`. It does not supply a virality score, so `virality_score` and `virality_tier` are RECOMPUTED from engagement. Analysis fields are left null at ingestion and filled later by OpenRouter vision enrichment, which writes them to `item_enrichments`.
 
 DB-only fields:
 
@@ -194,77 +160,67 @@ id, run_id, raw_payload_id, external_id, saved_to_supabase_at
 
 Provider-specific fields that are not promoted to first-class columns are stored in `ugc_items.source_metrics` as JSONB. Full source JSON is also preserved in `raw_payloads.payload_json`.
 
-## Apify: Known-URL UGC Transcript Backfill
+OpenRouter (Gemini) vision enrichment auto-runs after live `ingest-instagram`; see the enrichment section below.
 
-- Provider: Apify
-- Actor: `tictechid/anoxvanzi-transcriber`
+## Apify: Instagram Follower Backfill
+
+- Provider: `apify:apify/instagram-profile-scraper`
 - Method: `POST`
-- Endpoint: `https://api.apify.com/v2/acts/tictechid~anoxvanzi-transcriber/run-sync-get-dataset-items`
-- Code path: `backfill-ugc-transcripts`
-- Purpose: backfill transcripts for URL-backed `ugc_items` rows when TopYappers `subtitles` is missing.
+- Endpoint: `https://api.apify.com/v2/acts/apify~instagram-profile-scraper/run-sync-get-dataset-items`
+- Code path: `backfill-ig-followers`
+- Purpose: fill the follower counts that Instagram reel-search discovery omits. Scrapes Instagram profiles by handle and writes follower counts back to `ugc_items` (source='instagram').
 
-After live TopYappers ingestion, the CLI first copies non-empty `ugc_items.subtitles` values into `ugc_transcripts` with `transcript_source = 'topyappers:subtitles'`. It then selects `ugc_items` for the same run where `video_url` is present, `subtitles` is null or empty, and no transcript row exists, and sends supported public social video URLs to Apify. The standalone `backfill-ugc-transcripts` command runs the same two-stage transcript flow. Supported URL hosts are Instagram, TikTok, YouTube, and Facebook.
-
-Transient failures (dropped connections from the synchronous actor endpoint, HTTP 429/5xx) are retried up to 3 attempts with increasing backoff before the candidate is recorded as failed; 4xx errors fail immediately. Failed candidates remain transcript-less, so re-running `backfill-ugc-transcripts` retries exactly those rows.
+The command selects `ugc_items` rows for the run where `source = 'instagram'` and the follower count is null or zero, dedupes the candidates per creator handle (one profile scrape per unique creator), and writes the resolved follower count to every matching row.
 
 ### Input Columns / Body Fields
 
 | Field | Type | Required | Used by Code | Notes |
 | --- | --- | --- | --- | --- |
-| `start_urls` | string | yes | yes | Public video URL from `ugc_items.video_url`. The actor readme mentions a single URL or array; the CLI sends one URL per actor run for predictable row-level logging. |
+| `usernames` | string[] | yes | yes | Deduped creator handles drawn from `ugc_items.handle` / `ugc_items.user_handle`. |
 | `token` | query string | yes | yes | Apify token from `APIFY_API_KEY`. |
 
 ### Output Columns / Response Fields
 
 | Response Field | Supabase Destination | Notes |
 | --- | --- | --- |
-| `transcript` | `ugc_transcripts.transcript_text` | Parsed into clean text when timestamp markers are present; raw timestamped text is preserved in `raw_payloads`. |
-| timestamp ranges in `transcript` | `ugc_transcripts.transcript_segments` | Parsed into objects with `start`, `end`, and `text` when the actor returns bracketed timestamp ranges. |
-| actor name | `ugc_transcripts.transcript_source` | Stored as `apify:tictechid/anoxvanzi-transcriber`. |
-| full dataset item JSON | `raw_payloads.payload_json` | Raw source of truth, including `status`, `durationSec`, `detected_language`, `error`, and processing timestamp. |
+| `followersCount` | `ugc_items.followers` | Resolved follower count, applied to every `ugc_items` row for that creator handle. |
+| full dataset item JSON | `raw_payloads.payload_json` | Raw source of truth. |
 
-TopYappers provider subtitles map as follows:
-
-| Response Field | Supabase Destination | Notes |
-| --- | --- | --- |
-| `ugc_items.subtitles` | `ugc_transcripts.transcript_text` | Copied when non-empty. |
-| provider name | `ugc_transcripts.transcript_source` | Stored as `topyappers:subtitles`. |
-
-One transcript row is upserted per `(ugc_item_id, transcript_source)`.
-
-## OpenRouter: Paid Ad Video Enrichment
+## OpenRouter: Video Enrichment (Paid Ads + UGC)
 
 - Provider: `openrouter:<model>` (default model `google/gemini-3-flash-preview`, override with `OPENROUTER_MODEL`)
 - Method: `POST`
 - Endpoint: `https://openrouter.ai/api/v1/chat/completions`
 - Auth: `Authorization: Bearer` header from `OPENROUTER_API_KEY`
-- Code path: `enrich-paid-ads`, auto-triggered after live `ingest-apify-ads` (`--skip-enrichment` to disable, `--enrichment-limit` / `--enrichment-timeout` to tune)
-- Purpose: one call per paid ad that both transcribes the ad video and extracts ugc_items-parity creative metadata.
+- Code paths: `enrich-paid-ads` (paid ads) and `enrich-ugc` (UGC). The paid path auto-triggers after live `ingest-apify-ads`; the UGC path auto-triggers after live `ingest-tiktok` / `ingest-instagram` (`--skip-enrichment` to disable, `--enrichment-limit` / `--enrichment-timeout` to tune)
+- Purpose: one Gemini vision call per video that both transcribes the video and extracts the trimmed creative-metadata set. The same single-call flow runs for paid ads and UGC.
 
-Candidates are `paid_ads` rows for the run with a non-null `video` URL and `analyzed_at` null. OpenRouter does not forward arbitrary video URLs to Gemini, so the code fetches the signed CDN mp4 into memory (100 MB cap, never written to disk) and sends it as a base64 `data:` URL in a `video_url` content part. Because CDN URLs are signed and expire within days, run enrichment soon after ingestion; per-row failures are logged in `source_queries` and do not stop the batch.
+Candidates are items for the run with a non-null video URL (`paid_ads.video` for paid, `ugc_items.video_url` for UGC) and no `item_enrichments` row yet. Each enrichment downloads the video into memory (100 MB cap, never written to disk), uploads it to the Supabase Storage bucket `ad-videos` (recording `storage_video_url` / `storage_thumb_url` on the item table — `paid_ads` or `ugc_items`), and sends the base64 video to OpenRouter as a `data:` URL in a `video_url` content part. Because source CDN URLs are signed and expire within days, run enrichment soon after ingestion; per-row failures are logged in `source_queries` and do not stop the batch.
 
 ### Input Columns / Body Fields
 
 | Field | Type | Required | Used by Code | Notes |
 | --- | --- | --- | --- | --- |
 | `model` | string | yes | yes | `OPENROUTER_MODEL`, default `google/gemini-3-flash-preview`. |
-| `messages[0].content[0].video_url.url` | string | yes | yes | `data:video/mp4;base64,<bytes>` fetched from `paid_ads.video`. |
-| `messages[0].content[1].text` | string | yes | yes | Extraction prompt plus ad copy context (headline, description, CTA, page name, link URL, display format). |
+| `messages[0].content[0].video_url.url` | string | yes | yes | `data:video/mp4;base64,<bytes>` fetched from `paid_ads.video` (paid) or `ugc_items.video_url` (UGC). |
+| `messages[0].content[1].text` | string | yes | yes | Extraction prompt plus available item context (for paid ads: headline, description, CTA, page name, link URL, display format; for UGC: caption/description, handle, hashtags). |
 | `response_format.json_schema` | object | yes | yes | Strict structured-output schema guaranteeing parseable JSON. |
 
 ### Output Columns / Response Fields
 
+All enrichment output is written to the polymorphic `item_enrichments` table, keyed by `(item_type, item_id)`: `item_type = 'paid_ad'` with `item_id = paid_ads.paid_ad_row_id`, or `item_type = 'ugc_item'` with `item_id = ugc_items.id`.
+
 | Response Field | Supabase Destination | Notes |
 | --- | --- | --- |
-| `transcript_text` | `paid_ad_transcripts.transcript_text` | Verbatim spoken transcript; null when the ad has no speech (no transcript row is written). |
-| `transcript_segments` | `paid_ad_transcripts.transcript_segments` | `{start, end, text}` objects in seconds. |
-| model identity | `paid_ad_transcripts.transcript_source` | Stored as `openrouter:<model>`. |
-| analysis fields | `paid_ads` analysis columns | `hook`, `persona`, `target_demographic`, `content_format`, `content_tone`, `primary_emotion`, `visual_style`, `production_quality`, `setting`, `color_palette`, `has_face`, `face_count`, `gender`, `age`, `race`, `hair_color`, `has_product`, `has_text_overlay`, `is_ai_generated`, `is_trending_format`, `brand_mentioned`, `emotional_drivers`, `market_target`, `product_category`, `creative_targeting`, `niches`, `main_category`, `content_category`, `video_topic`, `time_product_was_mentioned`. |
-| bookkeeping | `paid_ads.analysis_model`, `paid_ads.analyzed_at` | Which model ran and when. |
+| `transcript_text` | `item_enrichments.transcript_text` | Verbatim spoken transcript; null when the video has no speech. |
+| `transcript_segments` | `item_enrichments.transcript_segments` | `{start, end, text}` objects in seconds. |
+| `ai_description` | `item_enrichments.ai_description` | Model-generated description of the video. |
+| analysis fields | `item_enrichments` analysis columns | `hook`, `main_category`, `content_category`, `content_format`, `content_tone`, `primary_emotion`, `target_demographic`, `video_topic`, `visual_style`, `production_quality`, `setting`, `product_category`, `has_product`, `has_text_overlay`, `is_trending_format`, `persona`, `niches`, `emotional_drivers`, `brand_mentioned`, `time_product_was_mentioned`. |
+| bookkeeping | `item_enrichments.analysis_model`, `item_enrichments.analyzed_at` | Which model ran and when. |
 | `usage` | `api_usage.rate_limit.usage` | Token counts per call. |
 | full response JSON | `raw_payloads.payload_json` | Raw source of truth. |
 
-One transcript row is upserted per `(paid_ad_row_id, transcript_source)`.
+One row is upserted per `(item_type, item_id)`. The video upload also sets `storage_video_url` / `storage_thumb_url` on the source item table (`paid_ads` or `ugc_items`).
 
 ## Voyage AI: Item Embeddings
 
@@ -273,9 +229,9 @@ One transcript row is upserted per `(paid_ad_row_id, transcript_source)`.
 - Endpoint: `https://api.voyageai.com/v1/embeddings`
 - Auth: `Authorization: Bearer` header from `VOYAGE_API_KEY`
 - Code path: `embed-items` (standalone; requires migration `013_item_embeddings.sql`)
-- Purpose: turn the analyzed icp/format/hook text of each item into vectors for the clustering and dedupe stages.
+- Purpose: turn the enriched icp/search text of each item into vectors for the clustering and dedupe stages.
 
-Candidates are `paid_ads` rows with `analyzed_at` set and all `ugc_items` rows for the run (`--source paid|ugc|all`). For each item, up to three texts are built — `icp` from `persona` + `target_demographic`, `format` from `content_format`/`content_category`/`visual_style`/`setting`, `hook` verbatim — and spaces with no usable text are skipped. Texts are sent in batches of up to 128 with `input_type: "document"`.
+Candidates are items with an `item_enrichments` row for the run (`--source paid|ugc|all`). For each item, up to two texts are built — `icp` from `persona` + `target_demographic`, and `search` from `ai_description` + a labeled tag block + the full transcript appended — and spaces with no usable text are skipped. Texts are sent in batches of up to 128 with `input_type: "document"`.
 
 ### Input Body Fields
 
@@ -339,12 +295,11 @@ Cluster label API calls are logged in `source_queries` and `api_usage`. Raw labe
 | `keywords` | `init-run` | Claude-generated or manual keyword terms plus per-keyword paid ad and UGC target allocations. |
 | `source_queries` | all external API commands | Request/response/error logging per API page or transcript actor run. |
 | `raw_payloads` | external API commands | Preserved raw source item JSON. |
-| `paid_ads` | `ingest-apify-ads`, `enrich-paid-ads` | Apify Meta Ad Library paid ad rows; enrichment fills the analysis columns. |
-| `ugc_items` | `ingest-topyappers-viral`, `ingest-topyappers-videos` | TopYappers-shaped UGC candidate rows. Use `ingest-topyappers-viral` when `video_url` is required. |
-| `api_usage` | live LLM, ingestion, and transcript commands | Claude keyword-generation usage plus provider HTTP status, response count, selected rate-limit/usage headers, and credits used when exposed. |
-| `paid_ad_transcripts` | `enrich-paid-ads` (auto after `ingest-apify-ads`) | Paid ad transcript rows from the OpenRouter enrichment call. |
-| `ugc_transcripts` | `backfill-ugc-transcripts` | UGC transcript rows from Apify fallback results. |
-| `item_embeddings` | `embed-items` | One pgvector row per item per embedding space (icp/format/hook) per model. |
+| `paid_ads` | `ingest-apify-ads`, `enrich-paid-ads` | Apify Meta Ad Library paid ad rows; enrichment fills `storage_video_url` / `storage_thumb_url`. |
+| `ugc_items` | `ingest-tiktok`, `ingest-instagram`, `backfill-ig-followers`, `enrich-ugc` | Apify TikTok and Instagram reel UGC candidate rows; follower backfill fills Instagram follower counts; enrichment fills `storage_video_url` / `storage_thumb_url`. |
+| `api_usage` | live LLM, ingestion, and enrichment commands | Claude keyword-generation usage plus provider HTTP status, response count, selected rate-limit/usage headers, and credits used when exposed. |
+| `item_enrichments` | `enrich-paid-ads` (auto after `ingest-apify-ads`), `enrich-ugc` (auto after `ingest-tiktok` / `ingest-instagram`) | Polymorphic transcript + analysis rows from the OpenRouter vision call, one per `(item_type, item_id)` for paid ads and UGC. |
+| `item_embeddings` | `embed-items` | One pgvector row per item per embedding space (icp/search) per model. |
 | `item_clusters` | `cluster-items` | One cluster assignment per embedded item for the ICP space. |
 | `clusters` | `cluster-items` | Cluster summaries, centroids, exemplars, and optional OpenRouter labels. |
 
