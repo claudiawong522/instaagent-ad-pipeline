@@ -60,7 +60,7 @@ def enrich_ugc_items(
     dry_run: bool,
     input_json: Path | None = None,
     timeout: int = 300,
-    concurrency: int = 1,
+    concurrency: int = 32,
 ) -> EnrichmentResult:
     if supabase is None:
         raise RuntimeError("Supabase credentials are required to load UGC enrichment candidates.")

@@ -219,7 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     enrich.add_argument("--run-id", required=True)
     enrich.add_argument("--limit", type=int, default=100)
     enrich.add_argument("--timeout", type=int, default=300)
-    enrich.add_argument("--concurrency", type=int, default=1, help="Number of ad videos to enrich in parallel (I/O-bound).")
+    enrich.add_argument("--concurrency", type=int, default=32, help="Number of ad videos to enrich in parallel (I/O-bound). Matches the Supabase pool_maxsize.")
     enrich.add_argument("--dry-run", action="store_true")
     enrich.add_argument(
         "--input-json",
@@ -234,7 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
     enrich_ugc.add_argument("--run-id", required=True)
     enrich_ugc.add_argument("--limit", type=int, default=100)
     enrich_ugc.add_argument("--timeout", type=int, default=300)
-    enrich_ugc.add_argument("--concurrency", type=int, default=1, help="Number of UGC videos to enrich in parallel (I/O-bound).")
+    enrich_ugc.add_argument("--concurrency", type=int, default=32, help="Number of UGC videos to enrich in parallel (I/O-bound). Matches the Supabase pool_maxsize.")
     enrich_ugc.add_argument("--dry-run", action="store_true")
     enrich_ugc.add_argument(
         "--input-json",
@@ -322,8 +322,8 @@ def add_ugc_enrichment_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=1,
-        help="Number of UGC videos to enrich in parallel after live ingestion (I/O-bound).",
+        default=32,
+        help="Number of UGC videos to enrich in parallel after live ingestion (I/O-bound). Matches the Supabase pool_maxsize.",
     )
 
 
@@ -347,8 +347,8 @@ def add_paid_ad_enrichment_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=1,
-        help="Number of ad videos to enrich in parallel after live ingestion (I/O-bound).",
+        default=32,
+        help="Number of ad videos to enrich in parallel after live ingestion (I/O-bound). Matches the Supabase pool_maxsize.",
     )
 
 
@@ -384,7 +384,7 @@ def with_ugc_enrichment(
         dry_run=False,
         input_json=None,
         timeout=args.enrichment_timeout,
-        concurrency=getattr(args, "concurrency", 1),
+        concurrency=getattr(args, "concurrency", 32),
     )
     return {"ingestion": ingestion_result, "enrichment": enrichment}
 
@@ -413,7 +413,7 @@ def with_paid_ad_enrichment(
         dry_run=False,
         input_json=None,
         timeout=args.enrichment_timeout,
-        concurrency=getattr(args, "concurrency", 1),
+        concurrency=getattr(args, "concurrency", 32),
     )
     return {"ingestion": ingestion_result, "enrichment": enrichment}
 
