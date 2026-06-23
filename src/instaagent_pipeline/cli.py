@@ -7,10 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from .apify_ads import ingest_apify_ads
-from .apify_transcripts import (
-    backfill_ugc_transcripts_from_provider_subtitles,
-    backfill_ugc_transcripts_with_apify,
-)
 from .apify_ugc import backfill_instagram_followers, ingest_instagram, ingest_tiktok
 from .config import Config
 from .ad_enrichment import enrich_paid_ads
@@ -25,7 +21,6 @@ from .keywords import (
 )
 from .ingestion import utc_now_iso
 from .supabase_client import SupabaseClient
-from .topyappers import ingest_topyappers_videos, ingest_topyappers_viral
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -34,8 +29,8 @@ def main(argv: list[str] | None = None) -> int:
     config = Config.from_env()
     dry_run = getattr(args, "dry_run", False)
     dry_run_needs_supabase = args.command in {
-        "backfill-ugc-transcripts",
         "enrich-paid-ads",
+        "enrich-ugc",
         "embed-items",
         "cluster-items",
     }
@@ -92,6 +87,12 @@ def main(argv: list[str] | None = None) -> int:
                 target_field="target_ugc_count",
                 ingest_func=ingest_func,
             )
+        result = with_ugc_enrichment(
+            result,
+            config=config,
+            supabase=supabase,
+            args=args,
+        )
     elif args.command == "enrich-ugc":
         result = enrich_ugc_items(
             config=config,
@@ -101,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             input_json=args.input_json,
             timeout=args.timeout,
+            concurrency=args.concurrency,
         )
     elif args.command == "backfill-ig-followers":
         result = backfill_instagram_followers(
@@ -111,82 +113,6 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             input_json=args.input_json,
         )
-    elif args.command == "ingest-topyappers-viral":
-        if args.keyword:
-            result = ingest_topyappers_viral(
-                config=config,
-                supabase=supabase,
-                run_id=args.run_id,
-                keyword=args.keyword,
-                target_count=args.target_count,
-                page_size=args.page_size,
-                dry_run=args.dry_run,
-                input_json=args.input_json,
-                extra_params=parse_extra_params(args.extra_param),
-            )
-        else:
-            result = ingest_allocated_keywords(
-                config=config,
-                supabase=supabase,
-                args=args,
-                target_field="target_ugc_count",
-                ingest_func=ingest_topyappers_viral,
-            )
-        result = with_ugc_transcript_backfill(
-            result,
-            config=config,
-            supabase=supabase,
-            args=args,
-        )
-    elif args.command == "ingest-topyappers-videos":
-        if args.keyword:
-            result = ingest_topyappers_videos(
-                config=config,
-                supabase=supabase,
-                run_id=args.run_id,
-                keyword=args.keyword,
-                target_count=args.target_count,
-                page_size=args.page_size,
-                dry_run=args.dry_run,
-                input_json=args.input_json,
-                extra_params=parse_extra_params(args.extra_param),
-            )
-        else:
-            result = ingest_allocated_keywords(
-                config=config,
-                supabase=supabase,
-                args=args,
-                target_field="target_ugc_count",
-                ingest_func=ingest_topyappers_videos,
-            )
-        result = with_ugc_transcript_backfill(
-            result,
-            config=config,
-            supabase=supabase,
-            args=args,
-        )
-    elif args.command == "backfill-ugc-transcripts":
-        provider_subtitles = backfill_ugc_transcripts_from_provider_subtitles(
-            supabase=supabase,
-            run_id=args.run_id,
-            limit=args.limit,
-            dry_run=args.dry_run,
-        )
-        apify = None
-        if not args.skip_apify:
-            apify = backfill_ugc_transcripts_with_apify(
-                config=config,
-                supabase=supabase,
-                run_id=args.run_id,
-                limit=args.limit,
-                dry_run=args.dry_run,
-                input_json=args.input_json,
-                timeout=args.timeout,
-            )
-        result = {
-            "provider_subtitles": provider_subtitles,
-            "apify": apify,
-        }
     elif args.command == "enrich-paid-ads":
         result = enrich_paid_ads(
             config=config,
@@ -196,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             input_json=args.input_json,
             timeout=args.timeout,
+            concurrency=args.concurrency,
         )
     elif args.command == "embed-items":
         result = embed_items(
@@ -261,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ingest UGC from the Apify clockworks/tiktok-scraper by keyword into ugc_items.",
     )
     add_ingest_common_args(tiktok)
+    add_ugc_enrichment_args(tiktok)
     tiktok.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
     tiktok.add_argument("--target-count", type=int, default=2500)
     tiktok.add_argument("--page-size", type=int, default=0)
@@ -270,6 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ingest UGC reels from the Apify data-slayer/instagram-search-reels by keyword into ugc_items.",
     )
     add_ingest_common_args(instagram)
+    add_ugc_enrichment_args(instagram)
     instagram.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
     instagram.add_argument("--target-count", type=int, default=2500)
     instagram.add_argument("--page-size", type=int, default=0)
@@ -283,48 +212,14 @@ def build_parser() -> argparse.ArgumentParser:
     ig_followers.add_argument("--dry-run", action="store_true")
     ig_followers.add_argument("--input-json", type=Path, help="Use a saved profile-scraper response instead of calling Apify.")
 
-    viral = subparsers.add_parser(
-        "ingest-topyappers-viral",
-        help="Ingest URL-backed TopYappers viral-content candidates.",
-    )
-    add_ingest_common_args(viral)
-    add_ugc_transcript_args(viral)
-    viral.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
-    viral.add_argument("--target-count", type=int, default=2500)
-    viral.add_argument("--page-size", type=int, default=100)
-
-    videos = subparsers.add_parser(
-        "ingest-topyappers-videos",
-        help="Ingest TopYappers metadata-only video records. This endpoint does not return video URLs.",
-    )
-    add_ingest_common_args(videos)
-    add_ugc_transcript_args(videos)
-    videos.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
-    videos.add_argument("--target-count", type=int, default=2500)
-    videos.add_argument("--page-size", type=int, default=100)
-
-    transcripts = subparsers.add_parser(
-        "backfill-ugc-transcripts",
-        help="Backfill missing UGC transcripts from public social video URLs using Apify.",
-    )
-    transcripts.add_argument("--run-id", required=True)
-    transcripts.add_argument("--limit", type=int, default=100)
-    transcripts.add_argument("--timeout", type=int, default=300)
-    transcripts.add_argument("--dry-run", action="store_true")
-    transcripts.add_argument("--skip-apify", action="store_true")
-    transcripts.add_argument(
-        "--input-json",
-        type=Path,
-        help="Use a saved Apify dataset response instead of calling Apify. Intended for one-row tests.",
-    )
-
     enrich = subparsers.add_parser(
         "enrich-paid-ads",
-        help="Transcribe and analyze paid ad videos via OpenRouter into paid_ad_transcripts and paid_ads columns.",
+        help="Transcribe and analyze paid ad videos via OpenRouter into item_enrichments.",
     )
     enrich.add_argument("--run-id", required=True)
     enrich.add_argument("--limit", type=int, default=100)
     enrich.add_argument("--timeout", type=int, default=300)
+    enrich.add_argument("--concurrency", type=int, default=1, help="Number of ad videos to enrich in parallel (I/O-bound).")
     enrich.add_argument("--dry-run", action="store_true")
     enrich.add_argument(
         "--input-json",
@@ -334,11 +229,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     enrich_ugc = subparsers.add_parser(
         "enrich-ugc",
-        help="Transcribe and analyze UGC videos via OpenRouter into ugc_transcripts and ugc_items columns.",
+        help="Transcribe and analyze UGC videos via OpenRouter into item_enrichments.",
     )
     enrich_ugc.add_argument("--run-id", required=True)
     enrich_ugc.add_argument("--limit", type=int, default=100)
     enrich_ugc.add_argument("--timeout", type=int, default=300)
+    enrich_ugc.add_argument("--concurrency", type=int, default=1, help="Number of UGC videos to enrich in parallel (I/O-bound).")
     enrich_ugc.add_argument("--dry-run", action="store_true")
     enrich_ugc.add_argument(
         "--input-json",
@@ -348,7 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     embed = subparsers.add_parser(
         "embed-items",
-        help="Generate icp/format/hook embeddings for analyzed items via Voyage AI into item_embeddings.",
+        help="Generate icp/search embeddings for analyzed items via Voyage AI into item_embeddings.",
     )
     embed.add_argument("--run-id", required=True)
     embed.add_argument("--source", choices=["paid", "ugc", "all"], default="all")
@@ -356,7 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--space",
         choices=[*ALL_SPACES, "all"],
         default="all",
-        help="Embedding space(s) to build. 'all' builds icp/format/hook/search; use 'search' to backfill only the search vectors.",
+        help="Embedding space(s) to build. 'all' builds icp/search; use 'search' to backfill only the search vectors.",
     )
     embed.add_argument("--limit", type=int, default=1000, help="Maximum items to fetch per source.")
     embed.add_argument("--model", help="Voyage embedding model. Defaults to EMBEDDING_MODEL or voyage-4-lite.")
@@ -406,22 +302,28 @@ def add_ingest_common_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_ugc_transcript_args(parser: argparse.ArgumentParser) -> None:
+def add_ugc_enrichment_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--skip-transcript-backfill",
+        "--skip-enrichment",
         action="store_true",
-        help="Do not copy TopYappers subtitles or call Apify after live TopYappers ingestion.",
+        help="Do not transcribe and analyze UGC videos via OpenRouter after live ingestion.",
     )
     parser.add_argument(
-        "--transcript-limit",
+        "--enrichment-limit",
         type=int,
-        help="Maximum number of rows to process in each transcript stage. Defaults to the number fetched.",
+        help="Maximum number of UGC items to enrich. Defaults to the number fetched.",
     )
     parser.add_argument(
-        "--transcript-timeout",
+        "--enrichment-timeout",
         type=int,
         default=300,
-        help="Apify actor timeout in seconds per video URL.",
+        help="OpenRouter request timeout in seconds per UGC video (covers the video download too).",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Number of UGC videos to enrich in parallel after live ingestion (I/O-bound).",
     )
 
 
@@ -442,6 +344,12 @@ def add_paid_ad_enrichment_args(parser: argparse.ArgumentParser) -> None:
         default=300,
         help="OpenRouter request timeout in seconds per ad video (covers the video download too).",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Number of ad videos to enrich in parallel after live ingestion (I/O-bound).",
+    )
 
 
 def build_supabase(config: Config, *, dry_run: bool) -> SupabaseClient | None:
@@ -452,44 +360,33 @@ def build_supabase(config: Config, *, dry_run: bool) -> SupabaseClient | None:
     return SupabaseClient(config.supabase_url, config.supabase_key)
 
 
-def with_ugc_transcript_backfill(
+def with_ugc_enrichment(
     ingestion_result: Any,
     *,
     config: Config,
     supabase: SupabaseClient | None,
     args: argparse.Namespace,
 ) -> Any:
-    if args.dry_run or args.skip_transcript_backfill:
+    if args.dry_run or args.skip_enrichment:
         return ingestion_result
     if supabase is None:
-        raise RuntimeError("Supabase credentials are required for transcript backfill.")
+        raise RuntimeError("Supabase credentials are required for UGC enrichment.")
 
-    transcript_limit = args.transcript_limit or fetched_count(ingestion_result)
-    if transcript_limit < 1:
-        return {"ingestion": ingestion_result, "transcripts": None}
+    enrichment_limit = args.enrichment_limit or fetched_count(ingestion_result)
+    if enrichment_limit < 1:
+        return {"ingestion": ingestion_result, "enrichment": None}
 
-    provider_subtitles = backfill_ugc_transcripts_from_provider_subtitles(
-        supabase=supabase,
-        run_id=args.run_id,
-        limit=transcript_limit,
-        dry_run=False,
-    )
-    apify = backfill_ugc_transcripts_with_apify(
+    enrichment = enrich_ugc_items(
         config=config,
         supabase=supabase,
         run_id=args.run_id,
-        limit=transcript_limit,
+        limit=enrichment_limit,
         dry_run=False,
         input_json=None,
-        timeout=args.transcript_timeout,
+        timeout=args.enrichment_timeout,
+        concurrency=getattr(args, "concurrency", 1),
     )
-    return {
-        "ingestion": ingestion_result,
-        "transcripts": {
-            "provider_subtitles": provider_subtitles,
-            "apify": apify,
-        },
-    }
+    return {"ingestion": ingestion_result, "enrichment": enrichment}
 
 
 def with_paid_ad_enrichment(
@@ -516,6 +413,7 @@ def with_paid_ad_enrichment(
         dry_run=False,
         input_json=None,
         timeout=args.enrichment_timeout,
+        concurrency=getattr(args, "concurrency", 1),
     )
     return {"ingestion": ingestion_result, "enrichment": enrichment}
 

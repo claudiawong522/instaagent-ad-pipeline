@@ -72,7 +72,9 @@ def generate_keyword_allocations(
             "Aim for the sweet spot: broad enough that the discovery APIs return results, specific enough that "
             "those results stay on-topic (adjacent items — a face-wash or moisturizer ad for 'cleanser' — are fine "
             "as references). Cover DISTINCT angles — the product, its category, and its core problem or benefit — "
-            "not synonyms of one word. Prefer specific product, category, or problem nouns over vague ones. "
+            "not synonyms of one word. Lean toward broad, widely-searched category-level nouns (e.g. "
+            "'skincare', 'cleanser', 'acne') rather than narrow niche terms (e.g. 'niacinamide', 'azelaic'); "
+            "a slightly broader noun returns more discovery results while staying on-topic. "
             "Return strict JSON only. Do not include markdown."
         ),
         "messages": [
@@ -208,10 +210,11 @@ Target UGC videos: {target_ugc_count}
 
 Create 3-5 single-word search keywords for provider API discovery.
 Aim for 4 keywords. Each keyword_text must be exactly one word with no spaces.
-Use concrete, common single-word nouns (e.g. cleanser, moisturizer, serum, toner, niacinamide, acne).
+Use concrete, common single-word nouns (e.g. cleanser, moisturizer, serum, toner, acne).
 Never concatenate words into one token (write "cleanser", never "facewash" or "skincareroutine").
 Avoid adjectives and generic descriptors (e.g. gentle, clean, fresh, natural, glow) — as single words they
-match unrelated trending content. Prefer specific nouns over broad ones.
+match unrelated trending content. Favor broad, common category-level nouns (e.g. skincare, cleanser, acne)
+over narrow niche terms (e.g. niacinamide).
 
 Allocate target_paid_count and target_ugc_count across the keywords.
 The sum of all target_paid_count values must equal {target_paid_count}.
