@@ -246,6 +246,12 @@ create index if not exists item_embeddings_search_hnsw
   on item_embeddings using hnsw (embedding vector_cosine_ops)
   where space = 'search';
 
+-- The search path also queries the 'icp' space (see api/search.py); index it too so
+-- that KNN stays sub-linear instead of a full scan (see migrations/019).
+create index if not exists item_embeddings_icp_hnsw
+  on item_embeddings using hnsw (embedding vector_cosine_ops)
+  where space = 'icp';
+
 create or replace function match_item_embeddings(
   p_query vector(1024),
   p_space text default 'search',
