@@ -14,6 +14,7 @@ from .supabase_client import SupabaseClient
 VOYAGE_PROVIDER = "voyage"
 VOYAGE_BASE_URL = "https://api.voyageai.com"
 VOYAGE_EMBEDDINGS_ENDPOINT = "/v1/embeddings"
+VOYAGE_RERANK_ENDPOINT = "/v1/rerank"
 # Voyage accepts up to 1000 inputs per request; 128 keeps request bodies small.
 EMBEDDING_BATCH_SIZE = 128
 
@@ -25,11 +26,15 @@ ALL_SPACES = ("icp", "search")
 # reads persona + target_demographic; the search builder reads ai_description, the
 # SEARCH_TAG_FIELDS tag block, and the full transcript_text. item_id is the polymorphic
 # key (= paid_ads.paid_ad_row_id or ugc_items.id).
-ENRICHMENT_SELECT_COLUMNS = (
+# Base columns that always exist. target_generation is a Phase 4 column (migration 018);
+# it is selected when present and skipped via the 400-fallback in _select_enrichment_rows
+# when the migration hasn't been applied yet, so embedding never breaks pre-migration.
+ENRICHMENT_SELECT_COLUMNS_BASE = (
     "item_id,persona,target_demographic,ai_description,content_format,main_category,"
     "content_category,product_category,video_topic,niches,hook,setting,primary_emotion,"
-    "brand_mentioned,transcript_text"
+    "brand_mentioned,transcript_text,content_tone,visual_style"
 )
+ENRICHMENT_SELECT_COLUMNS = ENRICHMENT_SELECT_COLUMNS_BASE + ",target_generation"
 
 
 @dataclass
@@ -81,28 +86,10 @@ def embed_items(
     result = EmbedResult()
     candidates: list[EmbeddingCandidate] = []
     if source in {"paid", "all"}:
-        rows = supabase.select(
-            "item_enrichments",
-            {
-                "select": ENRICHMENT_SELECT_COLUMNS,
-                "run_id": f"eq.{run_id}",
-                "item_type": "eq.paid_ad",
-                "order": "created_at.asc",
-                "limit": str(limit),
-            },
-        )
+        rows = _select_enrichment_rows(supabase, run_id=run_id, item_type="paid_ad", limit=limit)
         collect_candidates(rows, item_type="paid_ad", id_column="item_id", spaces=target_spaces, existing=existing, result=result, out=candidates)
     if source in {"ugc", "all"}:
-        rows = supabase.select(
-            "item_enrichments",
-            {
-                "select": ENRICHMENT_SELECT_COLUMNS,
-                "run_id": f"eq.{run_id}",
-                "item_type": "eq.ugc_item",
-                "order": "created_at.asc",
-                "limit": str(limit),
-            },
-        )
+        rows = _select_enrichment_rows(supabase, run_id=run_id, item_type="ugc_item", limit=limit)
         collect_candidates(rows, item_type="ugc_item", id_column="item_id", spaces=target_spaces, existing=existing, result=result, out=candidates)
 
     result.candidates = len(candidates)
@@ -141,6 +128,25 @@ def embed_items(
         result.written += written
 
     return result
+
+
+def _select_enrichment_rows(
+    supabase: SupabaseClient, *, run_id: str, item_type: str, limit: int
+) -> list[dict[str, Any]]:
+    """Select enrichment rows, falling back to base columns if the Phase 4 columns
+    (target_generation) don't exist yet — keeps embedding working pre-migration-018."""
+    params = {
+        "run_id": f"eq.{run_id}",
+        "item_type": f"eq.{item_type}",
+        "order": "created_at.asc",
+        "limit": str(limit),
+    }
+    try:
+        return supabase.select("item_enrichments", {"select": ENRICHMENT_SELECT_COLUMNS, **params})
+    except HttpClientError as exc:
+        if exc.status == 400:
+            return supabase.select("item_enrichments", {"select": ENRICHMENT_SELECT_COLUMNS_BASE, **params})
+        raise
 
 
 def collect_candidates(
@@ -346,10 +352,28 @@ def batched(items: list[EmbeddingCandidate], size: int) -> list[list[EmbeddingCa
     return [items[start : start + size] for start in range(0, len(items), size)]
 
 
+# The icp ("audience & tone") space embeds who the content is for and its vibe, so
+# queries about audience/generation/tone (genz, luxury, scientific, professional) have
+# vocabulary to match — these attributes are absent from the literal-visual search space.
+# Field order is fixed so cosine distances stay comparable. target_generation is read
+# None-safely; it becomes populated once the Phase 4 enrichment pass lands.
+ICP_TAG_FIELDS = (
+    ("persona", "persona"),
+    ("audience", "target_demographic"),
+    ("generation", "target_generation"),
+    ("tone", "content_tone"),
+    ("style", "visual_style"),
+    ("emotion", "primary_emotion"),
+)
+
+
 def build_icp_text(row: dict[str, Any]) -> str | None:
-    parts = [flatten_jsonish(row.get("persona")), clean_text(row.get("target_demographic"))]
-    text = "; ".join(part for part in parts if part)
-    return text or None
+    tags = []
+    for label, column in ICP_TAG_FIELDS:
+        value = flatten_jsonish(row.get(column))
+        if value:
+            tags.append(f"{label}: {value}")
+    return "; ".join(tags) or None
 
 
 # The search space embeds the rich vision-generated ai_description plus a compact
@@ -414,6 +438,48 @@ def embed_query(
         timeout=timeout,
     )
     return parse_voyage_response(response.body, expected_count=1)[0]
+
+
+def rerank(
+    config: Config,
+    query: str,
+    documents: list[str],
+    *,
+    model: str | None = None,
+    top_k: int | None = None,
+    timeout: int = 30,
+) -> list[tuple[int, float]]:
+    """Rerank documents against the query with Voyage's cross-encoder.
+
+    Returns (original_index, relevance_score) pairs sorted by score descending. The
+    score is calibrated across queries (unlike cosine), so it can be gated with a
+    fixed threshold. Returns [] for an empty document list.
+    """
+    if not documents:
+        return []
+    rerank_model = model or config.rerank_model
+    if not config.voyage_api_key:
+        raise RuntimeError("VOYAGE_API_KEY is required to rerank search results.")
+    body: dict[str, Any] = {"query": query, "documents": documents, "model": rerank_model}
+    if top_k is not None:
+        body["top_k"] = top_k
+    response = request_json(
+        "POST",
+        f"{VOYAGE_BASE_URL}{VOYAGE_RERANK_ENDPOINT}",
+        headers={"Authorization": f"Bearer {config.voyage_api_key}"},
+        body=body,
+        timeout=timeout,
+    )
+    data = response.body.get("data") if isinstance(response.body, dict) else None
+    if not isinstance(data, list):
+        raise RuntimeError("Voyage rerank response is missing the data array.")
+    pairs = [
+        (int(entry["index"]), float(entry["relevance_score"]))
+        for entry in data
+        if isinstance(entry, dict) and "index" in entry and "relevance_score" in entry
+    ]
+    pairs.sort(key=lambda pair: pair[1], reverse=True)
+    return pairs
 
 
 def clean_text(value: Any) -> str | None:

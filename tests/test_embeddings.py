@@ -28,7 +28,7 @@ def test_build_icp_text_combines_persona_and_target_demographic() -> None:
         "persona": "busy mom with sensitive skin",
         "target_demographic": "women 25-34",
     }
-    assert build_icp_text(row) == "busy mom with sensitive skin; women 25-34"
+    assert build_icp_text(row) == "persona: busy mom with sensitive skin; audience: women 25-34"
 
 
 def test_build_icp_text_flattens_jsonb_persona() -> None:
@@ -36,7 +36,7 @@ def test_build_icp_text_flattens_jsonb_persona() -> None:
         "persona": {"segment": "skincare beginners", "pain": ["redness", "dryness"]},
         "target_demographic": None,
     }
-    assert build_icp_text(row) == "pain: redness, dryness; segment: skincare beginners"
+    assert build_icp_text(row) == "persona: pain: redness, dryness; segment: skincare beginners"
 
 
 def test_build_icp_text_returns_none_without_signal() -> None:
@@ -145,7 +145,7 @@ def test_collect_candidates_yields_icp_and_search_for_complete_row() -> None:
 
     # An item now yields up to 2 candidates: icp and search.
     assert [candidate.space for candidate in out] == ["icp", "search"]
-    assert out[0].source_text == "gym goers; men 18-34"
+    assert out[0].source_text == "persona: gym goers; audience: men 18-34"
     assert out[1].source_text.startswith("A short demo of a protein shake.")
     assert "format: demo" in out[1].source_text
     assert result.skipped_existing == 0

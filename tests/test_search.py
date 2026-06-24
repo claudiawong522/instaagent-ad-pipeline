@@ -92,6 +92,16 @@ class FakeSupabase:
 @pytest.fixture(autouse=True)
 def _no_voyage(monkeypatch):
     monkeypatch.setattr(search_module, "embed_query", lambda *a, **k: [0.1, 0.2, 0.3, 0.4])
+    # Rerank deterministically: preserve recall order with descending scores above the
+    # default 0.5 gate, so tests exercise the gate/pool logic without a network call.
+    monkeypatch.setattr(
+        search_module,
+        "rerank",
+        lambda config, query, documents, **k: [(i, 0.9 - 0.05 * i) for i in range(len(documents))],
+    )
+    # expand_query has no OpenRouter key in the test config, so it returns the raw query;
+    # pin it anyway to keep tests hermetic.
+    monkeypatch.setattr(search_module, "expand_query", lambda config, query: query)
 
 
 def test_search_ranks_hydrates_and_attaches_transcripts() -> None:
@@ -109,7 +119,7 @@ def test_search_ranks_hydrates_and_attaches_transcripts() -> None:
     assert ugc["platform"] == "tiktok"
     assert ugc["video_url"] == "https://store/u1.mp4"
     assert ugc["views"] == 321200
-    assert ugc["similarity"] == 0.91
+    assert ugc["similarity"] == 0.9  # now the rerank score, not cosine
     # Enrichment fields + transcript hydrate from item_enrichments (same output keys).
     assert ugc["ai_description"] == "ASMR cleanser pump."
     assert ugc["hook"] == "Watch this pump"

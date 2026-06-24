@@ -25,6 +25,20 @@ class Config:
     # 0.30 keeps a bare "watermelon"'s on-topic hits (~0.30-0.50) and the generic
     # filler below it, while still returning nothing for unrelated queries.
     search_min_similarity: float = 0.30
+    # Reranker (Voyage cross-encoder) — the calibrated relevance gate that replaces
+    # the length-sensitive cosine floor. Candidates are pulled from both embedding
+    # spaces with no cosine floor, then reranked; only results scoring at or above
+    # rerank_min_score are returned (variable count), capped by the search limit.
+    rerank_model: str = "rerank-2.5"
+    rerank_min_score: float = 0.5
+    # How many candidates to pull per embedding space before reranking (a cost/speed
+    # ceiling, not the answer count). Must be >= corpus size to avoid truncating broad
+    # queries — at ~93 items, 50/space silently capped "skincare" recall. 100 covers the
+    # current corpus fully and is a sane ceiling as it grows (rerank-2.5 is cheap).
+    rerank_candidate_pool: int = 100
+    # Model used to expand a short query into a multi-concept query before embedding
+    # (fixes short-query cosine dilution). Reuses the OpenRouter stack.
+    query_expansion_model: str = "google/gemini-3-flash-preview"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -43,6 +57,10 @@ class Config:
             voyage_api_key=os.getenv("VOYAGE_API_KEY"),
             embedding_model=os.getenv("EMBEDDING_MODEL", "voyage-4-lite"),
             search_min_similarity=float(os.getenv("SEARCH_MIN_SIMILARITY", "0.30")),
+            rerank_model=os.getenv("RERANK_MODEL", "rerank-2.5"),
+            rerank_min_score=float(os.getenv("RERANK_MIN_SCORE", "0.5")),
+            rerank_candidate_pool=int(os.getenv("RERANK_CANDIDATE_POOL", "100")),
+            query_expansion_model=os.getenv("QUERY_EXPANSION_MODEL", "google/gemini-3-flash-preview"),
         )
 
 

@@ -13,12 +13,18 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from ..config import Config
-from ..embeddings import embed_query, vector_literal
+from ..embeddings import embed_query, rerank, vector_literal
+from ..http_client import HttpClientError, request_json
 from ..supabase_client import SupabaseClient
 
+OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# running_duration (days the ad has been live, the verified-populated column — NOT the
+# legacy running_duration_days) is the paid-ad performance metric, the analog of UGC
+# virality. Exposed as `days_live` on the result.
 PAID_HYDRATE_COLUMNS = (
     "paid_ad_row_id,run_id,name,headline,description,publisher_platform,storage_video_url,"
-    "storage_thumb_url,video,thumbnail,image,link_url"
+    "storage_thumb_url,video,thumbnail,image,link_url,running_duration"
 )
 UGC_HYDRATE_COLUMNS = (
     "id,run_id,handle,user_handle,nickname,source,followers,views,likes,virality_score,"
@@ -41,14 +47,15 @@ def search_ads(
     run_id: str | None = None,
     min_virality: float | None = None,
     min_views: int | None = None,
-    limit: int | None = 20,
+    min_days_live: float | None = None,
+    languages: list[str] | None = None,
+    age_brackets: list[str] | None = None,
+    price_tier: str | None = None,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    # limit=None means "every match" (capped only by MAX_RESULTS). With a limit,
-    # over-fetch so secondary (platform/virality/views) filters still leave `limit` rows.
-    pool = MAX_RESULTS if limit is None else min(200, max(limit * 4, 40))
-
     # Empty query => browse mode: return all ads (filtered) instead of a vector search.
     if not query.strip():
+        pool = MAX_RESULTS if limit is None else min(200, max(limit * 4, 40))
         return _browse_ads(
             supabase,
             item_type=item_type,
@@ -56,39 +63,73 @@ def search_ads(
             run_id=run_id,
             min_virality=min_virality,
             min_views=min_views,
+            min_days_live=min_days_live,
+            languages=languages,
+            age_brackets=age_brackets,
+            price_tier=price_tier,
             limit=limit,
             pool=pool,
         )
 
-    vector = embed_query(config, query)
-    ranked = supabase.rpc(
-        "match_item_embeddings",
-        {
-            "p_query": vector_literal(vector),
-            "p_space": "search",
-            "p_item_type": item_type,
-            "p_model": config.embedding_model,
-            "p_run_id": run_id,
-            "p_limit": pool,
-            "p_min_similarity": config.search_min_similarity,
-        },
-    )
+    # Recall: expand the query (fixes short-query cosine dilution), embed it, and pull
+    # candidates from BOTH embedding spaces with no cosine floor. The reranker — not the
+    # cosine score — decides relevance, so recall is deliberately generous.
+    expanded = expand_query(config, query)
+    vector = embed_query(config, expanded)
+    vector_text = vector_literal(vector)
+
+    candidate_docs: dict[tuple[str, str], str] = {}
+    seen_order: list[tuple[str, str]] = []
+    for space in ("search", "icp"):
+        ranked = supabase.rpc(
+            "match_item_embeddings",
+            {
+                "p_query": vector_text,
+                "p_space": space,
+                "p_item_type": item_type,
+                "p_model": config.embedding_model,
+                "p_run_id": run_id,
+                "p_limit": config.rerank_candidate_pool,
+                "p_min_similarity": 0.0,
+            },
+        )
+        for row in ranked:
+            it = row.get("item_type")
+            iid = row.get("item_id")
+            if not it or not iid:
+                continue
+            key = (str(it), str(iid))
+            text = (row.get("source_text") or "").strip()
+            if key not in candidate_docs:
+                candidate_docs[key] = text
+                seen_order.append(key)
+            elif text and text not in candidate_docs[key]:
+                # Same item matched in both spaces — give the reranker the union of what
+                # each space embedded (content description + audience/tone text).
+                candidate_docs[key] = f"{candidate_docs[key]}\n\n{text}"
+
+    if not seen_order:
+        return []
+
+    # Rerank with the ORIGINAL query (the cross-encoder reads the natural query best;
+    # the expansion was only to widen recall). Gate by the calibrated rerank score, which
+    # gives an honest variable result count — not a fixed top-N.
+    documents = [candidate_docs[key] for key in seen_order]
+    reranked = rerank(config, query, documents, top_k=len(documents))
 
     order: list[tuple[str, str]] = []
     similarity: dict[tuple[str, str], Any] = {}
-    paid_ids: list[str] = []
-    ugc_ids: list[str] = []
-    for row in ranked:
-        it = row.get("item_type")
-        iid = row.get("item_id")
-        if not it or not iid:
+    for idx, score in reranked:
+        if score < config.rerank_min_score:
             continue
-        key = (str(it), str(iid))
-        if key in similarity:
-            continue
-        similarity[key] = row.get("similarity")
+        key = seen_order[idx]
         order.append(key)
-        (paid_ids if it == "paid_ad" else ugc_ids).append(str(iid))
+        similarity[key] = score
+    if not order:
+        return []
+
+    paid_ids = [iid for it, iid in order if it == "paid_ad"]
+    ugc_ids = [iid for it, iid in order if it == "ugc_item"]
 
     with ThreadPoolExecutor(max_workers=4) as ex:
         f_paid = ex.submit(_hydrate, supabase, "paid_ads", "paid_ad_row_id", paid_ids, PAID_HYDRATE_COLUMNS)
@@ -99,8 +140,47 @@ def search_ads(
 
     return _assemble(
         order, paid, ugc, paid_enr, ugc_enr, similarity,
-        platform=platform, min_virality=min_virality, min_views=min_views, limit=limit,
+        platform=platform, min_virality=min_virality, min_views=min_views,
+        min_days_live=min_days_live, languages=languages, age_brackets=age_brackets,
+        price_tier=price_tier, limit=limit,
     )
+
+
+def expand_query(config: Config, query: str) -> str:
+    """Expand a short query into a multi-concept string to widen embedding recall.
+
+    A bare one-word query ("genz") produces a concentrated vector that mismatches the
+    multi-concept document vectors; expanding it ("gen z, young, casual, trendy") closes
+    that gap. Best-effort: any failure falls back to the raw query so search never breaks.
+    """
+    if not config.openrouter_api_key:
+        return query
+    prompt = (
+        "Expand this short video-search query into a concise comma-separated list of "
+        "synonyms and closely related concepts (audience, tone, format, product) useful "
+        "for semantic retrieval. Return ONLY the comma-separated terms, no explanation.\n\n"
+        f"Query: {query}"
+    )
+    try:
+        response = request_json(
+            "POST",
+            OPENROUTER_CHAT_URL,
+            headers={"Authorization": f"Bearer {config.openrouter_api_key}"},
+            body={
+                "model": config.query_expansion_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 80,
+            },
+            timeout=15,
+        )
+        choices = response.body.get("choices") if isinstance(response.body, dict) else None
+        if isinstance(choices, list) and choices:
+            content = (choices[0].get("message") or {}).get("content")
+            if isinstance(content, str) and content.strip():
+                return f"{query}, {content.strip()}"
+    except (HttpClientError, RuntimeError, KeyError, IndexError, TypeError):
+        pass
+    return query
 
 
 def _browse_ads(
@@ -111,6 +191,10 @@ def _browse_ads(
     run_id: str | None,
     min_virality: float | None,
     min_views: int | None,
+    min_days_live: float | None,
+    languages: list[str] | None,
+    age_brackets: list[str] | None,
+    price_tier: str | None,
     limit: int | None,
     pool: int,
 ) -> list[dict[str, Any]]:
@@ -154,7 +238,9 @@ def _browse_ads(
 
     return _assemble(
         order, paid, ugc, paid_enr, ugc_enr, {},
-        platform=platform, min_virality=min_virality, min_views=min_views, limit=limit,
+        platform=platform, min_virality=min_virality, min_views=min_views,
+        min_days_live=min_days_live, languages=languages, age_brackets=age_brackets,
+        price_tier=price_tier, limit=limit,
     )
 
 
@@ -169,9 +255,16 @@ def _assemble(
     platform: str | None,
     min_virality: float | None,
     min_views: int | None,
+    min_days_live: float | None,
+    languages: list[str] | None = None,
+    age_brackets: list[str] | None = None,
+    price_tier: str | None = None,
     limit: int | None,
 ) -> list[dict[str, Any]]:
     """Hydrate ranked/browsed keys into VideoResult dicts, dedupe by video, apply filters."""
+    want_languages = {s.strip().title() for s in languages} if languages else None
+    want_brackets = {s.strip().lower() for s in age_brackets} if age_brackets else None
+    want_price = price_tier.strip().lower() if price_tier else None
     cap = MAX_RESULTS if limit is None else limit
     results: list[dict[str, Any]] = []
     seen_videos: set[str] = set()
@@ -201,6 +294,18 @@ def _assemble(
         if min_virality is not None and (result["virality"] is None or result["virality"] < min_virality):
             continue
         if min_views is not None and (result["views"] is None or result["views"] < min_views):
+            continue
+        # days_live is paid-only (None for UGC), so this filter narrows to paid ads —
+        # the longevity analog of the UGC-only virality/views filters above.
+        if min_days_live is not None and (result.get("days_live") is None or result["days_live"] < min_days_live):
+            continue
+        # Categorical filters (cross-type). Multi-value (languages, age_brackets) match by
+        # overlap; price_tier is exact. Rows lacking the value are dropped when filtered on.
+        if want_price is not None and (result.get("price_positioning") or "").lower() != want_price:
+            continue
+        if want_brackets is not None and not (want_brackets & {b.lower() for b in result.get("age_brackets") or []}):
+            continue
+        if want_languages is not None and not (want_languages & {l.title() for l in result.get("languages") or []}):
             continue
         results.append(result)
         if len(results) >= cap:
@@ -271,6 +376,14 @@ def _hydrate(
     return {str(row.get(id_column)): row for row in rows if row.get(id_column)}
 
 
+_ENRICH_BASE_COLUMNS = (
+    "item_id,ai_description,hook,content_format,product_category,video_topic,transcript_text"
+)
+# Phase 4 columns (migration 018). Selected when present; the 400-fallback drops them
+# pre-migration so search keeps working.
+_ENRICH_FULL_COLUMNS = _ENRICH_BASE_COLUMNS + ",target_generation,price_positioning,age_brackets,languages"
+
+
 def _enrichments(
     supabase: SupabaseClient,
     item_type: str,
@@ -278,15 +391,17 @@ def _enrichments(
 ) -> dict[str, dict[str, Any]]:
     if not ids:
         return {}
-    rows = supabase.select(
-        "item_enrichments",
-        {
-            "select": "item_id,ai_description,hook,content_format,product_category,video_topic,transcript_text",
-            "item_type": f"eq.{item_type}",
-            "item_id": f"in.({','.join(ids)})",
-            "limit": str(len(ids)),
-        },
-    )
+    params = {
+        "item_type": f"eq.{item_type}",
+        "item_id": f"in.({','.join(ids)})",
+        "limit": str(len(ids)),
+    }
+    try:
+        rows = supabase.select("item_enrichments", {"select": _ENRICH_FULL_COLUMNS, **params})
+    except HttpClientError as exc:
+        if exc.status != 400:
+            raise
+        rows = supabase.select("item_enrichments", {"select": _ENRICH_BASE_COLUMNS, **params})
     return {str(r.get("item_id")): r for r in rows if r.get("item_id")}
 
 
@@ -303,6 +418,13 @@ def _to_video_result(
     product_category = enr.get("product_category")
     video_topic = enr.get("video_topic")
     transcript = enr.get("transcript_text")
+    # Phase 4 audience fields (None/[] until migration 018 + enrich-audience populate them).
+    audience = {
+        "target_generation": enr.get("target_generation"),
+        "price_positioning": enr.get("price_positioning"),
+        "age_brackets": enr.get("age_brackets") or [],
+        "languages": enr.get("languages") or [],
+    }
     if item_type == "paid_ad":
         return {
             "item_type": "paid_ad",
@@ -317,6 +439,8 @@ def _to_video_result(
             "views": None,
             "likes": None,
             "virality": None,
+            "days_live": row.get("running_duration"),
+            **audience,
             "hook": hook,
             "ai_description": ai_description,
             "content_format": content_format,
@@ -338,6 +462,8 @@ def _to_video_result(
         "views": row.get("views"),
         "likes": row.get("likes"),
         "virality": row.get("virality_score"),
+        "days_live": None,
+        **audience,
         "hook": hook,
         "ai_description": ai_description,
         "content_format": content_format,
