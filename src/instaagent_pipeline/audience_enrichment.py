@@ -24,7 +24,7 @@ from .config import Config
 from .http_client import HttpClientError, request_json
 from .supabase_client import SupabaseClient
 
-TARGET_GENERATIONS = ("gen_z", "millennial", "gen_x", "boomer", "mixed")
+TARGET_GENERATIONS = ("genz", "millennial", "genx", "boomer", "mixed")
 PRICE_TIERS = ("budget", "mid", "premium", "luxury")
 AGE_BRACKETS = ("13-17", "18-24", "25-34", "35-44", "45-54", "55+")
 
