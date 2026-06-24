@@ -20,50 +20,77 @@
       - for ads, since there's built in analysis, this is also fed into the llm
       - llm returns a JSON object with all fields below
       - the JSON object is filled into the paid_ad_enrichments table
-- compute the search embedding for each video
+- compute the embeddings for each video
+      - compute both search + icp embedding
       - reference below to see what search fields take in
 
 for search:
-┌──────────────────┬─────────────────────────────────┐
-  │      Field       │              Role               │
-  ├──────────────────┼─────────────────────────────────┤
-  │ ai_description   │ core search text                │
-  ├──────────────────┼─────────────────────────────────┤
-  │ transcript_text  │ spoken content (append, capped) │
-  ├──────────────────┼─────────────────────────────────┤
-  │ hook             │ tag                             │
-  ├──────────────────┼─────────────────────────────────┤
-  │ content_format   │ tag (asmr, before_after, demo…) │
-  ├──────────────────┼─────────────────────────────────┤
-  │ main_category    │ tag                             │
-  ├──────────────────┼─────────────────────────────────┤
-  │ content_category │ tag                             │
-  ├──────────────────┼─────────────────────────────────┤
-  │ product_category │ tag                             │
-  ├──────────────────┼─────────────────────────────────┤
-  │ video_topic      │ tag                             │
-  ├──────────────────┼─────────────────────────────────┤
-  │ niches           │ tag                             │
-  ├──────────────────┼─────────────────────────────────┤
-  │ setting          │ tag                             │
-  ├──────────────────┼─────────────────────────────────┤
-  │ primary_emotion  │ tag                             │
-  ├──────────────────┼─────────────────────────────────┤
-  │ brand_mentioned  │ tag                             │
-  └──────────────────┴────────────────────────────────
+  ┌───────────────────────┬──────────────────┐
+  │         Field         │  Source column   │
+  ├───────────────────────┼──────────────────┤
+  │ AI visual description │ ai_description   │
+  ├───────────────────────┼──────────────────┤
+  │ format                │ content_format   │
+  ├───────────────────────┼──────────────────┤
+  │ category              │ main_category    │
+  ├───────────────────────┼──────────────────┤
+  │ subcategory           │ content_category │
+  ├───────────────────────┼──────────────────┤
+  │ product               │ product_category │
+  ├───────────────────────┼──────────────────┤
+  │ topic                 │ video_topic      │
+  ├───────────────────────┼──────────────────┤
+  │ niches                │ niches           │
+  ├───────────────────────┼──────────────────┤
+  │ hook                  │ hook             │
+  ├───────────────────────┼──────────────────┤
+  │ setting               │ setting          │
+  ├───────────────────────┼──────────────────┤
+  │ emotion               │ primary_emotion  │
+  ├───────────────────────┼──────────────────┤
+  │ brands                │ brand_mentioned  │
+  ├───────────────────────┼──────────────────┤
+  │ transcript            │ transcript_text  │
+  └───────────────────────┴──────────────────┘
 
 for ICP:
-┌────────────────────┬──────────────────────────────────────┐
-  │       Field        │                 Role                 │
-  ├────────────────────┼──────────────────────────────────────┤
-  │ persona            │ primary ICP signal                   │
-  ├────────────────────┼──────────────────────────────────────┤
-  │ target_demographic │ audience descriptor                  │
-  ├────────────────────┼──────────────────────────────────────┤
-  │ emotional_drivers  │ audience motivation                  │
-  ├────────────────────┼──────────────────────────────────────┤
-  │ niches             │ shared with search; audience segment │
-  └────────────────────┴──────────────────────────────────────┘
+  ┌────────────────────┬────────────────────┐
+  │       Field        │   Source column    │
+  ├────────────────────┼────────────────────┤
+  │ persona            │ persona (jsonb)    │
+  ├────────────────────┼────────────────────┤
+  │ target demographic │ target_demographic │
+  ├────────────────────┼────────────────────┤
+  │ tone               │ content_tone       │
+  ├────────────────────┼────────────────────┤
+  │ visual style       │ visual_style       │
+  ├────────────────────┼────────────────────┤
+  │ primary emotion    │ primary_emotion    │
+  ├────────────────────┼────────────────────┤
+  │ target generation  │ target_generation  │
+  └────────────────────┴────────────────────
+
+tags for both:
+ ┌────────────────┬──────────────────┬────────────────────────────────────────────────────────┐
+  │     Filter     │       Type       │                         Values                         │
+  ├────────────────┼──────────────────┼────────────────────────────────────────────────────────┤
+  │ price tier     │ finite enum      │ budget / mid / premium / luxury                        │
+  ├────────────────┼──────────────────┼────────────────────────────────────────────────────────┤
+  │ target         │ finite enum      │ gen_z / millennial / gen_x / boomer / mixed            │
+  │ generation     │                  │                                                        │
+  ├────────────────┼──────────────────┼────────────────────────────────────────────────────────┤
+  │ platform       │ finite enum      │ tiktok / instagram / meta                              │
+  ├────────────────┼──────────────────┼────────────────────────────────────────────────────────┤
+  │ age bracket    │ finite buckets   │ 13–17 / 18–24 / 25–34 / 35–44 / 45–54 / 55+ (bucketed  │
+  │                │                  │ from the raw age int)                                  │
+  ├────────────────┼──────────────────┼────────────────────────────────────────────────────────┤
+  │ language       │ dynamic,         │ derived from data, but snapped to canonical names      │
+  │                │ normalized       │                                                        │
+  ├────────────────┼──────────────────┼────────────────────────────────────────────────────────┤
+  │ views          │ numeric range    │ min/max or slider — no enum                            │
+  ├────────────────┼──────────────────┼────────────────────────────────────────────────────────┤
+  │ virality       │ numeric range    │ min threshold or slider — no enum                      │
+  └────────────────┴──────────────────┴────────────────────────────────────────────────────────┘
 
 
 ## inputs and outputs to all apis
@@ -84,3 +111,9 @@ for ICP:
      Input: check table
      Output: embedding vector
 
+## search flow
+1. user inputs search query
+2. llm expands the query if short to a longer chunk of text
+3. search in the search embedding + icp embedding
+4. we take the top 50 relevant results then we rerank
+5. then we take vidoes that pass the rerank score as search result
