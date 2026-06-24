@@ -10,6 +10,7 @@ from .apify_ads import ingest_apify_ads
 from .apify_ugc import backfill_instagram_followers, ingest_instagram, ingest_tiktok
 from .config import Config
 from .ad_enrichment import enrich_paid_ads
+from .audience_enrichment import enrich_audience
 from .ugc_enrichment import enrich_ugc_items
 from .clustering import cluster_items
 from .embeddings import ALL_SPACES, embed_items
@@ -31,6 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     dry_run_needs_supabase = args.command in {
         "enrich-paid-ads",
         "enrich-ugc",
+        "enrich-audience",
         "embed-items",
         "cluster-items",
     }
@@ -135,6 +137,17 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             model=args.model,
             input_json=args.input_json,
+            timeout=args.timeout,
+        )
+    elif args.command == "enrich-audience":
+        result = enrich_audience(
+            config=config,
+            supabase=supabase,
+            run_id=args.run_id,
+            source=args.source,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            overwrite=args.overwrite,
             timeout=args.timeout,
         )
     elif args.command == "cluster-items":
@@ -263,6 +276,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Use a saved Voyage embeddings response instead of calling Voyage. Intended for one-batch tests.",
     )
+
+    audience = subparsers.add_parser(
+        "enrich-audience",
+        help="Phase 4: derive target_generation/price_positioning/age_brackets/languages "
+        "from stored ai_description+transcript (text-only, no video). Requires migration 018.",
+    )
+    audience.add_argument("--run-id", required=True)
+    audience.add_argument("--source", choices=["paid", "ugc", "all"], default="all")
+    audience.add_argument("--limit", type=int, default=1000, help="Maximum items to fetch per source.")
+    audience.add_argument("--overwrite", action="store_true", help="Re-enrich rows that already have target_generation.")
+    audience.add_argument("--timeout", type=int, default=60)
+    audience.add_argument("--dry-run", action="store_true")
 
     cluster = subparsers.add_parser(
         "cluster-items",
