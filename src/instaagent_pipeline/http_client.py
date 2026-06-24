@@ -120,4 +120,12 @@ def redact_url(url: str) -> str:
 def ssl_context() -> ssl.SSLContext:
     if os.getenv("INSTAAGENT_INSECURE_SSL") == "1":
         return ssl._create_unverified_context()
-    return ssl.create_default_context()
+    # macOS python.org / venv builds don't populate OpenSSL's default trust
+    # store, so create_default_context() raises CERTIFICATE_VERIFY_FAILED.
+    # Fall back to certifi's CA bundle when it's available.
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
