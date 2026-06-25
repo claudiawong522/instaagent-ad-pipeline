@@ -101,6 +101,10 @@ create table if not exists paid_ads (
   publisher_platform jsonb,
   storage_video_url text,
   storage_thumb_url text,
+  -- Per-video enrichment outcome (see migration 021): 'enriched' (searchable),
+  -- 'expired' (URL no longer serves video), 'failed' (analysis produced nothing).
+  enrichment_status text,
+  enrichment_error text,
   source_metrics jsonb not null default '{}'::jsonb,
   saved_to_supabase_at timestamptz not null default now(),
   unique (run_id, id)
@@ -133,6 +137,10 @@ create table if not exists ugc_items (
   virality_tier text,
   storage_video_url text,
   storage_thumb_url text,
+  -- Per-video enrichment outcome (see migration 021): 'enriched' (searchable),
+  -- 'expired' (URL no longer serves video), 'failed' (analysis produced nothing).
+  enrichment_status text,
+  enrichment_error text,
   source_metrics jsonb not null default '{}'::jsonb,
   saved_to_supabase_at timestamptz not null default now(),
   unique (run_id, external_id)
@@ -230,6 +238,8 @@ create index if not exists ugc_items_external_idx on ugc_items(external_id);
 create index if not exists ugc_items_video_id_idx on ugc_items(video_id);
 create index if not exists ugc_items_virality_idx on ugc_items(virality_score desc);
 create index if not exists ugc_items_saved_to_supabase_at_idx on ugc_items(saved_to_supabase_at desc);
+create index if not exists paid_ads_enrichment_status_idx on paid_ads(run_id, enrichment_status);
+create index if not exists ugc_items_enrichment_status_idx on ugc_items(run_id, enrichment_status);
 create index if not exists item_enrichments_run_idx on item_enrichments(run_id);
 create index if not exists item_enrichments_item_idx on item_enrichments(item_type, item_id);
 create index if not exists item_embeddings_run_idx on item_embeddings(run_id);

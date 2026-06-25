@@ -31,6 +31,7 @@ from .ad_enrichment import (
     parse_enrichment_response,
     parse_gemini_response,
     persist_media,
+    record_item_status,
     request_enrichment,
 )
 from .config import Config
@@ -145,6 +146,14 @@ def ugc_enrichment_candidates(
             continue
         if not is_probable_video_url(video_url):
             skipped += 1
+            record_item_status(
+                supabase,
+                table="ugc_items",
+                id_column="id",
+                item_id=ugc_item_id,
+                status="failed",
+                error="unsupported video URL",
+            )
             continue
         candidates.append(
             UgcEnrichmentCandidate(
@@ -194,13 +203,17 @@ def enrich_ugc_item(
     response_headers: dict[str, str] = {}
     response_status: int | None = None
     usage: dict[str, Any] = {}
+    # See enrich_paid_ad: 'download' failure → expired URL; later failure → 'failed'.
+    stage = "download"
     try:
         if input_json:
+            stage = "analysis"
             body = json.loads(input_json.read_text())
             analysis = parse_gemini_response(body) if is_gemini else parse_enrichment_response(body)
             usage = gemini_usage(body) if is_gemini else openrouter_usage(body)
         else:
             video_bytes = fetch_video_bytes(candidate.video_url, timeout=timeout)
+            stage = "analysis"
             media = persist_media(
                 supabase,
                 run_id=run_id,
@@ -278,6 +291,14 @@ def enrich_ugc_item(
             http_status=getattr(exc, "status", None),
             error_message=str(exc),
         )
+        record_item_status(
+            supabase,
+            table="ugc_items",
+            id_column="id",
+            item_id=candidate.ugc_item_id,
+            status="expired" if stage == "download" else "failed",
+            error=str(exc),
+        )
         raise
 
     if analysis is not None:
@@ -293,6 +314,14 @@ def enrich_ugc_item(
             },
         )
     if analysis is None:
+        record_item_status(
+            supabase,
+            table="ugc_items",
+            id_column="id",
+            item_id=candidate.ugc_item_id,
+            status="failed",
+            error="vision returned no analysis",
+        )
         return False
 
     payload = {key: analysis.get(key) for key in PAID_AD_ANALYSIS_COLUMNS if key in analysis}
@@ -308,4 +337,11 @@ def enrich_ugc_item(
         }
     )
     supabase.upsert("item_enrichments", payload, "item_type,item_id")
+    record_item_status(
+        supabase,
+        table="ugc_items",
+        id_column="id",
+        item_id=candidate.ugc_item_id,
+        status="enriched",
+    )
     return True

@@ -310,6 +310,14 @@ def paid_ad_enrichment_candidates(
             continue
         if not is_probable_video_url(video_url):
             skipped_unsupported += 1
+            record_item_status(
+                supabase,
+                table="paid_ads",
+                id_column="paid_ad_row_id",
+                item_id=paid_ad_row_id,
+                status="failed",
+                error="unsupported video URL",
+            )
             continue
 
         candidates.append(
@@ -363,13 +371,18 @@ def enrich_paid_ad(
     response_headers: dict[str, str] = {}
     response_status: int | None = None
     usage: dict[str, Any] = {}
+    # Which step we're in, so a failure is classified as 'expired' (URL didn't yield
+    # video bytes) vs 'failed' (download ok, but the vision/analysis step failed).
+    stage = "download"
     try:
         if input_json:
+            stage = "analysis"
             body = json.loads(input_json.read_text())
             analysis = parse_gemini_response(body) if is_gemini else parse_enrichment_response(body)
             usage = gemini_usage(body) if is_gemini else openrouter_usage(body)
         else:
             video_bytes = fetch_video_bytes(candidate.video_url, timeout=timeout)
+            stage = "analysis"
             media = persist_media(
                 supabase,
                 run_id=run_id,
@@ -447,6 +460,14 @@ def enrich_paid_ad(
             http_status=getattr(exc, "status", None),
             error_message=str(exc),
         )
+        record_item_status(
+            supabase,
+            table="paid_ads",
+            id_column="paid_ad_row_id",
+            item_id=candidate.paid_ad_row_id,
+            status="expired" if stage == "download" else "failed",
+            error=str(exc),
+        )
         raise
 
     if analysis is not None:
@@ -462,6 +483,14 @@ def enrich_paid_ad(
             },
         )
     if analysis is None:
+        record_item_status(
+            supabase,
+            table="paid_ads",
+            id_column="paid_ad_row_id",
+            item_id=candidate.paid_ad_row_id,
+            status="failed",
+            error="vision returned no analysis",
+        )
         return False
 
     payload = {key: analysis.get(key) for key in PAID_AD_ANALYSIS_COLUMNS if key in analysis}
@@ -477,6 +506,13 @@ def enrich_paid_ad(
         }
     )
     supabase.upsert("item_enrichments", payload, "item_type,item_id")
+    record_item_status(
+        supabase,
+        table="paid_ads",
+        id_column="paid_ad_row_id",
+        item_id=candidate.paid_ad_row_id,
+        status="enriched",
+    )
     return True
 
 
@@ -663,6 +699,27 @@ def request_enrichment(
 def is_probable_video_url(url: str) -> bool:
     parsed = urlparse(url)
     return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+
+
+def record_item_status(
+    supabase: SupabaseClient,
+    *,
+    table: str,
+    id_column: str,
+    item_id: str,
+    status: str,
+    error: str | None = None,
+) -> None:
+    """Persist a per-video enrichment outcome on the source row so the UI can show how
+    many scraped videos became searchable vs expired/failed. Status is one of
+    'enriched' | 'expired' | 'failed'. Best-effort: a status write must never break
+    enrichment, so failures are logged, not raised. Shared by paid + UGC enrichment."""
+    try:
+        supabase.update_by_column(
+            table, id_column, item_id, {"enrichment_status": status, "enrichment_error": error}
+        )
+    except (HttpClientError, RuntimeError) as exc:
+        logger.warning("Status write failed for %s %s: %s", table, item_id, exc)
 
 
 def persist_media(

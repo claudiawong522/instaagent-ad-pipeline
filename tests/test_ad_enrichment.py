@@ -201,8 +201,11 @@ def test_enrich_paid_ad_writes_single_item_enrichment_upsert() -> None:
     assert "has_face" not in payload  # dropped from the trimmed schema
     assert "race" not in payload  # dropped from the trimmed schema
 
-    # Nothing is written to the old per-item tables/columns anymore.
-    assert supabase.column_updates == []
+    # The only row-column write is the per-video enrichment outcome (searchable), so the
+    # UI can show how many scraped videos became searchable vs expired/failed.
+    assert supabase.column_updates == [
+        ("paid_ads", "paid_ad_row_id", "row_1", {"enrichment_status": "enriched", "enrichment_error": None})
+    ]
     assert all(insert[0] != "paid_ad_transcripts" for insert in supabase.inserts)
 
 
