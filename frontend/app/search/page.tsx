@@ -50,6 +50,7 @@ export default function SearchPage() {
   const [platform, setPlatform] = useState<string>('')
   const [runId, setRunId] = useState<string>('')
   const [minViews, setMinViews] = useState<string>('')
+  const [minVirality, setMinVirality] = useState<string>('')
   const [minDaysLive, setMinDaysLive] = useState<string>('')
   const [priceTier, setPriceTier] = useState<string>('')
   const [ageBrackets, setAgeBrackets] = useState<Set<string>>(new Set())
@@ -78,6 +79,7 @@ export default function SearchPage() {
         platform: platform || null,
         run_id: runId || null,
         min_views: minViews ? Number(minViews) : null,
+        min_virality: minVirality ? Number(minVirality) : null,
         min_days_live: minDaysLive ? Number(minDaysLive) : null,
         price_tier: priceTier || null,
         age_brackets: ageBrackets.size ? Array.from(ageBrackets) : null,
@@ -98,6 +100,7 @@ export default function SearchPage() {
     setPlatform('')
     setRunId('')
     setMinViews('')
+    setMinVirality('')
     setMinDaysLive('')
     setPriceTier('')
     setAgeBrackets(new Set())
@@ -110,6 +113,7 @@ export default function SearchPage() {
     platform !== '' ||
     runId !== '' ||
     minViews !== '' ||
+    minVirality !== '' ||
     minDaysLive !== '' ||
     priceTier !== '' ||
     ageBrackets.size > 0 ||
@@ -211,6 +215,18 @@ export default function SearchPage() {
               onChange={(e) => setMinViews(e.target.value)}
               placeholder="Min views (organic)"
               className="h-8 w-36 text-xs md:text-xs"
+            />
+          )}
+          {itemType !== 'paid_ad' && (
+            <Input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={minVirality}
+              onChange={(e) => setMinVirality(e.target.value)}
+              placeholder="Min virality 0–1 (organic)"
+              className="h-8 w-44 text-xs md:text-xs"
             />
           )}
           {itemType !== 'ugc_item' && (
@@ -326,17 +342,18 @@ function ViralityHelp() {
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute bottom-full left-1/2 z-50 mb-1 w-64 -translate-x-1/2 rounded-md border border-border bg-popover p-3 text-left text-xs leading-relaxed text-popover-foreground shadow-md">
-            <p className="font-medium">Virality score (0–100)</p>
+            <p className="font-medium">Virality score (0–1)</p>
             <p className="mt-1 text-muted-foreground">
               Blends how far a post escaped its own follower base with how engaging it was:
             </p>
             <p className="mt-1 font-mono text-[11px]">0.6 × reach + 0.4 × engagement</p>
             <ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted-foreground">
-              <li><span className="font-medium text-popover-foreground">reach</span> = views ÷ followers, capped to stay 0–1</li>
+              <li><span className="font-medium text-popover-foreground">reach</span> = views ÷ followers</li>
               <li><span className="font-medium text-popover-foreground">engagement</span> = (likes + comments + shares) ÷ views</li>
             </ul>
             <p className="mt-1 text-muted-foreground">
-              Higher means it reached well beyond its audience and got strong engagement.
+              Each is put on a 0–1 log curve (going viral has diminishing returns), then blended.
+              Higher = reached well beyond its audience with strong engagement.
             </p>
           </div>
         </>
@@ -347,7 +364,7 @@ function ViralityHelp() {
 
 function VideoCard({ result: r }: { result: VideoResult }) {
   return (
-    <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-card">
+    <div className="flex flex-col rounded-lg border border-border bg-card">
       {r.video_url ? (
         <video
           src={r.video_url}
@@ -355,10 +372,10 @@ function VideoCard({ result: r }: { result: VideoResult }) {
           controls
           playsInline
           preload="none"
-          className="aspect-[9/16] w-full bg-black object-cover"
+          className="aspect-[9/16] w-full rounded-t-lg bg-black object-cover"
         />
       ) : (
-        <div className="flex aspect-[9/16] w-full items-center justify-center bg-muted text-xs text-muted-foreground">
+        <div className="flex aspect-[9/16] w-full items-center justify-center rounded-t-lg bg-muted text-xs text-muted-foreground">
           no video
         </div>
       )}
@@ -396,7 +413,7 @@ function VideoCard({ result: r }: { result: VideoResult }) {
           {r.likes != null && <span>{formatNum(r.likes)} likes</span>}
           {r.virality != null && (
             <span className="inline-flex items-center">
-              vir {Math.round(r.virality * 100)}
+              vir {r.virality.toFixed(2)}
               <ViralityHelp />
             </span>
           )}

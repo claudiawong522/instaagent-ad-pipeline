@@ -52,8 +52,9 @@ def test_normalize_tiktok_item() -> None:
     assert row["hashtags"] == ["skincare", "cleanser"]
     assert row["cover"] == "https://cover.jpg"
     assert row["music"] == {"title": "original sound"}
-    # reach 100000/15600=6.41 → 0.865; eng 0.1; 0.6*0.865 + 0.4*0.1 = 0.559
-    assert row["virality_score"] == 0.559
+    # log-normalized: reach 6.41 (cap 100)→0.434, eng rate 0.1 (cap 0.30)→0.363;
+    # 0.6*0.434 + 0.4*0.363 = 0.406
+    assert row["virality_score"] == 0.406
     assert row["virality_tier"] == "medium"
     assert row["source_metrics"]["page_url"] == "https://www.tiktok.com/@creator/video/7611"
     # analysis fields are left for the vision enrichment
@@ -76,14 +77,15 @@ def test_normalize_instagram_reel() -> None:
 def test_recompute_virality() -> None:
     # No views → no score.
     assert recompute_virality(views=0, likes=10, comments=0, shares=0) == (None, None)
-    # No follower count → engagement-only fallback: (likes+comments+shares)/views.
-    assert recompute_virality(views=1000, likes=200, comments=0, shares=0) == (0.2, "low")
-    # Reach path: views 10x followers → strong amplification, blended 0.6/0.4 with engagement.
-    # reach=10 → 10/11=0.909; eng=0.1; 0.6*0.909 + 0.4*0.1 = 0.585
+    # No follower count → engagement-only fallback, log-normalized rate (cap 0.30).
+    # er=0.2 → log1p(0.2)/log1p(0.30) = 0.695
+    assert recompute_virality(views=1000, likes=200, comments=0, shares=0) == (0.695, "high")
+    # Reach path: views 10x followers, blended 0.6/0.4 with engagement, both log-normalized.
+    # reach=10 (cap 100)→0.520; er=0.1 (cap 0.30)→0.363; 0.6*0.520 + 0.4*0.363 = 0.457
     score, tier = recompute_virality(
         views=10000, likes=1000, comments=0, shares=0, followers=1000
     )
-    assert score == 0.585 and tier == "medium"
+    assert score == 0.457 and tier == "medium"
 
 
 def test_ingest_tiktok_drops_no_video(tmp_path) -> None:
