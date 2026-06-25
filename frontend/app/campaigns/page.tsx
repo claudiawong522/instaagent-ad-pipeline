@@ -233,7 +233,7 @@ function CampaignCard({
         className="flex items-center gap-1 self-start text-xs font-medium text-muted-foreground hover:text-foreground"
       >
         {showInputs ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
-        {showInputs ? 'Show less' : 'Load more'}
+        {showInputs ? 'Hide details' : 'Show details'}
       </button>
       {showInputs && (
         <div className="flex flex-col gap-3">

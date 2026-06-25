@@ -11,8 +11,9 @@ import type { ItemType, RunSummary, VideoResult } from '@/lib/types'
 
 function formatNum(n: number | null | undefined): string {
   if (n == null) return '—'
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  const compact = (v: number) => (v % 1 === 0 ? String(v) : v.toFixed(1))
+  if (n >= 1_000_000) return `${compact(n / 1_000_000)}M`
+  if (n >= 1_000) return `${compact(n / 1_000)}K`
   return String(n)
 }
 
@@ -170,14 +171,14 @@ export default function SearchPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
+          <div className="inline-flex h-8 items-stretch gap-1 rounded-md border border-border p-0.5">
             {TYPE_OPTIONS.map((opt) => (
               <button
                 key={opt.label}
                 type="button"
                 onClick={() => setItemType(opt.value)}
                 className={cn(
-                  'rounded px-2.5 py-1 text-xs font-medium transition-colors',
+                  'inline-flex items-center rounded-[5px] px-2.5 text-xs font-medium transition-colors',
                   itemType === opt.value
                     ? 'bg-accent text-accent-foreground'
                     : 'text-muted-foreground hover:text-foreground',
@@ -409,15 +410,15 @@ function VideoCard({ result: r }: { result: VideoResult }) {
       )}
       <div className="flex flex-1 flex-col gap-2 p-3">
         <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-sm font-medium">{r.title || 'untitled'}</span>
-          {r.platform && <Badge variant="secondary">{r.platform}</Badge>}
+          <span className="min-w-0 truncate text-sm font-medium">{r.title || 'untitled'}</span>
+          {r.platform && <Badge variant="secondary" className="capitalize">{r.platform}</Badge>}
         </div>
         <div className="flex flex-wrap gap-1">
           <Badge variant={r.item_type === 'paid_ad' ? 'default' : 'outline'}>
             {r.item_type === 'paid_ad' ? 'Paid' : 'Organic'}
           </Badge>
           {r.content_formats.map((f) => (
-            <Badge key={`fmt-${f}`} variant="outline">{f}</Badge>
+            <Badge key={`fmt-${f}`} variant="outline">{f.replace(/_/g, ' ')}</Badge>
           ))}
           {typeof r.similarity === 'number' && (
             <Badge variant="outline">{Math.round(r.similarity * 100)}% relevance</Badge>
@@ -448,7 +449,7 @@ function VideoCard({ result: r }: { result: VideoResult }) {
           {r.days_live != null && <span>{Math.round(r.days_live)}d live</span>}
         </div>
         {r.hook && (
-          <p className="text-xs">
+          <p className="line-clamp-3 text-xs">
             <span className="font-medium">Hook:</span> {r.hook}
           </p>
         )}
