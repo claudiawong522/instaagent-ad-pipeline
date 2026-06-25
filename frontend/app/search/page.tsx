@@ -22,12 +22,35 @@ const TYPE_OPTIONS: { label: string; value: ItemType | null }[] = [
   { label: 'UGC', value: 'ugc_item' },
 ]
 
+// Enum values mirror src/instaagent_pipeline/audience_enrichment.py (AGE_BRACKETS,
+// PRICE_TIERS). Languages are free-form on the backend; these are the common set.
+const AGE_BRACKETS = ['13-17', '18-24', '25-34', '35-44', '45-54', '55+']
+const LANGUAGES = ['English', 'Spanish', 'Portuguese', 'French', 'German', 'Hindi', 'Arabic', 'Chinese', 'Japanese', 'Korean']
+const PRICE_TIERS = [
+  { label: 'Any price', value: '' },
+  { label: 'Budget', value: 'budget' },
+  { label: 'Mid', value: 'mid' },
+  { label: 'Premium', value: 'premium' },
+  { label: 'Luxury', value: 'luxury' },
+]
+
+function toggleInSet(set: Set<string>, value: string): Set<string> {
+  const next = new Set(set)
+  if (next.has(value)) next.delete(value)
+  else next.add(value)
+  return next
+}
+
 export default function SearchPage() {
   const [query, setQuery] = useState('')
   const [itemType, setItemType] = useState<ItemType | null>(null)
   const [platform, setPlatform] = useState<string>('')
   const [runId, setRunId] = useState<string>('')
   const [minViews, setMinViews] = useState<string>('')
+  const [minDaysLive, setMinDaysLive] = useState<string>('')
+  const [priceTier, setPriceTier] = useState<string>('')
+  const [ageBrackets, setAgeBrackets] = useState<Set<string>>(new Set())
+  const [languages, setLanguages] = useState<Set<string>>(new Set())
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [results, setResults] = useState<VideoResult[]>([])
   const [loading, setLoading] = useState(false)
@@ -51,6 +74,10 @@ export default function SearchPage() {
         platform: platform || null,
         run_id: runId || null,
         min_views: minViews ? Number(minViews) : null,
+        min_days_live: minDaysLive ? Number(minDaysLive) : null,
+        price_tier: priceTier || null,
+        age_brackets: ageBrackets.size ? Array.from(ageBrackets) : null,
+        languages: languages.size ? Array.from(languages) : null,
       })
       setResults(res.results)
     } catch (e) {
@@ -136,13 +163,42 @@ export default function SearchPage() {
             ))}
           </select>
 
-          <Input
-            type="number"
-            value={minViews}
-            onChange={(e) => setMinViews(e.target.value)}
-            placeholder="Min views"
-            className="h-8 w-28 text-xs"
-          />
+          <select
+            value={priceTier}
+            onChange={(e) => setPriceTier(e.target.value)}
+            className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+          >
+            {PRICE_TIERS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+
+          {/* Performance filters are type-scoped: views/virality are UGC-only, days-live is paid-only. */}
+          {itemType !== 'paid_ad' && (
+            <Input
+              type="number"
+              value={minViews}
+              onChange={(e) => setMinViews(e.target.value)}
+              placeholder="Min views (UGC)"
+              className="h-8 w-32 text-xs"
+            />
+          )}
+          {itemType !== 'ugc_item' && (
+            <Input
+              type="number"
+              value={minDaysLive}
+              onChange={(e) => setMinDaysLive(e.target.value)}
+              placeholder="Min days live (paid)"
+              className="h-8 w-36 text-xs"
+            />
+          )}
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <ChipFilter label="Age" options={AGE_BRACKETS} selected={ageBrackets} onToggle={(v) => setAgeBrackets((s) => toggleInSet(s, v))} />
+          <ChipFilter label="Language" options={LANGUAGES} selected={languages} onToggle={(v) => setLanguages((s) => toggleInSet(s, v))} />
         </div>
       </form>
 
@@ -178,6 +234,42 @@ export default function SearchPage() {
   )
 }
 
+function ChipFilter({
+  label,
+  options,
+  selected,
+  onToggle,
+}: {
+  label: string
+  options: string[]
+  selected: Set<string>
+  onToggle: (value: string) => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      {options.map((opt) => {
+        const active = selected.has(opt)
+        return (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => onToggle(opt)}
+            className={cn(
+              'rounded-full border px-2.5 py-0.5 text-xs transition-colors',
+              active
+                ? 'border-accent bg-accent text-accent-foreground'
+                : 'border-border text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {opt}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function VideoCard({ result: r }: { result: VideoResult }) {
   return (
     <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-card">
@@ -206,14 +298,27 @@ function VideoCard({ result: r }: { result: VideoResult }) {
           </Badge>
           {r.content_format && <Badge variant="outline">{r.content_format}</Badge>}
           {typeof r.similarity === 'number' && (
-            <Badge variant="outline">{Math.round(r.similarity * 100)}% match</Badge>
+            <Badge variant="outline">{Math.round(r.similarity * 100)}% relevance</Badge>
           )}
+          {r.price_positioning && <Badge variant="outline">{r.price_positioning}</Badge>}
+          {r.target_generation && <Badge variant="outline">{r.target_generation}</Badge>}
         </div>
+        {(r.age_brackets.length > 0 || r.languages.length > 0) && (
+          <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
+            {r.age_brackets.map((a) => (
+              <span key={`age-${a}`} className="rounded bg-muted px-1.5 py-0.5">{a}</span>
+            ))}
+            {r.languages.map((l) => (
+              <span key={`lang-${l}`} className="rounded bg-muted px-1.5 py-0.5">{l}</span>
+            ))}
+          </div>
+        )}
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
           {r.views != null && <span>{formatNum(r.views)} views</span>}
           {r.followers != null && <span>{formatNum(r.followers)} followers</span>}
           {r.likes != null && <span>{formatNum(r.likes)} likes</span>}
           {r.virality != null && <span>vir {Math.round(r.virality)}</span>}
+          {r.days_live != null && <span>{Math.round(r.days_live)}d live</span>}
         </div>
         {r.hook && (
           <p className="text-xs">
