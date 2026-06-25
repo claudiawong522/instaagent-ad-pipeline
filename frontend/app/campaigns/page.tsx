@@ -215,8 +215,6 @@ function CampaignCard({
         </div>
       )}
 
-      {c.campaign_objective && <p className="line-clamp-3 text-xs text-muted-foreground">{c.campaign_objective}</p>}
-
       {/* View previously-entered inputs */}
       <button
         type="button"
