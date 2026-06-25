@@ -15,7 +15,9 @@
       - then this returns a url that points to the video in storage
       - this url is saved in the database (column: storage_video_url)
       - this kills 2 birds in 1 stone because to feed a video into openrouter later, you also need base64, which needs to be encoded from raw bytes from RAM too (not supabase storage currently)
+      - note: sometimes even the url you fetch is expired
 - feed all videos (ads, reels, tiktoks) into llm (Openrouter Gemini 3 Flash)
+      - passes the storage url to openrouter, only fallback to base64 if fails
       - checks video url isn't null, and no non-video links
       - for ads, since there's built in analysis, this is also fed into the llm
       - llm returns a JSON object with all fields below
@@ -23,74 +25,60 @@
 - compute the embeddings for each video
       - compute both search + icp embedding
       - reference below to see what search fields take in
+      - note: if enrichment fails, no embedding created
 
-for search:
-  ┌───────────────────────┬──────────────────┐
-  │         Field         │  Source column   │
-  ├───────────────────────┼──────────────────┤
-  │ AI visual description │ ai_description   │
-  ├───────────────────────┼──────────────────┤
-  │ format                │ content_format   │
-  ├───────────────────────┼──────────────────┤
-  │ category              │ main_category    │
-  ├───────────────────────┼──────────────────┤
-  │ subcategory           │ content_category │
-  ├───────────────────────┼──────────────────┤
-  │ product               │ product_category │
-  ├───────────────────────┼──────────────────┤
-  │ topic                 │ video_topic      │
-  ├───────────────────────┼──────────────────┤
-  │ niches                │ niches           │
-  ├───────────────────────┼──────────────────┤
-  │ hook                  │ hook             │
-  ├───────────────────────┼──────────────────┤
-  │ setting               │ setting          │
-  ├───────────────────────┼──────────────────┤
-  │ emotion               │ primary_emotion  │
-  ├───────────────────────┼──────────────────┤
-  │ brands                │ brand_mentioned  │
-  ├───────────────────────┼──────────────────┤
-  │ transcript            │ transcript_text  │
-  └───────────────────────┴──────────────────┘
-
-for ICP:
-  ┌────────────────────┬────────────────────┐
-  │       Field        │   Source column    │
-  ├────────────────────┼────────────────────┤
-  │ persona            │ persona (jsonb)    │
-  ├────────────────────┼────────────────────┤
-  │ target demographic │ target_demographic │
-  ├────────────────────┼────────────────────┤
-  │ tone               │ content_tone       │
-  ├────────────────────┼────────────────────┤
-  │ visual style       │ visual_style       │
-  ├────────────────────┼────────────────────┤
-  │ primary emotion    │ primary_emotion    │
-  ├────────────────────┼────────────────────┤
-  │ target generation  │ target_generation  │
-  └────────────────────┴────────────────────
-
-tags for both:
- ┌────────────────┬──────────────────┬────────────────────────────────────────────────────────┐
-  │     Filter     │       Type       │                         Values                         │
-  ├────────────────┼──────────────────┼────────────────────────────────────────────────────────┤
-  │ price tier     │ finite enum      │ budget / mid / premium / luxury                        │
-  ├────────────────┼──────────────────┼────────────────────────────────────────────────────────┤
-  │ target         │ finite enum      │ gen_z / millennial / gen_x / boomer / mixed            │
-  │ generation     │                  │                                                        │
-  ├────────────────┼──────────────────┼────────────────────────────────────────────────────────┤
-  │ platform       │ finite enum      │ tiktok / instagram / meta                              │
-  ├────────────────┼──────────────────┼────────────────────────────────────────────────────────┤
-  │ age bracket    │ finite buckets   │ 13–17 / 18–24 / 25–34 / 35–44 / 45–54 / 55+ (bucketed  │
-  │                │                  │ from the raw age int)                                  │
-  ├────────────────┼──────────────────┼────────────────────────────────────────────────────────┤
-  │ language       │ dynamic,         │ derived from data, but snapped to canonical names      │
-  │                │ normalized       │                                                        │
-  ├────────────────┼──────────────────┼────────────────────────────────────────────────────────┤
-  │ views          │ numeric range    │ min/max or slider — no enum                            │
-  ├────────────────┼──────────────────┼────────────────────────────────────────────────────────┤
-  │ virality       │ numeric range    │ min threshold or slider — no enum                      │
-  └────────────────┴──────────────────┴────────────────────────────────────────────────────────┘
+  ┌───────────────────────────┬─────────────────┬──────────────┬──────────────────────────────┐
+  │           Field           │     Search      │     ICP      │            Filter            │
+  │                           │    embedding    │  embedding   │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ ai_description            │  ● (base text)  │              │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ transcript_text           │  ● (appended)   │              │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ content_formats ✅        │    ● format:    │              │   ● multi-select, overlap    │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ main_category             │   ● category:   │              │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ content_category          │ ● subcategory:  │              │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ product_category          │   ● product:    │              │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ video_topic               │    ● topic:     │              │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ niches                    │    ● niches:    │              │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ hook                      │     ● hook:     │              │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ setting                   │   ● setting:    │              │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ primary_emotion           │   ● emotion:    │  ● emotion:  │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ brand_mentioned           │    ● brands:    │              │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ persona                   │                 │  ● persona:  │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ target_demographic        │                 │ ● audience:  │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ target_generation         │                 │      ●       │                              │
+  │                           │                 │ generation:  │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ content_tone              │                 │   ● tone:    │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ visual_style              │                 │   ● style:   │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ production_quality ✅     │                 │  ● quality:  │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ emotional_drivers ✅      │                 │  ● drivers:  │                              │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ price_positioning         │                 │              │ ● single, exact (price_tier) │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ age_brackets              │                 │              │   ● multi-select, overlap    │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ languages                 │                 │              │   ● multi-select, overlap    │
+  ├───────────────────────────┼─────────────────┼──────────────┼──────────────────────────────┤
+  │ content_format (legacy)   │   ~~removed~~   │              │        superseded by         │
+  │ ✅                        │                 │              │       content_formats        │
+  └───────────────────────────┴─────────────────┴──────────────┴──────────────────────────────┘
 
 
 ## inputs and outputs to all apis

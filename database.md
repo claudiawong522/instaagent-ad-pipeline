@@ -10,7 +10,7 @@
 4. If an API returns fewer ads or videos than requested for a keyword, the pipeline saves what came back and moves on.
 5. Normalized Apify Meta Ad Library output fills `paid_ads`. Normalized Apify TikTok/Instagram output fills `ugc_items`. TikTok follower counts are native; Instagram reel follower counts are backfilled by `backfill-ig-followers` (via `apify/instagram-profile-scraper`). The Apify normalizers recompute `virality_score` / `virality_tier` from engagement metrics.
 6. Vision enrichment runs after ingestion: `enrich-paid-ads` is auto-triggered by `ingest-apify-ads`, and UGC vision enrichment (`enrich-ugc`) is auto-triggered by `ingest-tiktok` / `ingest-instagram`. For each item, enrichment downloads the video bytes into memory, uploads them to the Supabase Storage bucket `ad-videos`, and records the persisted `storage_video_url` / `storage_thumb_url` on the item table (`paid_ads` / `ugc_items`). It reuses the same in-memory bytes, base64-encoded, for a single OpenRouter vision call (default model `google/gemini-3-flash-preview`) that returns the spoken transcript plus creative analysis. For paid ads, the existing ad copy is also passed to the model.
-7. Each enrichment writes one row to `item_enrichments` (polymorphic on `item_type` / `item_id`, one row per item): `transcript_text` + `transcript_segments`, `ai_description`, and the analysis fields (`hook`, `persona`, `target_demographic`, `content_format`, and the rest), with `analysis_model` and `analyzed_at` recording the run.
+7. Each enrichment writes one row to `item_enrichments` (polymorphic on `item_type` / `item_id`, one row per item): `transcript_text` + `transcript_segments`, `ai_description`, and the analysis fields (`hook`, `persona`, `target_demographic`, `content_format`, and the rest), with `analysis_model` and `analyzed_at` recording the run. It also stamps the per-video outcome back onto the source row (`paid_ads.enrichment_status` / `ugc_items.enrichment_status`): `enriched` when the item became searchable, `expired` when the provider URL no longer served video bytes (Apify links expire before OpenRouter fetches them), or `failed` otherwise — so the campaigns UI can show "X of Y videos searchable" per platform via the `scrape-stats` endpoint.
 8. `embed-items` writes ICP and search vectors to `item_embeddings` (Voyage AI). The `search` space combines `ai_description`, a labeled tag block, and the full transcript; the `icp` space combines `persona` and `target_demographic`.
 9. `cluster-items` clusters ICP vectors per source, writes item assignments to `item_clusters`, and writes cluster summaries, centroids, exemplars, and optional OpenRouter labels to `clusters`.
 
@@ -185,6 +185,8 @@ Stores Apify Meta Ad Library paid ad records with stable fields mapped into firs
 | `publisher_platform` | `jsonb` | Nullable | Apify `publisherPlatform`. |
 | `storage_video_url` | `text` | Nullable | Persisted Supabase Storage (`ad-videos`) URL of the downloaded video; written by `enrich-paid-ads` (migration `015`). |
 | `storage_thumb_url` | `text` | Nullable | Persisted Supabase Storage (`ad-videos`) URL of the thumbnail; written by `enrich-paid-ads` (migration `015`). |
+| `enrichment_status` | `text` | Nullable | Per-video enrichment outcome written by `enrich-paid-ads` (migration `021`): `enriched` (searchable), `expired` (URL no longer served video), `failed` (analysis produced nothing / unsupported URL). Null until enrichment touches the row. |
+| `enrichment_error` | `text` | Nullable | Human-readable reason for an `expired`/`failed` status (migration `021`). |
 | `source_metrics` | `jsonb` | Not null, default `{}` | Provider-specific fields not mapped to first-class columns. |
 | `saved_to_supabase_at` | `timestamptz` | Not null, default `now()` | Timestamp when the row was saved to Supabase. |
 
@@ -222,6 +224,8 @@ Stores Apify TikTok / Instagram UGC records with stable fields mapped into first
 | `virality_tier` | `text` | Nullable | Recomputed from engagement metrics by the Apify normalizer. |
 | `storage_video_url` | `text` | Nullable | Persisted Supabase Storage (`ad-videos`) URL of the downloaded video; written by `enrich-ugc` (migration `015`). |
 | `storage_thumb_url` | `text` | Nullable | Persisted Supabase Storage (`ad-videos`) URL of the thumbnail; written by `enrich-ugc` (migration `015`). |
+| `enrichment_status` | `text` | Nullable | Per-video enrichment outcome written by `enrich-ugc` (migration `021`): `enriched` (searchable), `expired` (URL no longer served video), `failed`. Null until enrichment touches the row. |
+| `enrichment_error` | `text` | Nullable | Human-readable reason for an `expired`/`failed` status (migration `021`). |
 | `source_metrics` | `jsonb` | Not null, default `{}` | Provider-specific fields not mapped to first-class columns, plus `endpoint_kind`. |
 | `saved_to_supabase_at` | `timestamptz` | Not null, default `now()` | Timestamp when the row was saved to Supabase. |
 
