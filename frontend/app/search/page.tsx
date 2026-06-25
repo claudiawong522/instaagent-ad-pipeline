@@ -44,6 +44,23 @@ function toggleInSet(set: Set<string>, value: string): Set<string> {
   return next
 }
 
+// Each ad type has its own winning signal: organic → virality, paid → days live.
+// Those scales aren't comparable, so for a mixed list we rank each ad among its
+// own type (0–1) and interleave by that rank — the strongest organic and strongest
+// paid rise together. With the type filter set to one type, this is just a plain
+// descending sort by that type's signal.
+function sortByPerformance(items: VideoResult[]): VideoResult[] {
+  const signal = (r: VideoResult) =>
+    r.item_type === 'paid_ad' ? r.days_live ?? -1 : r.virality ?? -1
+  const rank = new Map<VideoResult, number>()
+  for (const type of ['paid_ad', 'ugc_item'] as const) {
+    const group = items.filter((r) => r.item_type === type)
+    const sorted = [...group].sort((a, b) => signal(a) - signal(b))
+    sorted.forEach((r, i) => rank.set(r, group.length > 1 ? i / (group.length - 1) : 1))
+  }
+  return [...items].sort((a, b) => (rank.get(b) ?? 0) - (rank.get(a) ?? 0))
+}
+
 export default function SearchPage() {
   const [query, setQuery] = useState('')
   const [itemType, setItemType] = useState<ItemType | null>(null)
@@ -58,6 +75,7 @@ export default function SearchPage() {
   const [contentFormats, setContentFormats] = useState<Set<string>>(new Set())
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [results, setResults] = useState<VideoResult[]>([])
+  const [sortMode, setSortMode] = useState<'relevance' | 'performance'>('relevance')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [searched, setSearched] = useState(false)
@@ -277,9 +295,19 @@ export default function SearchPage() {
 
       {!loading && results.length > 0 && (
         <>
-          <p className="text-xs text-muted-foreground">{results.length} results</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">{results.length} results</p>
+            <select
+              value={sortMode}
+              onChange={(e) => setSortMode(e.target.value as 'relevance' | 'performance')}
+              className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+            >
+              <option value="relevance">Sort: Relevance</option>
+              <option value="performance">Sort: Top performing</option>
+            </select>
+          </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {results.map((r) => (
+            {(sortMode === 'performance' ? sortByPerformance(results) : results).map((r) => (
               <VideoCard key={`${r.item_type}:${r.item_id}`} result={r} />
             ))}
           </div>
