@@ -301,7 +301,7 @@ function ChipFilter({
                 : 'border-border text-muted-foreground hover:text-foreground',
             )}
           >
-            {opt}
+            {opt.replace(/_/g, ' ')}
           </button>
         )
       })}
