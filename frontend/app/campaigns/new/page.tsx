@@ -38,7 +38,8 @@ export default function NewCampaignPage() {
   function toggleGoal(g: string) {
     setGoals((s) => {
       const next = new Set(s)
-      next.has(g) ? next.delete(g) : next.add(g)
+      if (next.has(g)) next.delete(g)
+      else next.add(g)
       return next
     })
   }
