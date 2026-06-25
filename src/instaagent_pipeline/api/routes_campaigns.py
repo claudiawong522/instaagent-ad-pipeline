@@ -27,6 +27,7 @@ class CreateCampaignRequest(BaseModel):
 class ScrapeRequest(BaseModel):
     platform: str  # facebook | instagram | tiktok
     target_count: int | None = Field(default=None, ge=1, le=5000)  # new total to fetch (split per keyword)
+    estimated_cost_usd: float | None = Field(default=None, ge=0)  # pre-scrape estimate from the UI
 
 
 def _supabase(request: Request):
@@ -53,12 +54,19 @@ def scrape_stats(run_id: str, request: Request) -> dict[str, Any]:
     return campaigns_module.scrape_stats(_supabase(request), run_id)
 
 
+@router.get("/campaigns/{run_id}/scrape-events")
+def scrape_events(run_id: str, request: Request) -> dict[str, Any]:
+    return campaigns_module.list_scrape_events(_supabase(request), run_id)
+
+
 @router.post("/campaigns/{run_id}/scrape")
 def scrape(run_id: str, req: ScrapeRequest, request: Request) -> dict[str, Any]:
     _supabase(request)  # ensure configured before launching the thread
     config = request.app.state.config
     try:
-        return campaigns_module.trigger_scrape(config, run_id, req.platform, req.target_count)
+        return campaigns_module.trigger_scrape(
+            config, run_id, req.platform, req.target_count, req.estimated_cost_usd
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 

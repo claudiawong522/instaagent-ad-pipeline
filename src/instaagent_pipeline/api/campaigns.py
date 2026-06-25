@@ -16,6 +16,7 @@ from ..apify_ads import ingest_apify_ads
 from ..apify_organic import ingest_instagram, ingest_tiktok
 from ..audience_enrichment import enrich_audience
 from ..config import Config
+from ..costs import estimate_cost, reconcile_actual_cost, reconstruct_history
 from ..embeddings import ALL_SPACES, embed_items
 from ..ingestion import utc_now_iso
 from ..keywords import (
@@ -212,12 +213,17 @@ def scrape_stats(supabase: SupabaseClient, run_id: str) -> dict[str, Any]:
 
 
 def trigger_scrape(
-    config: Config, run_id: str, platform: str, target_count: int | None = None
+    config: Config,
+    run_id: str,
+    platform: str,
+    target_count: int | None = None,
+    estimated_cost_usd: float | None = None,
 ) -> dict[str, Any]:
     """Kick off the Apify scrape for one platform in a background thread; return immediately.
 
     target_count, if given, is the new TOTAL to fetch for this platform; it's split across the
     run's keywords. None falls back to each keyword's stored allocation (the create-time target).
+    estimated_cost_usd is the pre-scrape cost estimate from the UI (recorded for the scrape history).
     """
     if platform not in _PLATFORMS:
         raise ValueError(f"unknown platform {platform!r}; expected one of {sorted(_PLATFORMS)}")
@@ -226,11 +232,78 @@ def trigger_scrape(
         if key in _running:
             return {"started": False, "platform": platform, "reason": "already running"}
         _running.add(key)
-    threading.Thread(target=_run_scrape, args=(config, run_id, platform, target_count), daemon=True).start()
+    threading.Thread(
+        target=_run_scrape, args=(config, run_id, platform, target_count, estimated_cost_usd), daemon=True
+    ).start()
     return {"started": True, "platform": platform}
 
 
-def _run_scrape(config: Config, run_id: str, platform: str, target_count: int | None = None) -> None:
+def list_scrape_events(supabase: SupabaseClient, run_id: str) -> dict[str, Any]:
+    """Unified per-scrape cost history for a run, newest-first: each row is one platform scrape with
+    its date/time and total cost (Apify + enrichment + embeddings, summed). Scrapes triggered from
+    the UI are exact (cost_kind 'actual' once finished, 'estimate' while running); spend that
+    predates tracking is reconstructed per-platform from api_usage (cost_kind 'reconstructed')."""
+    tracked = supabase.select(
+        "scrape_events",
+        {
+            "select": "id,platform,items_ingested,estimated_cost_usd,actual_cost_usd,status,started_at",
+            "run_id": f"eq.{run_id}",
+            "order": "started_at.desc",
+            "limit": "200",
+        },
+    )
+
+    def _num(value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    events: list[dict[str, Any]] = []
+    for r in tracked:
+        done = r.get("actual_cost_usd") is not None
+        events.append(
+            {
+                "id": str(r.get("id")),
+                "platform": r.get("platform"),
+                "when": r.get("started_at"),
+                "cost_usd": round(_num(r["actual_cost_usd"]) if done else _num(r.get("estimated_cost_usd")), 4),
+                "cost_kind": "actual" if done else "estimate",
+                "items": r.get("items_ingested"),
+                "status": r.get("status"),
+            }
+        )
+
+    # Reconstruct pre-tracking spend from api_usage that the tracked events don't already cover.
+    cutoff = tracked[-1].get("started_at") if tracked else None
+    for h in reconstruct_history(supabase, run_id, before_iso=cutoff):
+        events.append(
+            {
+                "id": f"hist-{h['platform']}-{h['when']}",
+                "platform": h["platform"],
+                "when": h["when"],
+                "cost_usd": h["cost_usd"],
+                "cost_kind": "reconstructed",
+                "items": h["items"],
+                "status": "done",
+            }
+        )
+
+    events.sort(key=lambda e: e["when"] or "", reverse=True)
+    return {
+        "events": events,
+        "total_spent_usd": round(sum(e["cost_usd"] for e in events), 4),
+        "total_actual_usd": round(sum(e["cost_usd"] for e in events if e["cost_kind"] != "estimate"), 4),
+    }
+
+
+def _run_scrape(
+    config: Config,
+    run_id: str,
+    platform: str,
+    target_count: int | None = None,
+    estimated_cost_usd: float | None = None,
+) -> None:
     """Full chain so scraped items become searchable: ingest → enrich (downloads video, vision,
     uploads to Storage) → audience fields → embed (search + icp). Each stage skips already-done
     items, so it's safe to re-run. Long-running (minutes) — that's why it lives in a thread."""
@@ -238,6 +311,22 @@ def _run_scrape(config: Config, run_id: str, platform: str, target_count: int | 
     is_paid = target_field == "target_paid_count"
     # Fresh client for the thread — don't share the request handler's session across threads.
     supabase = SupabaseClient(config.supabase_url, config.supabase_key)
+    # Record the scrape so the UI can show its cost. Fall back to a server-side estimate if the UI
+    # didn't send one (estimate treats the whole requested total as new items). Best-effort — cost
+    # bookkeeping must never block the scrape (e.g. if migration 022 hasn't been applied yet).
+    estimate = estimated_cost_usd if estimated_cost_usd is not None else estimate_cost(platform, target_count or 0)
+    event_id: str | None = None
+    started_at: str | None = None
+    try:
+        event = supabase.insert(
+            "scrape_events",
+            {"run_id": run_id, "platform": platform, "target_count": target_count, "estimated_cost_usd": estimate},
+        )
+        event_id, started_at = event.get("id"), event.get("started_at")
+    except Exception as exc:
+        print(f"[scrape] run={run_id} could not record scrape_event: {exc}")
+    items_ingested = 0
+    failed = False
     try:
         # Stage 1 — ingest: fetch from Apify, write rows to paid_ads/ugc_items.
         rows = active_keyword_allocations(supabase, run_id)
@@ -250,7 +339,7 @@ def _run_scrape(config: Config, run_id: str, platform: str, target_count: int | 
             target = per_keyword if per_keyword is not None else int(row.get(target_field) or 0)
             if target <= 0:
                 continue
-            ingest_func(
+            result = ingest_func(
                 config=config,
                 supabase=supabase,
                 run_id=run_id,
@@ -261,6 +350,7 @@ def _run_scrape(config: Config, run_id: str, platform: str, target_count: int | 
                 input_json=None,
                 extra_params={},
             )
+            items_ingested += getattr(result, "written", 0) or 0
 
         # Stage 2 — enrich: download each new video → Gemini vision (ai_description, tone…) →
         # upload mp4 + thumbnail to Supabase Storage → write item_enrichments.
@@ -274,7 +364,24 @@ def _run_scrape(config: Config, run_id: str, platform: str, target_count: int | 
         # Stage 3 — embed both spaces so the new items are searchable. Skips already-embedded.
         embed_items(config=config, supabase=supabase, run_id=run_id, spaces=ALL_SPACES, dry_run=False)
     except Exception as exc:  # background thread — surface to the server log, nothing to return to
+        failed = True
         print(f"[scrape] run={run_id} platform={platform} failed: {exc}")
     finally:
+        # Reconcile the real spend (Apify USD + token-priced LLM/embeds) for this scrape's window.
+        if event_id:
+            try:
+                actual = reconcile_actual_cost(supabase, run_id, started_at) if started_at else None
+                supabase.update_by_id(
+                    "scrape_events",
+                    str(event_id),
+                    {
+                        "actual_cost_usd": actual,
+                        "items_ingested": items_ingested,
+                        "status": "failed" if failed else "done",
+                        "finished_at": utc_now_iso(),
+                    },
+                )
+            except Exception as exc:  # never let cost bookkeeping mask the scrape outcome
+                print(f"[scrape] run={run_id} cost reconcile failed: {exc}")
         with _running_lock:
             _running.discard((run_id, platform))

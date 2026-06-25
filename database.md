@@ -335,6 +335,23 @@ Stores one discovered cluster per run, source, and space, written by `cluster-it
 
 Unique constraint on `(run_id, item_type, space, cluster_label)`.
 
+### `scrape_events`
+
+One row per UI scrape trigger (a click of Scrape / Scrape more for a platform), written by the campaigns API (`api/campaigns.py`, migration `022_scrape_events.sql`). Powers the per-scrape cost shown on the campaigns page. `estimated_cost_usd` is set before the scrape (blended $/item × new items, `costs.py`); `actual_cost_usd` is reconciled after it finishes by summing this run's `api_usage` rows since `started_at` (Apify `usageTotalUsd` + token-priced LLM/embeds). The summed total is the only thing the UI shows — costs are never broken down per provider.
+
+| Column | Type | Constraints / default | Notes |
+| --- | --- | --- | --- |
+| `id` | `uuid` | Primary key, default `gen_random_uuid()` | Scrape event identifier. |
+| `run_id` | `uuid` | Not null, references `pipeline_runs(id)` on delete cascade | Owning run. |
+| `platform` | `text` | Not null | `facebook` / `instagram` / `tiktok`. |
+| `target_count` | `integer` | Nullable | New total requested for the platform. |
+| `items_ingested` | `integer` | Nullable | Rows actually written; filled on completion. |
+| `estimated_cost_usd` | `numeric` | Nullable | Pre-scrape estimate. |
+| `actual_cost_usd` | `numeric` | Nullable | Reconciled spend; null until the scrape finishes. |
+| `status` | `text` | Not null, default `running` | `running` / `done` / `failed`. |
+| `started_at` | `timestamptz` | Not null, default `now()` | Scrape start; the lower bound for cost reconciliation. |
+| `finished_at` | `timestamptz` | Nullable | Set when the scrape completes. |
+
 ## Indexes
 
 | Index | Table | Columns / expression | Purpose |
@@ -360,3 +377,4 @@ Unique constraint on `(run_id, item_type, space, cluster_label)`.
 | `item_clusters_cluster_idx` | `item_clusters` | `item_type, space, cluster_label` | Find members of a source/space cluster. |
 | `clusters_run_idx` | `clusters` | `run_id` | Find cluster summaries for a run. |
 | `clusters_lookup_idx` | `clusters` | `item_type, space` | Lookup cluster summaries by source and space. |
+| `scrape_events_run_idx` | `scrape_events` | `run_id, started_at desc` | Find a run's scrapes newest-first for the cost history. |

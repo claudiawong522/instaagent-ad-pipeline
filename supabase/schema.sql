@@ -225,6 +225,22 @@ create table if not exists clusters (
   unique (run_id, item_type, space, cluster_label)
 );
 
+-- One row per UI scrape trigger; powers the per-scrape cost shown on the campaigns page.
+-- estimated_cost_usd is set before the scrape; actual_cost_usd is reconciled from api_usage after
+-- it finishes (Apify usageTotalUsd + token-priced LLM/embeds). See src/instaagent_pipeline/costs.py.
+create table if not exists scrape_events (
+  id uuid primary key default gen_random_uuid(),
+  run_id uuid not null references pipeline_runs(id) on delete cascade,
+  platform text not null,
+  target_count integer,
+  items_ingested integer,
+  estimated_cost_usd numeric,
+  actual_cost_usd numeric,
+  status text not null default 'running',
+  started_at timestamptz not null default now(),
+  finished_at timestamptz
+);
+
 create index if not exists keywords_run_id_idx on keywords(run_id);
 create index if not exists source_queries_run_id_idx on source_queries(run_id);
 create index if not exists raw_payloads_run_id_idx on raw_payloads(run_id);
@@ -248,6 +264,7 @@ create index if not exists item_clusters_run_idx on item_clusters(run_id);
 create index if not exists item_clusters_cluster_idx on item_clusters(item_type, space, cluster_label);
 create index if not exists clusters_run_idx on clusters(run_id);
 create index if not exists clusters_lookup_idx on clusters(item_type, space);
+create index if not exists scrape_events_run_idx on scrape_events(run_id, started_at desc);
 
 -- Search layer (see migrations/015): a cosine KNN index + function for query search.
 -- Enrichment (description, transcript, analysis tags) lives in item_enrichments

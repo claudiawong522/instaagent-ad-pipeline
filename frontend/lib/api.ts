@@ -9,6 +9,7 @@ import type {
   CreateCampaignResult,
   Product,
   ScrapeStats,
+  ScrapeEventsResponse,
 } from './types'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -69,15 +70,24 @@ export async function getScrapeStats(runId: string): Promise<ScrapeStats> {
   return request(`/campaigns/${runId}/scrape-stats`)
 }
 
+export async function getScrapeEvents(runId: string): Promise<ScrapeEventsResponse> {
+  return request(`/campaigns/${runId}/scrape-events`)
+}
+
 export type ScrapePlatform = 'facebook' | 'instagram' | 'tiktok'
 
 export async function triggerScrape(
   runId: string,
   platform: ScrapePlatform,
   targetCount?: number,
+  estimatedCostUsd?: number,
 ): Promise<{ started: boolean; platform: string; reason?: string }> {
   return request(`/campaigns/${runId}/scrape`, {
     method: 'POST',
-    body: JSON.stringify({ platform, target_count: targetCount ?? null }),
+    body: JSON.stringify({
+      platform,
+      target_count: targetCount ?? null,
+      estimated_cost_usd: estimatedCostUsd ?? null,
+    }),
   })
 }

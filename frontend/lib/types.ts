@@ -134,6 +134,25 @@ export interface ScrapeStats {
   running: string[] // platforms mid-scrape: facebook | instagram | tiktok
 }
 
+// One platform scrape and its total cost (Apify + enrichment + embeddings, summed). cost_kind:
+// 'actual' = finished UI scrape (reconciled), 'estimate' = UI scrape still running, 'reconstructed'
+// = spend from before per-scrape tracking, rebuilt per-platform from api_usage.
+export interface ScrapeEvent {
+  id: string
+  platform: string // facebook | instagram | tiktok
+  when: string | null // scrape date/time (ISO)
+  cost_usd: number
+  cost_kind: 'actual' | 'estimate' | 'reconstructed'
+  items: number | null
+  status: string // running | done | failed
+}
+
+export interface ScrapeEventsResponse {
+  events: ScrapeEvent[] // newest-first, tracked + reconstructed
+  total_spent_usd: number
+  total_actual_usd: number
+}
+
 export interface RunSummary {
   run_id: string
   status: string | null

@@ -6,8 +6,19 @@ import { Loader2, Plus, Facebook, Instagram, Music2, ChevronDown, ChevronUp, Ale
 import { Input } from '@/components/ui/input'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { listCampaigns, getScrapeStats, triggerScrape, type ScrapePlatform } from '@/lib/api'
-import type { Campaign, ScrapeStats } from '@/lib/types'
+import { listCampaigns, getScrapeStats, getScrapeEvents, triggerScrape, type ScrapePlatform } from '@/lib/api'
+import type { Campaign, ScrapeStats, ScrapeEventsResponse } from '@/lib/types'
+
+// Rough blended $/item (Apify + enrichment + embedding) for the pre-scrape estimate. Mirror of
+// EST_COST_PER_ITEM_USD in src/instaagent_pipeline/costs.py — keep the two in sync.
+const COST_PER_ITEM_USD: Record<ScrapePlatform, number> = { facebook: 0.012, instagram: 0.01, tiktok: 0.01 }
+
+/** Format a USD amount compactly: a "<$0.01" floor for tiny spend, 2 decimals otherwise. */
+function money(usd: number | null | undefined): string {
+  if (usd == null) return '—'
+  if (usd > 0 && usd < 0.01) return '<$0.01'
+  return `$${usd.toFixed(2)}`
+}
 
 export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
@@ -54,7 +65,7 @@ export default function CampaignsPage() {
     return () => clearInterval(id)
   }, [stats, refreshStats])
 
-  async function onScrape(runId: string, platform: ScrapePlatform, targetCount: number) {
+  async function onScrape(runId: string, platform: ScrapePlatform, targetCount: number, estimatedCost: number) {
     pollRef.current.add(runId)
     // optimistic: show the spinner immediately
     setStats((prev) => ({
@@ -65,7 +76,7 @@ export default function CampaignsPage() {
       },
     }))
     try {
-      await triggerScrape(runId, platform, targetCount)
+      await triggerScrape(runId, platform, targetCount, estimatedCost)
     } catch {
       // ignore; the poll will reconcile the real state
     }
@@ -188,7 +199,7 @@ function CampaignCard({
 }: {
   campaign: Campaign
   stats: ScrapeStats | undefined
-  onScrape: (runId: string, platform: ScrapePlatform, targetCount: number) => void
+  onScrape: (runId: string, platform: ScrapePlatform, targetCount: number, estimatedCost: number) => void
 }) {
   const [showInputs, setShowInputs] = useState(false)
   return (
@@ -215,17 +226,18 @@ function CampaignCard({
         </div>
       )}
 
-      {/* View previously-entered inputs */}
+      {/* Reveal scrape cost history + previously-entered inputs */}
       <button
         type="button"
         onClick={() => setShowInputs((v) => !v)}
         className="flex items-center gap-1 self-start text-xs font-medium text-muted-foreground hover:text-foreground"
       >
         {showInputs ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
-        {showInputs ? 'Hide inputs' : 'View inputs'}
+        {showInputs ? 'Show less' : 'Load more'}
       </button>
       {showInputs && (
         <div className="flex flex-col gap-3">
+          <ScrapeHistory runId={c.run_id} stats={stats} />
           <EnrichmentBreakdown stats={stats} />
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-md bg-muted/50 p-3 text-xs">
             <InputRow label="Product" value={c.product_name} />
@@ -277,12 +289,18 @@ function PlatformTile({
   lastScraped: string | null
   running: boolean
   defaultTarget: number
-  onScrape: (runId: string, platform: ScrapePlatform, targetCount: number) => void
+  onScrape: (runId: string, platform: ScrapePlatform, targetCount: number, estimatedCost: number) => void
 }) {
   const [confirming, setConfirming] = useState(false)
   const [target, setTarget] = useState('')
   const scraped = total > 0
   const last = timeAgo(lastScraped)
+
+  // Live estimate: blended $/item × the items this scrape would newly fetch (requested total minus
+  // what's already scraped). "Scrape more" past the current count costs ~nothing new but may re-fetch dupes.
+  const requested = Math.max(1, Number(target) || defaultTarget)
+  const newItems = Math.max(0, requested - total)
+  const estCost = newItems * COST_PER_ITEM_USD[key]
 
   function openConfirm() {
     // new TOTAL to fetch: a real increase over what's there, or the campaign target for a first scrape
@@ -291,9 +309,8 @@ function PlatformTile({
   }
 
   function confirm() {
-    const n = Math.max(1, Number(target) || defaultTarget)
     setConfirming(false)
-    onScrape(runId, key, n)
+    onScrape(runId, key, requested, Number(estCost.toFixed(4)))
   }
 
   if (confirming) {
@@ -308,9 +325,13 @@ function PlatformTile({
           onChange={(e) => setTarget(e.target.value)}
           className="h-7 w-20 text-center text-sm"
         />
+        <span className="text-[11px] font-medium tabular-nums">
+          ≈ {money(estCost)}
+          <span className="font-normal text-muted-foreground"> · {newItems} new</span>
+        </span>
         <span className="flex items-start gap-1 text-[10px] leading-tight text-amber-600 dark:text-amber-500">
           <AlertTriangle className="mt-px size-3 shrink-0" />
-          costs Apify credits{scraped ? '; may re-fetch dupes' : ''}
+          estimated cost{scraped ? '; may re-fetch dupes' : ''}
         </span>
         <div className="flex w-full gap-1">
           <Button type="button" size="sm" variant="ghost" onClick={() => setConfirming(false)} className="h-6 flex-1 px-1 text-xs">
@@ -350,6 +371,83 @@ function PlatformTile({
           <Icon className="size-3" /> Scrape
         </Button>
       )}
+    </div>
+  )
+}
+
+const PLATFORM_LABEL: Record<string, string> = {
+  facebook: 'Facebook ads',
+  instagram: 'Instagram reels',
+  tiktok: 'TikToks',
+}
+
+/** Scrape date/time, e.g. "Jun 23, 6:31 AM". */
+function dateTime(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
+/** Per-scrape cost history: one row per platform scrape, newest-first, each with its date/time and
+ * total cost (Apify + enrichment + embeddings, summed). UI scrapes are exact (estimate while
+ * running → actual once done); spend from before tracking is reconstructed per-platform. Refetches
+ * whenever the campaign's scrape state changes so a just-finished scrape's real cost lands. */
+function ScrapeHistory({ runId, stats }: { runId: string; stats: ScrapeStats | undefined }) {
+  const [data, setData] = useState<ScrapeEventsResponse | null>(null)
+  // Re-fetch on a scrape state change: a platform mid-scrape, or a new last-scraped timestamp.
+  const refreshKey = [
+    stats?.running.join(','),
+    stats?.facebook_last_scraped,
+    stats?.instagram_last_scraped,
+    stats?.tiktok_last_scraped,
+  ].join('|')
+  useEffect(() => {
+    getScrapeEvents(runId)
+      .then(setData)
+      .catch(() => {})
+  }, [runId, refreshKey])
+
+  if (!data || data.events.length === 0) {
+    return (
+      <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
+        No scrapes yet — each scrape and its cost appears here.
+      </div>
+    )
+  }
+  const pending = data.events.some((e) => e.cost_kind === 'estimate')
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md bg-muted/50 p-3 text-xs">
+      <div className="font-medium text-muted-foreground">Scrapes &amp; cost</div>
+      {data.events.map((e) => {
+        const estimate = e.cost_kind === 'estimate'
+        return (
+          <div key={e.id} className="flex items-baseline justify-between gap-2">
+            <span className="text-foreground">
+              {PLATFORM_LABEL[e.platform] ?? e.platform}
+              <span className="text-muted-foreground">
+                {' · '}
+                {dateTime(e.when)}
+                {e.items != null ? ` · ${e.items} items` : ''}
+              </span>
+            </span>
+            <span className="shrink-0 tabular-nums">
+              {estimate ? (
+                <span className="text-muted-foreground/70">
+                  ≈ {money(e.cost_usd)}
+                  {e.status === 'running' ? ' · running…' : ''}
+                </span>
+              ) : (
+                <span className="text-foreground">{money(e.cost_usd)}</span>
+              )}
+            </span>
+          </div>
+        )
+      })}
+      <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-border pt-1.5 font-medium">
+        <span className="text-foreground">Total spent{pending ? ' (so far)' : ''}</span>
+        <span className="shrink-0 tabular-nums text-foreground">{money(data.total_spent_usd)}</span>
+      </div>
     </div>
   )
 }
