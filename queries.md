@@ -1,6 +1,6 @@
 # Queries
 
-## Find Keyword Used For A UGC Item
+## Find Keyword Used For An Organic Item
 
 Use `ugc_items.raw_payload_id -> raw_payloads.source_query_id -> source_queries.request_params`.
 
@@ -63,7 +63,7 @@ If you mean Meta's ad archive ID instead of the Supabase row UUID:
 where pa.id = '<META_AD_ARCHIVE_ID>';
 ```
 
-## Find The Most Similar Videos Across Paid Ads And UGC
+## Find The Most Similar Videos Across Paid Ads And Organic
 
 `item_embeddings` stores one pgvector row per item per space (`icp`/`search`). The `search` space embeds `ai_description` + tags + full transcript. `<=>` is cosine distance (smaller = more similar).
 

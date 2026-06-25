@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from instaagent_pipeline.apify_ugc import ingest_tiktok
+from instaagent_pipeline.apify_organic import ingest_tiktok
 from instaagent_pipeline.config import Config
 from instaagent_pipeline.normalizers import (
     normalize_instagram_reel,

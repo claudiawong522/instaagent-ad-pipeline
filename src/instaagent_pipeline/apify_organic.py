@@ -1,10 +1,10 @@
-"""UGC ingestion via Apify keyword scrapers, replacing TopYappers.
+"""Organic ingestion via Apify keyword scrapers, replacing TopYappers.
 
 TikTok  -> clockworks/tiktok-scraper        (keyword search; followers native)
 Instagram -> data-slayer/instagram-search-reels (keyword search; followers backfilled)
 
 Both write to ugc_items. Rows without a usable downloadable video are dropped. The
-analysis columns are filled later by the UGC vision enrichment.
+analysis columns are filled later by the organic vision enrichment.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def run_apify_actor_items(
     return result_items(dataset_response.body), dataset_response.status, dataset_response.headers, metadata
 
 
-def _ingest_apify_ugc(
+def _ingest_apify_organic(
     *,
     config: Config,
     supabase: SupabaseClient | None,
@@ -185,7 +185,7 @@ def ingest_tiktok(
     }
     if extra_params:
         actor_input.update(extra_params)
-    return _ingest_apify_ugc(
+    return _ingest_apify_organic(
         config=config,
         supabase=supabase,
         run_id=run_id,
@@ -217,7 +217,7 @@ def ingest_instagram(
     actor_input: dict[str, Any] = {"query": keyword, "maxPages": max_pages}
     if extra_params:
         actor_input.update(extra_params)
-    return _ingest_apify_ugc(
+    return _ingest_apify_organic(
         config=config,
         supabase=supabase,
         run_id=run_id,

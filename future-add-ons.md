@@ -13,9 +13,9 @@ These are good ideas intentionally deferred to keep the first version lean.
 - If the broader Apify transcript actor has poor Instagram reliability or cost, compare Apify `apple_yang/instagram-transcripts-scraper` as an Instagram-only alternative. It accepts one public Instagram video URL and returns `text` plus timestamped `segments`.
 - If Apify confirms array input is stable for `tictechid/anoxvanzi-transcriber`, batch multiple known URLs into one actor run to reduce per-run base charges.
 
-## Account-Size-Normalized UGC Virality
+## Account-Size-Normalized Organic Virality
 
-- Normalize UGC performance by creator follower count or historical baseline.
+- Normalize organic performance by creator follower count or historical baseline.
 - Useful once source data quality around follower counts is confirmed.
 
 ## Human Review UI

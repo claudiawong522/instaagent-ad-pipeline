@@ -36,17 +36,17 @@ Rules that override everything else:
 
 <fenced block: every CLI command executed, in order, full flags>
 
-**Targets:** <N> total = <N> paid + <N> UGC
+**Targets:** <N> total = <N> paid + <N> organic
 **Keywords:** <count> (<manual | Claude-generated>)
 
-| Keyword | Paid allocation | UGC allocation |
+| Keyword | Paid allocation | Organic allocation |
 |---|---|---|
 | ... | ... | ... |
 
 ## 2. Stage-by-stage
 
 For each stage, one block in pipeline order. Stages: init-run, paid ingestion,
-paid enrichment, UGC ingestion, UGC transcript backfill, embeddings. Format:
+paid enrichment, organic ingestion, organic transcript backfill, embeddings. Format:
 
 **Stage <n> — <name> (<provider/model>)** · API calls: <count> (<breakdown: completed/failed>)
 → <inputs consumed> → <outputs produced with counts, per keyword where applicable>, failures: <n>.
@@ -63,7 +63,7 @@ The embeddings stage always ends with the per-type/per-space table:
 | | Targeted | Fetched | Distinct rows | Analyzed/with metadata | Embedded (items) |
 |---|---|---|---|---|---|
 | Paid | | | | | |
-| UGC | | | | | |
+| Organic | | | | | |
 
 ## 4. API call ledger (from `source_queries`)
 

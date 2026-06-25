@@ -20,13 +20,13 @@ from ..supabase_client import SupabaseClient
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # running_duration (days the ad has been live, the verified-populated column — NOT the
-# legacy running_duration_days) is the paid-ad performance metric, the analog of UGC
+# legacy running_duration_days) is the paid-ad performance metric, the analog of organic
 # virality. Exposed as `days_live` on the result.
 PAID_HYDRATE_COLUMNS = (
     "paid_ad_row_id,run_id,name,headline,description,publisher_platform,storage_video_url,"
     "storage_thumb_url,video,thumbnail,image,link_url,running_duration"
 )
-UGC_HYDRATE_COLUMNS = (
+ORGANIC_HYDRATE_COLUMNS = (
     "id,run_id,handle,user_handle,nickname,source,followers,views,likes,virality_score,"
     "virality_tier,storage_video_url,storage_thumb_url,video_url,cover"
 )
@@ -131,17 +131,17 @@ def search_ads(
         return []
 
     paid_ids = [iid for it, iid in order if it == "paid_ad"]
-    ugc_ids = [iid for it, iid in order if it == "ugc_item"]
+    organic_ids = [iid for it, iid in order if it == "ugc_item"]
 
     with ThreadPoolExecutor(max_workers=4) as ex:
         f_paid = ex.submit(_hydrate, supabase, "paid_ads", "paid_ad_row_id", paid_ids, PAID_HYDRATE_COLUMNS)
-        f_ugc = ex.submit(_hydrate, supabase, "ugc_items", "id", ugc_ids, UGC_HYDRATE_COLUMNS)
+        f_organic = ex.submit(_hydrate, supabase, "ugc_items", "id", organic_ids, ORGANIC_HYDRATE_COLUMNS)
         f_paid_enr = ex.submit(_enrichments, supabase, "paid_ad", paid_ids)
-        f_ugc_enr = ex.submit(_enrichments, supabase, "ugc_item", ugc_ids)
-        paid, ugc, paid_enr, ugc_enr = f_paid.result(), f_ugc.result(), f_paid_enr.result(), f_ugc_enr.result()
+        f_organic_enr = ex.submit(_enrichments, supabase, "ugc_item", organic_ids)
+        paid, organic, paid_enr, organic_enr = f_paid.result(), f_organic.result(), f_paid_enr.result(), f_organic_enr.result()
 
     return _assemble(
-        order, paid, ugc, paid_enr, ugc_enr, similarity,
+        order, paid, organic, paid_enr, organic_enr, similarity,
         platform=platform, min_virality=min_virality, min_views=min_views,
         min_days_live=min_days_live, languages=languages, age_brackets=age_brackets,
         content_formats=content_formats, price_tier=price_tier, limit=limit,
@@ -207,9 +207,9 @@ def _browse_ads(
     """Empty-query browse: list ads straight from the source tables (no vector search)."""
     order: list[tuple[str, str]] = []
     paid: dict[str, dict[str, Any]] = {}
-    ugc: dict[str, dict[str, Any]] = {}
+    organic: dict[str, dict[str, Any]] = {}
     paid_ids: list[str] = []
-    ugc_ids: list[str] = []
+    organic_ids: list[str] = []
 
     if item_type in (None, "paid_ad"):
         params: dict[str, str] = {"select": PAID_HYDRATE_COLUMNS, "limit": str(pool)}
@@ -225,7 +225,7 @@ def _browse_ads(
             order.append(("paid_ad", iid))
 
     if item_type in (None, "ugc_item"):
-        params = {"select": UGC_HYDRATE_COLUMNS, "limit": str(pool)}
+        params = {"select": ORGANIC_HYDRATE_COLUMNS, "limit": str(pool)}
         if run_id:
             params["run_id"] = f"eq.{run_id}"
         for row in supabase.select("ugc_items", params):
@@ -233,17 +233,17 @@ def _browse_ads(
             if not iid:
                 continue
             iid = str(iid)
-            ugc[iid] = row
-            ugc_ids.append(iid)
+            organic[iid] = row
+            organic_ids.append(iid)
             order.append(("ugc_item", iid))
 
     with ThreadPoolExecutor(max_workers=2) as ex:
         f_paid_enr = ex.submit(_enrichments, supabase, "paid_ad", paid_ids)
-        f_ugc_enr = ex.submit(_enrichments, supabase, "ugc_item", ugc_ids)
-        paid_enr, ugc_enr = f_paid_enr.result(), f_ugc_enr.result()
+        f_organic_enr = ex.submit(_enrichments, supabase, "ugc_item", organic_ids)
+        paid_enr, organic_enr = f_paid_enr.result(), f_organic_enr.result()
 
     return _assemble(
-        order, paid, ugc, paid_enr, ugc_enr, {},
+        order, paid, organic, paid_enr, organic_enr, {},
         platform=platform, min_virality=min_virality, min_views=min_views,
         min_days_live=min_days_live, languages=languages, age_brackets=age_brackets,
         content_formats=content_formats, price_tier=price_tier, limit=limit,
@@ -253,9 +253,9 @@ def _browse_ads(
 def _assemble(
     order: list[tuple[str, str]],
     paid: dict[str, dict[str, Any]],
-    ugc: dict[str, dict[str, Any]],
+    organic: dict[str, dict[str, Any]],
     paid_enr: dict[str, dict[str, Any]],
-    ugc_enr: dict[str, dict[str, Any]],
+    organic_enr: dict[str, dict[str, Any]],
     similarity: dict[tuple[str, str], Any],
     *,
     platform: str | None,
@@ -282,15 +282,15 @@ def _assemble(
             row = paid.get(iid)
             enrichment = paid_enr.get(iid)
         else:
-            row = ugc.get(iid)
-            enrichment = ugc_enr.get(iid)
+            row = organic.get(iid)
+            enrichment = organic_enr.get(iid)
         if not row:
             continue
         source_video = row.get("video") if it == "paid_ad" else row.get("video_url")
         # Dedupe on the video *filename*, not the full URL: the same Meta creative is
         # served under different signed URLs and CDN hosts (e.g. fabe1-1 vs lax7-1), so
         # the signed URLs differ while the content-hash filename is identical. Filenames
-        # are content-addressed (Meta) or per-record unique (Apify UGC), so no false merges.
+        # are content-addressed (Meta) or per-record unique (Apify organic), so no false merges.
         video_key = _video_dedupe_key(source_video)
         if video_key:
             if video_key in seen_videos:
@@ -303,8 +303,8 @@ def _assemble(
             continue
         if min_views is not None and (result["views"] is None or result["views"] < min_views):
             continue
-        # days_live is paid-only (None for UGC), so this filter narrows to paid ads —
-        # the longevity analog of the UGC-only virality/views filters above.
+        # days_live is paid-only (None for organic), so this filter narrows to paid ads —
+        # the longevity analog of the organic-only virality/views filters above.
         if min_days_live is not None and (result.get("days_live") is None or result["days_live"] < min_days_live):
             continue
         # Categorical filters (cross-type). Multi-value (languages, age_brackets) match by
@@ -363,7 +363,7 @@ def get_item(config: Config, supabase: SupabaseClient, item_type: str, item_id: 
         rows = _hydrate(supabase, "paid_ads", "paid_ad_row_id", [item_id], PAID_HYDRATE_COLUMNS)
         enrichment = _enrichments(supabase, "paid_ad", [item_id]).get(item_id)
     elif item_type == "ugc_item":
-        rows = _hydrate(supabase, "ugc_items", "id", [item_id], UGC_HYDRATE_COLUMNS)
+        rows = _hydrate(supabase, "ugc_items", "id", [item_id], ORGANIC_HYDRATE_COLUMNS)
         enrichment = _enrichments(supabase, "ugc_item", [item_id]).get(item_id)
     else:
         return None

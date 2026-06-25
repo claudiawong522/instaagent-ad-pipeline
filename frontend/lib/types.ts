@@ -20,7 +20,7 @@ export interface VideoResult {
   video_topic: string | null
   transcript: string | null
   similarity: number | null
-  // Paid-only longevity proxy (days the ad has been running); null for UGC.
+  // Paid-only longevity proxy (days the ad has been running); null for organic.
   days_live: number | null
   // Phase 4 audience fields (null/[] until migration 018 + enrich-audience populate them).
   target_generation: string | null
@@ -42,8 +42,8 @@ export interface SearchFilters {
   item_type?: ItemType | null
   platform?: string | null
   run_id?: string | null
-  min_virality?: number | null // UGC-only (engagement rate %)
-  min_views?: number | null // UGC-only
+  min_virality?: number | null // organic-only (engagement rate %)
+  min_views?: number | null // organic-only
   min_days_live?: number | null // paid-only (days the ad has been running)
   languages?: string[] | null // multi-select, overlap match
   age_brackets?: string[] | null // multi-select, overlap match

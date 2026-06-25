@@ -88,7 +88,7 @@ def test_enrich_paid_ads_command_dispatches(monkeypatch: Any, capsys: Any) -> No
 
 
 @pytest.mark.parametrize("command", ["ingest-tiktok", "ingest-instagram"])
-def test_ingest_ugc_triggers_enrichment(
+def test_ingest_organic_triggers_enrichment(
     command: str, monkeypatch: Any, capsys: Any
 ) -> None:
     calls: dict[str, Any] = {}
@@ -101,7 +101,7 @@ def test_ingest_ugc_triggers_enrichment(
         calls["enrich"] = kwargs
         return {"written": 4}
 
-    monkeypatch.setattr(cli, "enrich_ugc_items", fake_enrich)
+    monkeypatch.setattr(cli, "enrich_organic_items", fake_enrich)
 
     exit_code = cli.main([command, "--run-id", "run_1", "--keyword", "cleanser"])
 
@@ -114,7 +114,7 @@ def test_ingest_ugc_triggers_enrichment(
 
 
 @pytest.mark.parametrize("command", ["ingest-tiktok", "ingest-instagram"])
-def test_ingest_ugc_skip_enrichment(
+def test_ingest_organic_skip_enrichment(
     command: str, monkeypatch: Any, capsys: Any
 ) -> None:
     monkeypatch.setattr(cli, "build_supabase", lambda config, dry_run: object())
@@ -122,9 +122,9 @@ def test_ingest_ugc_skip_enrichment(
     monkeypatch.setattr(cli, "ingest_instagram", lambda **kwargs: IngestResult(fetched=4, written=4))
 
     def fail_enrich(**kwargs: Any) -> None:
-        raise AssertionError("enrich_ugc_items should not be called with --skip-enrichment")
+        raise AssertionError("enrich_organic_items should not be called with --skip-enrichment")
 
-    monkeypatch.setattr(cli, "enrich_ugc_items", fail_enrich)
+    monkeypatch.setattr(cli, "enrich_organic_items", fail_enrich)
 
     exit_code = cli.main(
         [command, "--run-id", "run_1", "--keyword", "cleanser", "--skip-enrichment"]

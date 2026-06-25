@@ -713,7 +713,7 @@ def record_item_status(
     """Persist a per-video enrichment outcome on the source row so the UI can show how
     many scraped videos became searchable vs expired/failed. Status is one of
     'enriched' | 'expired' | 'failed'. Best-effort: a status write must never break
-    enrichment, so failures are logged, not raised. Shared by paid + UGC enrichment."""
+    enrichment, so failures are logged, not raised. Shared by paid + organic enrichment."""
     try:
         supabase.update_by_column(
             table, id_column, item_id, {"enrichment_status": status, "enrichment_error": error}
@@ -736,7 +736,7 @@ def persist_media(
 ) -> dict[str, str]:
     """Persist the video (and provider thumbnail) to Supabase Storage and record the
     public URLs on the item row. Resilient: upload failures are logged, not raised, so
-    enrichment still proceeds. Shared by paid + UGC enrichment."""
+    enrichment still proceeds. Shared by paid + organic enrichment."""
     updates: dict[str, str] = {}
     try:
         updates["storage_video_url"] = supabase.upload_object(

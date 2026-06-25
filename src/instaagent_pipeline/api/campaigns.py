@@ -13,7 +13,7 @@ from typing import Any
 
 from ..ad_enrichment import enrich_paid_ads
 from ..apify_ads import ingest_apify_ads
-from ..apify_ugc import ingest_instagram, ingest_tiktok
+from ..apify_organic import ingest_instagram, ingest_tiktok
 from ..audience_enrichment import enrich_audience
 from ..config import Config
 from ..embeddings import ALL_SPACES, embed_items
@@ -24,11 +24,11 @@ from ..keywords import (
     insert_keyword_allocations,
 )
 from ..supabase_client import SupabaseClient
-from ..ugc_enrichment import enrich_ugc_items
+from ..organic_enrichment import enrich_organic_items
 from .search import _hydrate
 
 # UI platform name -> (ingest function, run target column, Apify page_size).
-# page_size mirrors the CLI: the ads actor paginates by target_count, the UGC actors use 0.
+# page_size mirrors the CLI: the ads actor paginates by target_count, the organic actors use 0.
 _PLATFORMS: dict[str, tuple[Any, str, bool]] = {
     "facebook": (ingest_apify_ads, "target_paid_count", True),
     "instagram": (ingest_instagram, "target_ugc_count", False),
@@ -185,16 +185,16 @@ def _platform_stats(prefix: str, b: dict[str, Any]) -> dict[str, Any]:
 
 def scrape_stats(supabase: SupabaseClient, run_id: str) -> dict[str, Any]:
     """Live per-platform scrape health: searchable / expired / failed / processing counts,
-    last-scraped time, and which platforms are mid-scrape. Two selects (paid + ugc), bucketed
+    last-scraped time, and which platforms are mid-scrape. Two selects (paid + organic), bucketed
     in Python; fine at current scale (revisit with a count RPC if a run holds 10k+ items)."""
     cols = "enrichment_status,saved_to_supabase_at"
     paid = supabase.select("paid_ads", {"select": f"{cols},video", "run_id": f"eq.{run_id}", "limit": "100000"})
-    ugc = supabase.select(
+    organic = supabase.select(
         "ugc_items", {"select": f"{cols},video_url,source", "run_id": f"eq.{run_id}", "limit": "100000"}
     )
     fb = _breakdown(paid, "video")
-    ig = _breakdown([r for r in ugc if r.get("source") == "instagram"], "video_url")
-    tt = _breakdown([r for r in ugc if r.get("source") == "tiktok"], "video_url")
+    ig = _breakdown([r for r in organic if r.get("source") == "instagram"], "video_url")
+    tt = _breakdown([r for r in organic if r.get("source") == "tiktok"], "video_url")
     with _running_lock:
         running = sorted(p for (r, p) in _running if r == run_id)
     return {
@@ -267,7 +267,7 @@ def _run_scrape(config: Config, run_id: str, platform: str, target_count: int | 
         if is_paid:
             enrich_paid_ads(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
         else:
-            enrich_ugc_items(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
+            enrich_organic_items(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
         # Audience fields (target_generation etc.) — must land before the icp embed reads them.
         enrich_audience(config=config, supabase=supabase, run_id=run_id, source="all", dry_run=False)
 

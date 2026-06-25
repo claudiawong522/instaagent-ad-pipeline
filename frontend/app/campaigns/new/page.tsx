@@ -26,7 +26,7 @@ export default function NewCampaignPage() {
   const [goals, setGoals] = useState<Set<string>>(new Set())
   const [objective, setObjective] = useState('')
   const [paidTarget, setPaidTarget] = useState('50')
-  const [ugcTarget, setUgcTarget] = useState('50')
+  const [organicTarget, setOrganicTarget] = useState('50')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [products, setProducts] = useState<Product[]>([])
@@ -64,7 +64,7 @@ export default function NewCampaignPage() {
         marketing_goals: Array.from(goals),
         campaign_objective: objective.trim() || null,
         target_paid_count: Math.max(1, Number(paidTarget) || 50),
-        target_ugc_count: Math.max(1, Number(ugcTarget) || 50),
+        target_ugc_count: Math.max(1, Number(organicTarget) || 50),
       })
       // back to the list, where the new campaign appears and can be scraped
       router.push('/campaigns')
@@ -181,8 +181,8 @@ export default function NewCampaignPage() {
             <Field label="Facebook ads to scrape">
               <Input type="number" min={1} value={paidTarget} onChange={(e) => setPaidTarget(e.target.value)} className="w-32" />
             </Field>
-            <Field label="UGC videos (reels + TikTok)">
-              <Input type="number" min={1} value={ugcTarget} onChange={(e) => setUgcTarget(e.target.value)} className="w-32" />
+            <Field label="Organic videos (reels + TikTok)">
+              <Input type="number" min={1} value={organicTarget} onChange={(e) => setOrganicTarget(e.target.value)} className="w-32" />
             </Field>
           </div>
         </Section>

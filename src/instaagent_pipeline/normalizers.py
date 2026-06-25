@@ -336,11 +336,11 @@ def days_since_timestamp(value: str | None) -> int | None:
     return max((datetime.now(UTC) - parsed).days, 0)
 
 
-# ── UGC: Apify TikTok (clockworks) + Instagram (data-slayer) → ugc_items ──
+# ── Organic: Apify TikTok (clockworks) + Instagram (data-slayer) → ugc_items ──
 #
-# These replace TopYappers as the UGC source. The Apify scrapers provide engagement
+# These replace TopYappers as the organic source. The Apify scrapers provide engagement
 # + creator metadata only; the analysis columns (hook, content_format, persona, ...)
-# are filled later by the UGC vision enrichment, so they are left null here. virality
+# are filled later by the organic vision enrichment, so they are left null here. virality
 # is recomputed from engagement since these providers do not supply a virality score.
 
 

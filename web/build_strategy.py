@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build web/strategy_data.js from live Supabase data.
 
-Pulls the ICP clusters for BOTH sources (UGC + paid ads) and their member
+Pulls the ICP clusters for BOTH sources (organic + paid ads) and their member
 items, shaping them into the structure strategy.html renders: a source
-toggle (UGC / Paid Ads), each holding one accordion per ICP / persona with
+toggle (Organic / Paid Ads), each holding one accordion per ICP / persona with
 persona text + pains + scrolls-for + trending pillars + proven-format videos.
 
 Re-run any time to refresh the page against the database:
@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ENV_PATH = ROOT / ".env"
 OUT_PATH = ROOT / "web" / "strategy_data.js"
 
-UGC_FIELDS = [
+ORGANIC_FIELDS = [
     "id", "handle", "nickname", "country", "views", "likes",
     "video_url", "cover", "avatar", "description", "hook", "hashtags",
     "content_format", "virality_score", "virality_tier",
@@ -92,7 +92,7 @@ def embed_for(video_url: str) -> dict[str, str]:
     return {"platform": "other", "embed_url": ""}
 
 
-def map_ugc(it: dict) -> dict:
+def map_organic(it: dict) -> dict:
     return {
         "handle": "@" + (it.get("handle") or "creator"),
         "nickname": it.get("nickname") or "",
@@ -234,8 +234,8 @@ def resolve_run_id(base, key) -> str:
 def build() -> dict:
     base, key = load_env()
     run_id = resolve_run_id(base, key)
-    ugc = build_source(base, key, run_id, "ugc_item", "ugc_items", "id",
-                       UGC_FIELDS, map_ugc)
+    organic = build_source(base, key, run_id, "ugc_item", "ugc_items", "id",
+                       ORGANIC_FIELDS, map_organic)
     paid = build_source(base, key, run_id, "paid_ad", "paid_ads", "paid_ad_row_id",
                         PAID_FIELDS, map_paid)
     return {
@@ -243,7 +243,7 @@ def build() -> dict:
         "product": "QV (Ego Pharmaceuticals)",
         "run_id": run_id,
         "sources": [
-            {"key": "ugc", "label": "UGC", **ugc},
+            {"key": "ugc", "label": "Organic", **organic},
             {"key": "paid_ad", "label": "Paid Ads", **paid},
         ],
     }

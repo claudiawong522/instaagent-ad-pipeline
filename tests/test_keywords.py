@@ -16,7 +16,7 @@ def test_parse_keyword_allocations_requires_totals_to_match() -> None:
     }
     """
 
-    allocations = parse_keyword_allocations(text, expected_paid_total=10, expected_ugc_total=30)
+    allocations = parse_keyword_allocations(text, expected_paid_total=10, expected_organic_total=30)
 
     assert [allocation.keyword_text for allocation in allocations] == [
         "cleanser",
@@ -39,7 +39,7 @@ def test_parse_keyword_allocations_rejects_wrong_totals() -> None:
     """
 
     with pytest.raises(RuntimeError, match="paid allocation total"):
-        parse_keyword_allocations(text, expected_paid_total=10, expected_ugc_total=30)
+        parse_keyword_allocations(text, expected_paid_total=10, expected_organic_total=30)
 
 
 def test_allocate_manual_keywords_splits_targets_exactly() -> None:

@@ -4,12 +4,12 @@
 
 ## Data Flow
 
-1. User gives product info, campaign guidelines, target number of paid ads, and target number of UGC videos. This creates `products` and `pipeline_runs` (`init-run`).
-2. If no manual keywords are passed, Claude Haiku extracts 3-5 keywords, aiming for 3 highly relevant single-word keywords, and splits paid ad / UGC targets across them. The allocations must add up to the user's requested totals. Keywords are stored in `keywords`; the Claude call is logged in `api_usage`.
-3. Ingest commands load active keywords for the run. Apify paid-ad ingestion (`ingest-apify-ads`, Meta Ad Library) and Apify UGC ingestion (`ingest-tiktok` via `clockworks/tiktok-scraper`; `ingest-instagram` reels via `data-slayer/instagram-search-reels`) query each keyword for its allocated count. Each query is logged in `source_queries`; each live API response is logged in `api_usage`; raw JSON goes into `raw_payloads`.
+1. User gives product info, campaign guidelines, target number of paid ads, and target number of organic videos. This creates `products` and `pipeline_runs` (`init-run`).
+2. If no manual keywords are passed, Claude Haiku extracts 3-5 keywords, aiming for 3 highly relevant single-word keywords, and splits paid ad / organic targets across them. The allocations must add up to the user's requested totals. Keywords are stored in `keywords`; the Claude call is logged in `api_usage`.
+3. Ingest commands load active keywords for the run. Apify paid-ad ingestion (`ingest-apify-ads`, Meta Ad Library) and Apify organic ingestion (`ingest-tiktok` via `clockworks/tiktok-scraper`; `ingest-instagram` reels via `data-slayer/instagram-search-reels`) query each keyword for its allocated count. Each query is logged in `source_queries`; each live API response is logged in `api_usage`; raw JSON goes into `raw_payloads`.
 4. If an API returns fewer ads or videos than requested for a keyword, the pipeline saves what came back and moves on.
 5. Normalized Apify Meta Ad Library output fills `paid_ads`. Normalized Apify TikTok/Instagram output fills `ugc_items`. TikTok follower counts are native; Instagram reel follower counts are backfilled by `backfill-ig-followers` (via `apify/instagram-profile-scraper`). The Apify normalizers recompute `virality_score` / `virality_tier` from engagement metrics.
-6. Vision enrichment runs after ingestion: `enrich-paid-ads` is auto-triggered by `ingest-apify-ads`, and UGC vision enrichment (`enrich-ugc`) is auto-triggered by `ingest-tiktok` / `ingest-instagram`. For each item, enrichment downloads the video bytes into memory, uploads them to the Supabase Storage bucket `ad-videos`, and records the persisted `storage_video_url` / `storage_thumb_url` on the item table (`paid_ads` / `ugc_items`). It reuses the same in-memory bytes, base64-encoded, for a single OpenRouter vision call (default model `google/gemini-3-flash-preview`) that returns the spoken transcript plus creative analysis. For paid ads, the existing ad copy is also passed to the model.
+6. Vision enrichment runs after ingestion: `enrich-paid-ads` is auto-triggered by `ingest-apify-ads`, and organic vision enrichment (`enrich-ugc`) is auto-triggered by `ingest-tiktok` / `ingest-instagram`. For each item, enrichment downloads the video bytes into memory, uploads them to the Supabase Storage bucket `ad-videos`, and records the persisted `storage_video_url` / `storage_thumb_url` on the item table (`paid_ads` / `ugc_items`). It reuses the same in-memory bytes, base64-encoded, for a single OpenRouter vision call (default model `google/gemini-3-flash-preview`) that returns the spoken transcript plus creative analysis. For paid ads, the existing ad copy is also passed to the model.
 7. Each enrichment writes one row to `item_enrichments` (polymorphic on `item_type` / `item_id`, one row per item): `transcript_text` + `transcript_segments`, `ai_description`, and the analysis fields (`hook`, `persona`, `target_demographic`, `content_format`, and the rest), with `analysis_model` and `analyzed_at` recording the run. It also stamps the per-video outcome back onto the source row (`paid_ads.enrichment_status` / `ugc_items.enrichment_status`): `enriched` when the item became searchable, `expired` when the provider URL no longer served video bytes (Apify links expire before OpenRouter fetches them), or `failed` otherwise — so the campaigns UI can show "X of Y videos searchable" per platform via the `scrape-stats` endpoint.
 8. `embed-items` writes ICP and search vectors to `item_embeddings` (Voyage AI). The `search` space combines `ai_description`, a labeled tag block, and the full transcript; the `icp` space combines `persona` and `target_demographic`.
 9. `cluster-items` clusters ICP vectors per source, writes item assignments to `item_clusters`, and writes cluster summaries, centroids, exemplars, and optional OpenRouter labels to `clusters`.
@@ -20,7 +20,7 @@
 User: product + campaign info
         │  init-run
         ▼
-products ── pipeline_runs ── keywords  (Claude Haiku splits paid/UGC targets across 3-5 keywords)
+products ── pipeline_runs ── keywords  (Claude Haiku splits paid/organic targets across 3-5 keywords)
         │
         ├─ ingest-apify-ads (per keyword)
         │     Meta Ad Library via Apify ──► paid_ads  (copy, video URL, metrics)
@@ -35,7 +35,7 @@ products ── pipeline_runs ── keywords  (Claude Haiku splits paid/UGC tar
               ├─ backfill-ig-followers (apify/instagram-profile-scraper)
               └─ auto: enrich-ugc
 
-   vision enrichment (paid + UGC):
+   vision enrichment (paid + organic):
         download video bytes ──► Supabase Storage bucket 'ad-videos'
               └─► storage_video_url / storage_thumb_url on paid_ads / ugc_items
         same bytes base64 (+ ad copy for paid) ──► OpenRouter Gemini (1 call/item)
@@ -80,7 +80,7 @@ Tracks one configured collection run for one product.
 | `status` | `text` | Not null, default `'created'` | Run state. |
 | `config` | `jsonb` | Not null, default `'{}'::jsonb` | Arbitrary run configuration. |
 | `target_paid_count` | `integer` | Not null, default `1000` | Target number of paid ads. |
-| `target_ugc_count` | `integer` | Not null, default `2500` | Target number of UGC items. |
+| `target_ugc_count` | `integer` | Not null, default `2500` | Target number of organic items. |
 | `top_k` | `integer` | Not null, default `3` | Downstream selection count. |
 | `created_at` | `timestamptz` | Not null, default `now()` | Creation timestamp. |
 | `updated_at` | `timestamptz` | Not null, default `now()` | Last update timestamp. |
@@ -97,7 +97,7 @@ Stores generated or manual discovery keywords attached to a run, including per-k
 | `keyword_type` | `text` | Not null, default `'seed'` | Keyword category. |
 | `source` | `text` | Not null, default `'manual'` | Where the keyword came from. |
 | `target_paid_count` | `integer` | Not null, default `0` | Number of paid ads to request for this keyword. |
-| `target_ugc_count` | `integer` | Not null, default `0` | Number of UGC items to request for this keyword. |
+| `target_ugc_count` | `integer` | Not null, default `0` | Number of organic items to request for this keyword. |
 | `active` | `boolean` | Not null, default `true` | Whether the keyword should be used. |
 | `created_at` | `timestamptz` | Not null, default `now()` | Creation timestamp. |
 
@@ -194,7 +194,7 @@ Unique constraint: `unique (run_id, id)`.
 
 ### `ugc_items`
 
-Stores Apify TikTok / Instagram UGC records with stable fields mapped into first-class columns. Provider-specific overflow fields that are not promoted to columns live in `source_metrics`. Transcript and creative-analysis fields now live in `item_enrichments`, not on this table.
+Stores Apify TikTok / Instagram organic records with stable fields mapped into first-class columns. Provider-specific overflow fields that are not promoted to columns live in `source_metrics`. Transcript and creative-analysis fields now live in `item_enrichments`, not on this table.
 
 | Column | Type | Constraints / default | Notes |
 | --- | --- | --- | --- |
@@ -204,7 +204,7 @@ Stores Apify TikTok / Instagram UGC records with stable fields mapped into first
 | `external_id` | `text` | Not null | Dedupe id, chosen from the Apify item id / video id. |
 | `source` | `text` | Nullable | Platform the item came from: `tiktok` or `instagram`. |
 | `video_id` | `text` | Nullable | Platform video id from the Apify payload. |
-| `video_url` | `text` | Nullable | UGC video URL from the Apify payload. |
+| `video_url` | `text` | Nullable | Organic video URL from the Apify payload. |
 | `cover` | `text` | Nullable | Cover/thumbnail image URL. |
 | `description` | `text` | Nullable | Caption / description text. |
 | `hashtags` | `jsonb` | Nullable | Hashtags from the Apify payload. |
@@ -347,11 +347,11 @@ Unique constraint on `(run_id, item_type, space, cluster_label)`.
 | `paid_ads_ad_id_idx` | `paid_ads` | `ad_id` | Lookup by Apify/Meta ad archive id. |
 | `paid_ads_brand_id_idx` | `paid_ads` | `brand_id` | Find ads for a Meta page id. |
 | `paid_ads_saved_to_supabase_at_idx` | `paid_ads` | `saved_to_supabase_at desc` | Find recently saved paid ads. |
-| `ugc_items_run_id_idx` | `ugc_items` | `run_id` | Find UGC items for a run. |
+| `ugc_items_run_id_idx` | `ugc_items` | `run_id` | Find organic items for a run. |
 | `ugc_items_external_idx` | `ugc_items` | `external_id` | Lookup by provider id. |
 | `ugc_items_video_id_idx` | `ugc_items` | `video_id` | Lookup platform video IDs. |
-| `ugc_items_virality_idx` | `ugc_items` | `virality_score desc` | Rank UGC items by virality. |
-| `ugc_items_saved_to_supabase_at_idx` | `ugc_items` | `saved_to_supabase_at desc` | Find recently saved UGC items. |
+| `ugc_items_virality_idx` | `ugc_items` | `virality_score desc` | Rank organic items by virality. |
+| `ugc_items_saved_to_supabase_at_idx` | `ugc_items` | `saved_to_supabase_at desc` | Find recently saved organic items. |
 | `item_enrichments_run_idx` | `item_enrichments` | `run_id` | Find enrichments for a run. |
 | `item_enrichments_item_idx` | `item_enrichments` | `item_type, item_id` (unique) | Upsert one enrichment per item and look it up by item. |
 | `item_embeddings_run_idx` | `item_embeddings` | `run_id` | Find embeddings for a run. |

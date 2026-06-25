@@ -1,9 +1,9 @@
-"""UGC vision enrichment — mirrors ad_enrichment for ugc_items.
+"""Organic vision enrichment — mirrors ad_enrichment for ugc_items.
 
-One multimodal (Gemini via OpenRouter) call per UGC video: transcript + ai_description
+One multimodal (Gemini via OpenRouter) call per organic video: transcript + ai_description
 + the trimmed analysis fields, plus persisting the video/thumbnail to Supabase Storage.
 Reuses the paid-ad enrichment schema, prompt, request body, and media-persist helper so
-paid + UGC reach column parity and share one embedding space.
+paid + organic reach column parity and share one embedding space.
 """
 
 from __future__ import annotations
@@ -41,18 +41,18 @@ from .supabase_client import SupabaseClient
 
 logger = logging.getLogger(__name__)
 
-UGC_SELECT_COLUMNS = "id,video_url,cover,description,handle,user_handle,hashtags"
+ORGANIC_SELECT_COLUMNS = "id,video_url,cover,description,handle,user_handle,hashtags"
 
 
 @dataclass
-class UgcEnrichmentCandidate:
-    ugc_item_id: str
+class OrganicEnrichmentCandidate:
+    organic_item_id: str
     video_url: str
     thumbnail_url: str | None = None
     context: dict[str, Any] = field(default_factory=dict)
 
 
-def enrich_ugc_items(
+def enrich_organic_items(
     *,
     config: Config,
     supabase: SupabaseClient | None,
@@ -64,16 +64,16 @@ def enrich_ugc_items(
     concurrency: int = 32,
 ) -> EnrichmentResult:
     if supabase is None:
-        raise RuntimeError("Supabase credentials are required to load UGC enrichment candidates.")
+        raise RuntimeError("Supabase credentials are required to load organic enrichment candidates.")
     if limit < 1:
         raise ValueError("--limit must be greater than 0.")
 
-    candidates, skipped = ugc_enrichment_candidates(supabase, run_id=run_id, limit=limit)
+    candidates, skipped = organic_enrichment_candidates(supabase, run_id=run_id, limit=limit)
     result = EnrichmentResult(candidates=len(candidates), skipped_unsupported=skipped)
 
     if dry_run:
         result.details = [
-            {"ugc_item_id": c.ugc_item_id, "video_url": c.video_url, "action": "would_enrich"}
+            {"organic_item_id": c.organic_item_id, "video_url": c.video_url, "action": "would_enrich"}
             for c in candidates
         ]
         return result
@@ -85,8 +85,8 @@ def enrich_ugc_items(
         elif not config.openrouter_api_key:
             raise RuntimeError("OPENROUTER_API_KEY is required unless --input-json is used.")
 
-    def _enrich_one(candidate: UgcEnrichmentCandidate) -> bool:
-        return enrich_ugc_item(
+    def _enrich_one(candidate: OrganicEnrichmentCandidate) -> bool:
+        return enrich_organic_item(
             config=config,
             supabase=supabase,
             run_id=run_id,
@@ -107,27 +107,27 @@ def enrich_ugc_items(
                 written = future.result()
             except (HttpClientError, RuntimeError) as exc:
                 result.failed += 1
-                result.details.append({"ugc_item_id": candidate.ugc_item_id, "status": "failed", "error": str(exc)})
+                result.details.append({"organic_item_id": candidate.organic_item_id, "status": "failed", "error": str(exc)})
                 continue
             if written:
                 result.written += 1
-                result.details.append({"ugc_item_id": candidate.ugc_item_id, "status": "written"})
+                result.details.append({"organic_item_id": candidate.organic_item_id, "status": "written"})
             else:
                 result.failed += 1
-                result.details.append({"ugc_item_id": candidate.ugc_item_id, "status": "no_analysis"})
+                result.details.append({"organic_item_id": candidate.organic_item_id, "status": "no_analysis"})
     return result
 
 
-def ugc_enrichment_candidates(
+def organic_enrichment_candidates(
     supabase: SupabaseClient,
     *,
     run_id: str,
     limit: int,
-) -> tuple[list[UgcEnrichmentCandidate], int]:
+) -> tuple[list[OrganicEnrichmentCandidate], int]:
     rows = supabase.select(
         "ugc_items",
         {
-            "select": UGC_SELECT_COLUMNS,
+            "select": ORGANIC_SELECT_COLUMNS,
             "run_id": f"eq.{run_id}",
             "video_url": "not.is.null",
             "order": "saved_to_supabase_at.asc",
@@ -135,14 +135,14 @@ def ugc_enrichment_candidates(
         },
     )
     already_enriched = existing_enriched_ids(supabase, run_id, "ugc_item")
-    candidates: list[UgcEnrichmentCandidate] = []
+    candidates: list[OrganicEnrichmentCandidate] = []
     skipped = 0
     for row in rows:
-        ugc_item_id = str(row.get("id") or "")
+        organic_item_id = str(row.get("id") or "")
         video_url = str(row.get("video_url") or "")
-        if not ugc_item_id:
+        if not organic_item_id:
             continue
-        if ugc_item_id in already_enriched:
+        if organic_item_id in already_enriched:
             continue
         if not is_probable_video_url(video_url):
             skipped += 1
@@ -150,14 +150,14 @@ def ugc_enrichment_candidates(
                 supabase,
                 table="ugc_items",
                 id_column="id",
-                item_id=ugc_item_id,
+                item_id=organic_item_id,
                 status="failed",
                 error="unsupported video URL",
             )
             continue
         candidates.append(
-            UgcEnrichmentCandidate(
-                ugc_item_id=ugc_item_id,
+            OrganicEnrichmentCandidate(
+                organic_item_id=organic_item_id,
                 video_url=video_url,
                 thumbnail_url=str(row.get("cover") or "") or None,
                 context={
@@ -172,12 +172,12 @@ def ugc_enrichment_candidates(
     return candidates, skipped
 
 
-def enrich_ugc_item(
+def enrich_organic_item(
     *,
     config: Config,
     supabase: SupabaseClient,
     run_id: str,
-    candidate: UgcEnrichmentCandidate,
+    candidate: OrganicEnrichmentCandidate,
     input_json: Path | None,
     timeout: int,
 ) -> bool:
@@ -188,7 +188,7 @@ def enrich_ugc_item(
     provider = f"{raw_provider}:{model}"
     request_params = {
         "model": model,
-        "ugc_item_id": candidate.ugc_item_id,
+        "organic_item_id": candidate.organic_item_id,
         "video_url": candidate.video_url,
     }
     source_query_id = start_query(
@@ -219,7 +219,7 @@ def enrich_ugc_item(
                 run_id=run_id,
                 item_table="ugc_items",
                 id_column="id",
-                item_id=candidate.ugc_item_id,
+                item_id=candidate.organic_item_id,
                 video_bytes=video_bytes,
                 thumbnail_url=candidate.thumbnail_url,
                 subdir="ugc",
@@ -295,7 +295,7 @@ def enrich_ugc_item(
             supabase,
             table="ugc_items",
             id_column="id",
-            item_id=candidate.ugc_item_id,
+            item_id=candidate.organic_item_id,
             status="expired" if stage == "download" else "failed",
             error=str(exc),
         )
@@ -309,7 +309,7 @@ def enrich_ugc_item(
                 "source_query_id": source_query_id,
                 "provider": raw_provider,
                 "endpoint": endpoint,
-                "external_id": candidate.ugc_item_id,
+                "external_id": candidate.organic_item_id,
                 "payload_json": body,
             },
         )
@@ -318,7 +318,7 @@ def enrich_ugc_item(
             supabase,
             table="ugc_items",
             id_column="id",
-            item_id=candidate.ugc_item_id,
+            item_id=candidate.organic_item_id,
             status="failed",
             error="vision returned no analysis",
         )
@@ -329,7 +329,7 @@ def enrich_ugc_item(
         {
             "run_id": run_id,
             "item_type": "ugc_item",
-            "item_id": candidate.ugc_item_id,
+            "item_id": candidate.organic_item_id,
             "transcript_text": clean_optional_text(analysis.get("transcript_text")),
             "transcript_segments": analysis.get("transcript_segments") or None,
             "analysis_model": model,
@@ -341,7 +341,7 @@ def enrich_ugc_item(
         supabase,
         table="ugc_items",
         id_column="id",
-        item_id=candidate.ugc_item_id,
+        item_id=candidate.organic_item_id,
         status="enriched",
     )
     return True

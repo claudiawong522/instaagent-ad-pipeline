@@ -1,11 +1,11 @@
 ## Dataflow Handwritten
-- user inputs campaign detials + intended ad count + ugc count
+- user inputs campaign detials + intended ad count + organic count
 - llm takes this info and generates keywords + target count pairs
 - apify scraping for all
       - scrapes apify for paid ads (contains identity, creative, run duration)
-      - scrapes apify for ugc tiktoks (has all required metadata, no llm analysis)
-      - scrapes apify for ugc reels (has all required metadata, no llm analysis, but follower count often missing, thus backfilled)
-      - apify backfills follower count for ugc 
+      - scrapes apify for organic tiktoks (has all required metadata, no llm analysis)
+      - scrapes apify for organic reels (has all required metadata, no llm analysis, but follower count often missing, thus backfilled)
+      - apify backfills follower count for organic 
       - scraped raw videos are in raw_payloads table
       - data is also inputted into paid_ads table
 - download all videos
@@ -22,6 +22,7 @@
       - for ads, since there's built in analysis, this is also fed into the llm
       - llm returns a JSON object with all fields below
       - the JSON object is filled into the paid_ad_enrichments table
+      - if api hiccup will rerun 3 times
 - compute the embeddings for each video
       - compute both search + icp embedding
       - reference below to see what search fields take in
@@ -83,12 +84,12 @@
 
 ## inputs and outputs to all apis
  1. Keyword Gen - Claude API
-     Input: campaign details + intended ad count + ugc count
+     Input: campaign details + intended ad count + organic count
      Output: generates keywords + target count pairs
   2. Apify Meta Ads
      Input: keyword (searched unordered in Meta Ad Library, video only)
      Output: ad items — video URL (expires), thumbnail, headline, description, page name (who's page owns the ad), call to action, adArchiveID
-  3. Apify UGC (TikTok + Instagram)
+  3. Apify Organic (TikTok + Instagram)
      Input: keyword
      Output: video URL (expires), cover, handle, view/like counts, follower count, hashtags
   4. Video Enrichment - OpenRouter → Gemini (gemini-3-flash-preview)

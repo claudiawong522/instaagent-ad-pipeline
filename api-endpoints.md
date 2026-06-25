@@ -2,12 +2,12 @@
 
 This document lists the endpoints used by the ingestion and enrichment implementation, their input fields, output fields, and Supabase mappings.
 
-The current design keeps paid ads and UGC separate at ingestion, but unifies their transcript + analysis enrichment:
+The current design keeps paid ads and organic separate at ingestion, but unifies their transcript + analysis enrichment:
 
 - Apify Meta Ad Library paid ads write to `paid_ads`.
-- Apify TikTok UGC (`ingest-tiktok`) and Apify Instagram reel UGC (`ingest-instagram`) write to `ugc_items`.
+- Apify TikTok organic (`ingest-tiktok`) and Apify Instagram reel organic (`ingest-instagram`) write to `ugc_items`.
 - Instagram follower backfill (`backfill-ig-followers`) fills follower counts on `ugc_items` (source='instagram').
-- OpenRouter (Gemini) vision enrichment for both paid ads and UGC writes transcripts + analysis fields to `item_enrichments` and uploads videos to the Supabase Storage bucket `ad-videos`.
+- OpenRouter (Gemini) vision enrichment for both paid ads and organic writes transcripts + analysis fields to `item_enrichments` and uploads videos to the Supabase Storage bucket `ad-videos`.
 - Voyage embeddings write to `item_embeddings`.
 - ICP clustering writes to `item_clusters` and `clusters`.
 - Raw source JSON from ingestion and enrichment providers writes to `raw_payloads` where noted below.
@@ -21,7 +21,7 @@ For a seed such as `QV cleanser`, use examples like:
 | Provider | API field | Recommended input | Why |
 | --- | --- | --- | --- |
 | Apify Meta Ad Library | `search_terms` inside generated Meta Ad Library URL | `gentle cleanser` or `face cleanser` | Finds competitive paid video ads in the cleanser category without over-constraining to exact QV mentions. |
-| Apify TikTok scraper | `searchQueries` | `cleanser`, then top up with `skincare` if needed | Keyword search is topic-oriented; broad terms return more UGC candidates with usable video URLs and native follower counts. |
+| Apify TikTok scraper | `searchQueries` | `cleanser`, then top up with `skincare` if needed | Keyword search is topic-oriented; broad terms return more organic candidates with usable video URLs and native follower counts. |
 | Apify Instagram reel search | `search` | `cleanser`, then top up with `skincare` if needed | Keyword reel search is topic-oriented; broad terms return more reels. Follower counts are often missing and are filled by `backfill-ig-followers`. |
 
 ## Claude: Generate Keyword Allocations
@@ -30,9 +30,9 @@ For a seed such as `QV cleanser`, use examples like:
 - Method: `POST`
 - Endpoint: `https://api.anthropic.com/v1/messages`
 - Code path: `init-run` when no manual `--keyword` values are supplied
-- Purpose: generate 3-6 discovery keywords from product context and allocate paid ad / UGC targets across them.
+- Purpose: generate 3-6 discovery keywords from product context and allocate paid ad / organic targets across them.
 
-Output is stored in `keywords.keyword_text`, `keywords.target_paid_count`, and `keywords.target_ugc_count`. The per-keyword paid ad targets must add up to `pipeline_runs.target_paid_count`; the per-keyword UGC targets must add up to `pipeline_runs.target_ugc_count`. The Claude call is logged in `source_queries` and `api_usage`.
+Output is stored in `keywords.keyword_text`, `keywords.target_paid_count`, and `keywords.target_ugc_count`. The per-keyword paid ad targets must add up to `pipeline_runs.target_paid_count`; the per-keyword organic targets must add up to `pipeline_runs.target_ugc_count`. The Claude call is logged in `source_queries` and `api_usage`.
 
 ## Apify: Search Meta Ad Library Paid Ads
 
@@ -96,20 +96,20 @@ search_terms=<keyword>
 | unmapped provider fields | `paid_ads.source_metrics` | JSONB overflow for provider-specific fields that are not promoted to columns. |
 | full item JSON | `raw_payloads.payload_json` | Raw source of truth. |
 
-## Apify: Search TikTok UGC
+## Apify: Search TikTok Organic
 
 - Provider: `apify:clockworks/tiktok-scraper`
 - Method: `POST`
 - Endpoint: `https://api.apify.com/v2/acts/clockworks~tiktok-scraper/run-sync-get-dataset-items`
 - Code path: `ingest-tiktok`
-- Purpose: keyword-search TikTok for UGC candidates with engagement metrics, creator metadata, and provider video URLs. Follower counts are returned natively.
+- Purpose: keyword-search TikTok for organic candidates with engagement metrics, creator metadata, and provider video URLs. Follower counts are returned natively.
 
 ### Input Columns / Body Fields
 
 | Field | Type | Required | Used by Code | Notes |
 | --- | --- | --- | --- | --- |
 | `searchQueries` | string[] | yes | yes | One or more keyword terms, from `--keyword`. |
-| `resultsPerPage` | integer | yes | yes | Set from the keyword's UGC target count. |
+| `resultsPerPage` | integer | yes | yes | Set from the keyword's organic target count. |
 | `token` | query string | yes | yes | Apify token from `APIFY_API_KEY`. |
 | `--extra-param` overrides | JSON values | no | yes | Optional actor input overrides for debugging or provider-specific tuning. |
 
@@ -129,20 +129,20 @@ Provider-specific fields that are not promoted to first-class columns are stored
 
 OpenRouter (Gemini) vision enrichment auto-runs after live `ingest-tiktok`; see the enrichment section below.
 
-## Apify: Search Instagram Reel UGC
+## Apify: Search Instagram Reel Organic
 
 - Provider: `apify:data-slayer/instagram-search-reels`
 - Method: `POST`
 - Endpoint: `https://api.apify.com/v2/acts/data-slayer~instagram-search-reels/run-sync-get-dataset-items`
 - Code path: `ingest-instagram`
-- Purpose: keyword-search Instagram Reels for UGC candidates with engagement metrics, creator metadata, and provider video URLs.
+- Purpose: keyword-search Instagram Reels for organic candidates with engagement metrics, creator metadata, and provider video URLs.
 
 ### Input Columns / Body Fields
 
 | Field | Type | Required | Used by Code | Notes |
 | --- | --- | --- | --- | --- |
 | `search` | string | yes | yes | Keyword reel-search term, from `--keyword`. |
-| `limit` | integer | yes | yes | Set from the keyword's UGC target count. |
+| `limit` | integer | yes | yes | Set from the keyword's organic target count. |
 | `token` | query string | yes | yes | Apify token from `APIFY_API_KEY`. |
 | `--extra-param` overrides | JSON values | no | yes | Optional actor input overrides for debugging or provider-specific tuning. |
 
@@ -186,24 +186,24 @@ The command selects `ugc_items` rows for the run where `source = 'instagram'` an
 | `followersCount` | `ugc_items.followers` | Resolved follower count, applied to every `ugc_items` row for that creator handle. |
 | full dataset item JSON | `raw_payloads.payload_json` | Raw source of truth. |
 
-## OpenRouter: Video Enrichment (Paid Ads + UGC)
+## OpenRouter: Video Enrichment (Paid Ads + Organic)
 
 - Provider: `openrouter:<model>` (default model `google/gemini-3-flash-preview`, override with `OPENROUTER_MODEL`)
 - Method: `POST`
 - Endpoint: `https://openrouter.ai/api/v1/chat/completions`
 - Auth: `Authorization: Bearer` header from `OPENROUTER_API_KEY`
-- Code paths: `enrich-paid-ads` (paid ads) and `enrich-ugc` (UGC). The paid path auto-triggers after live `ingest-apify-ads`; the UGC path auto-triggers after live `ingest-tiktok` / `ingest-instagram` (`--skip-enrichment` to disable, `--enrichment-limit` / `--enrichment-timeout` to tune)
-- Purpose: one Gemini vision call per video that both transcribes the video and extracts the trimmed creative-metadata set. The same single-call flow runs for paid ads and UGC.
+- Code paths: `enrich-paid-ads` (paid ads) and `enrich-ugc` (organic). The paid path auto-triggers after live `ingest-apify-ads`; the organic path auto-triggers after live `ingest-tiktok` / `ingest-instagram` (`--skip-enrichment` to disable, `--enrichment-limit` / `--enrichment-timeout` to tune)
+- Purpose: one Gemini vision call per video that both transcribes the video and extracts the trimmed creative-metadata set. The same single-call flow runs for paid ads and organic.
 
-Candidates are items for the run with a non-null video URL (`paid_ads.video` for paid, `ugc_items.video_url` for UGC) and no `item_enrichments` row yet. Each enrichment downloads the video into memory (100 MB cap, never written to disk), uploads it to the Supabase Storage bucket `ad-videos` (recording `storage_video_url` / `storage_thumb_url` on the item table — `paid_ads` or `ugc_items`), and sends the base64 video to OpenRouter as a `data:` URL in a `video_url` content part. Because source CDN URLs are signed and expire within days, run enrichment soon after ingestion; per-row failures are logged in `source_queries` and do not stop the batch.
+Candidates are items for the run with a non-null video URL (`paid_ads.video` for paid, `ugc_items.video_url` for organic) and no `item_enrichments` row yet. Each enrichment downloads the video into memory (100 MB cap, never written to disk), uploads it to the Supabase Storage bucket `ad-videos` (recording `storage_video_url` / `storage_thumb_url` on the item table — `paid_ads` or `ugc_items`), and sends the base64 video to OpenRouter as a `data:` URL in a `video_url` content part. Because source CDN URLs are signed and expire within days, run enrichment soon after ingestion; per-row failures are logged in `source_queries` and do not stop the batch.
 
 ### Input Columns / Body Fields
 
 | Field | Type | Required | Used by Code | Notes |
 | --- | --- | --- | --- | --- |
 | `model` | string | yes | yes | `OPENROUTER_MODEL`, default `google/gemini-3-flash-preview`. |
-| `messages[0].content[0].video_url.url` | string | yes | yes | `data:video/mp4;base64,<bytes>` fetched from `paid_ads.video` (paid) or `ugc_items.video_url` (UGC). |
-| `messages[0].content[1].text` | string | yes | yes | Extraction prompt plus available item context (for paid ads: headline, description, CTA, page name, link URL, display format; for UGC: caption/description, handle, hashtags). |
+| `messages[0].content[0].video_url.url` | string | yes | yes | `data:video/mp4;base64,<bytes>` fetched from `paid_ads.video` (paid) or `ugc_items.video_url` (organic). |
+| `messages[0].content[1].text` | string | yes | yes | Extraction prompt plus available item context (for paid ads: headline, description, CTA, page name, link URL, display format; for organic: caption/description, handle, hashtags). |
 | `response_format.json_schema` | object | yes | yes | Strict structured-output schema guaranteeing parseable JSON. |
 
 ### Output Columns / Response Fields
@@ -292,17 +292,17 @@ Cluster label API calls are logged in `source_queries` and `api_usage`. Raw labe
 | --- | --- | --- |
 | `products` | `init-run` | Product brief. |
 | `pipeline_runs` | `init-run` | One execution/config for a product. |
-| `keywords` | `init-run` | Claude-generated or manual keyword terms plus per-keyword paid ad and UGC target allocations. |
+| `keywords` | `init-run` | Claude-generated or manual keyword terms plus per-keyword paid ad and organic target allocations. |
 | `source_queries` | all external API commands | Request/response/error logging per API page or transcript actor run. |
 | `raw_payloads` | external API commands | Preserved raw source item JSON. |
 | `paid_ads` | `ingest-apify-ads`, `enrich-paid-ads` | Apify Meta Ad Library paid ad rows; enrichment fills `storage_video_url` / `storage_thumb_url`. |
-| `ugc_items` | `ingest-tiktok`, `ingest-instagram`, `backfill-ig-followers`, `enrich-ugc` | Apify TikTok and Instagram reel UGC candidate rows; follower backfill fills Instagram follower counts; enrichment fills `storage_video_url` / `storage_thumb_url`. |
+| `ugc_items` | `ingest-tiktok`, `ingest-instagram`, `backfill-ig-followers`, `enrich-ugc` | Apify TikTok and Instagram reel organic candidate rows; follower backfill fills Instagram follower counts; enrichment fills `storage_video_url` / `storage_thumb_url`. |
 | `api_usage` | live LLM, ingestion, and enrichment commands | Claude keyword-generation usage plus provider HTTP status, response count, selected rate-limit/usage headers, and credits used when exposed. |
-| `item_enrichments` | `enrich-paid-ads` (auto after `ingest-apify-ads`), `enrich-ugc` (auto after `ingest-tiktok` / `ingest-instagram`) | Polymorphic transcript + analysis rows from the OpenRouter vision call, one per `(item_type, item_id)` for paid ads and UGC. |
+| `item_enrichments` | `enrich-paid-ads` (auto after `ingest-apify-ads`), `enrich-ugc` (auto after `ingest-tiktok` / `ingest-instagram`) | Polymorphic transcript + analysis rows from the OpenRouter vision call, one per `(item_type, item_id)` for paid ads and organic. |
 | `item_embeddings` | `embed-items` | One pgvector row per item per embedding space (icp/search) per model. |
 | `item_clusters` | `cluster-items` | One cluster assignment per embedded item for the ICP space. |
 | `clusters` | `cluster-items` | Cluster summaries, centroids, exemplars, and optional OpenRouter labels. |
 
-## UGC Save Timestamp
+## Organic Save Timestamp
 
-`ugc_items.saved_to_supabase_at` records when a UGC video row was inserted into Supabase. It defaults to `now()` at database insert time.
+`ugc_items.saved_to_supabase_at` records when an organic video row was inserted into Supabase. It defaults to `now()` at database insert time.

@@ -27,7 +27,7 @@ The Supabase service role key is server-side only and bypasses row-level securit
 
 - Prefer existing helpers in `ingestion.py`, `normalizers.py`, and `supabase_client.py`.
 - Preserve raw payload storage before normalized upserts.
-- Paid ad upserts depend on `(run_id, id)` uniqueness; UGC upserts depend on `(run_id, external_id)` uniqueness.
+- Paid ad upserts depend on `(run_id, id)` uniqueness; organic upserts depend on `(run_id, external_id)` uniqueness.
 - Provider-specific fields that do not deserve first-class columns should live in `source_metrics`.
 - Keep the CLI simple and dependency-light unless the user asks for a larger architecture change.
 

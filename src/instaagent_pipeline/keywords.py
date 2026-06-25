@@ -55,7 +55,7 @@ def generate_keyword_allocations(
         "max_tokens": 1200,
         "temperature": 0.2,
         "system": (
-            "You create search keywords for paid ad and UGC discovery. "
+            "You create search keywords for paid ad and organic discovery. "
             "Generate 3-5 keywords and aim for 4. "
             "Every keyword_text must be exactly ONE word with no spaces: the discovery APIs match the keyword "
             "as a substring of short video topics, so multi-word phrases return zero results. "
@@ -134,7 +134,7 @@ def generate_keyword_allocations(
         allocations = parse_keyword_allocations(
             text,
             expected_paid_total=target_paid_count,
-            expected_ugc_total=target_ugc_count,
+            expected_organic_total=target_ugc_count,
         )
         complete_query(
             supabase=supabase,
@@ -206,7 +206,7 @@ Product notes: {notes or ""}
 Campaign guidelines: {campaign_guidelines or ""}
 
 Target paid ads: {target_paid_count}
-Target UGC videos: {target_ugc_count}
+Target organic videos: {target_ugc_count}
 
 Create 3-5 single-word search keywords for provider API discovery.
 Aim for 4 keywords. Each keyword_text must be exactly one word with no spaces.
@@ -251,7 +251,7 @@ def parse_keyword_allocations(
     text: str,
     *,
     expected_paid_total: int,
-    expected_ugc_total: int,
+    expected_organic_total: int,
 ) -> list[KeywordAllocation]:
     parsed = json.loads(extract_json_object(text))
     rows = parsed.get("keywords") if isinstance(parsed, dict) else None
@@ -273,21 +273,21 @@ def parse_keyword_allocations(
             raise RuntimeError(f"Claude returned duplicate keyword: {keyword}")
         seen.add(normalized)
         paid_count = as_nonnegative_int(row.get("target_paid_count"), "target_paid_count")
-        ugc_count = as_nonnegative_int(row.get("target_ugc_count"), "target_ugc_count")
+        organic_count = as_nonnegative_int(row.get("target_ugc_count"), "target_ugc_count")
         allocations.append(
             KeywordAllocation(
                 keyword_text=keyword,
                 target_paid_count=paid_count,
-                target_ugc_count=ugc_count,
+                target_ugc_count=organic_count,
             )
         )
 
     paid_total = sum(row.target_paid_count for row in allocations)
-    ugc_total = sum(row.target_ugc_count for row in allocations)
+    organic_total = sum(row.target_ugc_count for row in allocations)
     if paid_total != expected_paid_total:
         raise RuntimeError(f"Claude paid allocation total {paid_total} != target {expected_paid_total}.")
-    if ugc_total != expected_ugc_total:
-        raise RuntimeError(f"Claude UGC allocation total {ugc_total} != target {expected_ugc_total}.")
+    if organic_total != expected_organic_total:
+        raise RuntimeError(f"Claude organic allocation total {organic_total} != target {expected_organic_total}.")
     return allocations
 
 
@@ -330,12 +330,12 @@ def allocate_manual_keywords(
     if not cleaned:
         raise RuntimeError("At least one keyword is required.")
     paid_counts = split_evenly(target_paid_count, len(cleaned))
-    ugc_counts = split_evenly(target_ugc_count, len(cleaned))
+    organic_counts = split_evenly(target_ugc_count, len(cleaned))
     return [
         KeywordAllocation(
             keyword_text=keyword,
             target_paid_count=paid_counts[index],
-            target_ugc_count=ugc_counts[index],
+            target_ugc_count=organic_counts[index],
             source="manual",
             keyword_type=keyword_type,
         )

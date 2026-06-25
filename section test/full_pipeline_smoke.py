@@ -92,7 +92,7 @@ def main() -> int:
             supabase=supabase,
             run_id=run_id,
             expected_paid_total=args.target_paid_count,
-            expected_ugc_total=args.target_ugc_count,
+            expected_organic_total=args.target_ugc_count,
             expect_apify_ads=not args.skip_apify_ads,
             expect_topyappers=not args.skip_topyappers,
             expect_enrichment=enrichment_result is not None,
@@ -129,7 +129,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--notes", default="Smoke test record. Safe to delete.", help="Used when --product-id is omitted.")
     parser.add_argument(
         "--campaign-guidelines",
-        default="Find competitor paid ads and UGC videos for a gentle cleanser launch.",
+        default="Find competitor paid ads and organic videos for a gentle cleanser launch.",
     )
     parser.add_argument("--target-paid-count", type=int, default=3)
     parser.add_argument("--target-ugc-count", type=int, default=3)
@@ -252,7 +252,7 @@ def verify_database_state(
     supabase: Any,
     run_id: str,
     expected_paid_total: int,
-    expected_ugc_total: int,
+    expected_organic_total: int,
     expect_apify_ads: bool,
     expect_topyappers: bool,
     expect_enrichment: bool = False,
@@ -270,7 +270,7 @@ def verify_database_state(
     api_usage = select_by_run(supabase, run_id, "api_usage", "provider,endpoint,rate_limit")
     raw_payloads = select_by_run(supabase, run_id, "raw_payloads", "provider,endpoint,external_id")
     paid_ads = select_by_run(supabase, run_id, "paid_ads", "paid_ad_row_id,id,ad_id,headline,video,thumbnail,hook,analyzed_at")
-    ugc_items = select_by_run(supabase, run_id, "ugc_items", "external_id,video_id,video_url,views,subtitles")
+    organic_items = select_by_run(supabase, run_id, "ugc_items", "external_id,video_id,video_url,views,subtitles")
     paid_ad_transcripts: list[dict[str, Any]] = []
     paid_ad_row_ids = [str(row.get("paid_ad_row_id")) for row in paid_ads if row.get("paid_ad_row_id")]
     if paid_ad_row_ids:
@@ -284,7 +284,7 @@ def verify_database_state(
     analyzed_paid_ads = [row for row in paid_ads if row.get("analyzed_at")]
 
     paid_allocated = sum(int(row.get("target_paid_count") or 0) for row in keywords)
-    ugc_allocated = sum(int(row.get("target_ugc_count") or 0) for row in keywords)
+    organic_allocated = sum(int(row.get("target_ugc_count") or 0) for row in keywords)
     failures: list[str] = []
     warnings: list[str] = []
 
@@ -292,8 +292,8 @@ def verify_database_state(
         failures.append(f"expected 3-6 active keywords, got {len(keywords)}")
     if paid_allocated != expected_paid_total:
         failures.append(f"paid allocation {paid_allocated} != requested {expected_paid_total}")
-    if ugc_allocated != expected_ugc_total:
-        failures.append(f"UGC allocation {ugc_allocated} != requested {expected_ugc_total}")
+    if organic_allocated != expected_organic_total:
+        failures.append(f"organic allocation {organic_allocated} != requested {expected_organic_total}")
     if not any(str(row.get("provider", "")).startswith("claude") for row in api_usage):
         failures.append("missing Claude keyword-generation row in api_usage")
     if expect_apify_ads and not any(row.get("provider") == APIFY_ADS_PROVIDER for row in source_queries):
@@ -304,8 +304,8 @@ def verify_database_state(
     # Shortfalls are valid: provider APIs may return fewer rows than requested.
     if expect_apify_ads and len(paid_ads) < expected_paid_total:
         warnings.append(f"Apify returned {len(paid_ads)} paid ads for target {expected_paid_total}")
-    if expect_topyappers and len(ugc_items) < expected_ugc_total:
-        warnings.append(f"TopYappers returned {len(ugc_items)} UGC items for target {expected_ugc_total}")
+    if expect_topyappers and len(organic_items) < expected_organic_total:
+        warnings.append(f"TopYappers returned {len(organic_items)} organic items for target {expected_organic_total}")
     if expect_enrichment and paid_ads and not analyzed_paid_ads:
         failures.append("enrichment ran but no paid_ads rows have analyzed_at set")
     if expect_enrichment and paid_ads and not paid_ad_transcripts:
@@ -323,7 +323,7 @@ def verify_database_state(
             "paid_ads": len(paid_ads),
             "paid_ads_analyzed": len(analyzed_paid_ads),
             "paid_ad_transcripts": len(paid_ad_transcripts),
-            "ugc_items": len(ugc_items),
+            "organic_items": len(organic_items),
         },
         "warnings": warnings,
     }

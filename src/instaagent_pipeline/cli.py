@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from .apify_ads import ingest_apify_ads
-from .apify_ugc import backfill_instagram_followers, ingest_instagram, ingest_tiktok
+from .apify_organic import backfill_instagram_followers, ingest_instagram, ingest_tiktok
 from .config import Config
 from .ad_enrichment import enrich_paid_ads
 from .audience_enrichment import enrich_audience
-from .ugc_enrichment import enrich_ugc_items
+from .organic_enrichment import enrich_organic_items
 from .clustering import cluster_items
 from .embeddings import ALL_SPACES, embed_items
 from .keywords import (
@@ -89,14 +89,14 @@ def main(argv: list[str] | None = None) -> int:
                 target_field="target_ugc_count",
                 ingest_func=ingest_func,
             )
-        result = with_ugc_enrichment(
+        result = with_organic_enrichment(
             result,
             config=config,
             supabase=supabase,
             args=args,
         )
     elif args.command == "enrich-ugc":
-        result = enrich_ugc_items(
+        result = enrich_organic_items(
             config=config,
             supabase=supabase,
             run_id=args.run_id,
@@ -199,20 +199,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     tiktok = subparsers.add_parser(
         "ingest-tiktok",
-        help="Ingest UGC from the Apify clockworks/tiktok-scraper by keyword into ugc_items.",
+        help="Ingest organic content from the Apify clockworks/tiktok-scraper by keyword into ugc_items.",
     )
     add_ingest_common_args(tiktok)
-    add_ugc_enrichment_args(tiktok)
+    add_organic_enrichment_args(tiktok)
     tiktok.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
     tiktok.add_argument("--target-count", type=int, default=2500)
     tiktok.add_argument("--page-size", type=int, default=0)
 
     instagram = subparsers.add_parser(
         "ingest-instagram",
-        help="Ingest UGC reels from the Apify data-slayer/instagram-search-reels by keyword into ugc_items.",
+        help="Ingest organic reels from the Apify data-slayer/instagram-search-reels by keyword into ugc_items.",
     )
     add_ingest_common_args(instagram)
-    add_ugc_enrichment_args(instagram)
+    add_organic_enrichment_args(instagram)
     instagram.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
     instagram.add_argument("--target-count", type=int, default=2500)
     instagram.add_argument("--page-size", type=int, default=0)
@@ -241,16 +241,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use a saved OpenRouter chat-completions response instead of calling OpenRouter. Intended for one-row tests.",
     )
 
-    enrich_ugc = subparsers.add_parser(
+    enrich_organic = subparsers.add_parser(
         "enrich-ugc",
-        help="Transcribe and analyze UGC videos via OpenRouter into item_enrichments.",
+        help="Transcribe and analyze organic videos via OpenRouter into item_enrichments.",
     )
-    enrich_ugc.add_argument("--run-id", required=True)
-    enrich_ugc.add_argument("--limit", type=int, default=100)
-    enrich_ugc.add_argument("--timeout", type=int, default=300)
-    enrich_ugc.add_argument("--concurrency", type=int, default=32, help="Number of UGC videos to enrich in parallel (I/O-bound). Matches the Supabase pool_maxsize.")
-    enrich_ugc.add_argument("--dry-run", action="store_true")
-    enrich_ugc.add_argument(
+    enrich_organic.add_argument("--run-id", required=True)
+    enrich_organic.add_argument("--limit", type=int, default=100)
+    enrich_organic.add_argument("--timeout", type=int, default=300)
+    enrich_organic.add_argument("--concurrency", type=int, default=32, help="Number of organic videos to enrich in parallel (I/O-bound). Matches the Supabase pool_maxsize.")
+    enrich_organic.add_argument("--dry-run", action="store_true")
+    enrich_organic.add_argument(
         "--input-json",
         type=Path,
         help="Use a saved OpenRouter chat-completions response instead of calling OpenRouter. Intended for one-row tests.",
@@ -334,28 +334,28 @@ def add_ingest_common_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_ugc_enrichment_args(parser: argparse.ArgumentParser) -> None:
+def add_organic_enrichment_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--skip-enrichment",
         action="store_true",
-        help="Do not transcribe and analyze UGC videos via OpenRouter after live ingestion.",
+        help="Do not transcribe and analyze organic videos via OpenRouter after live ingestion.",
     )
     parser.add_argument(
         "--enrichment-limit",
         type=int,
-        help="Maximum number of UGC items to enrich. Defaults to the number fetched.",
+        help="Maximum number of organic items to enrich. Defaults to the number fetched.",
     )
     parser.add_argument(
         "--enrichment-timeout",
         type=int,
         default=300,
-        help="OpenRouter request timeout in seconds per UGC video (covers the video download too).",
+        help="OpenRouter request timeout in seconds per organic video (covers the video download too).",
     )
     parser.add_argument(
         "--concurrency",
         type=int,
         default=32,
-        help="Number of UGC videos to enrich in parallel after live ingestion (I/O-bound). Matches the Supabase pool_maxsize.",
+        help="Number of organic videos to enrich in parallel after live ingestion (I/O-bound). Matches the Supabase pool_maxsize.",
     )
 
 
@@ -392,7 +392,7 @@ def build_supabase(config: Config, *, dry_run: bool) -> SupabaseClient | None:
     return SupabaseClient(config.supabase_url, config.supabase_key)
 
 
-def with_ugc_enrichment(
+def with_organic_enrichment(
     ingestion_result: Any,
     *,
     config: Config,
@@ -402,13 +402,13 @@ def with_ugc_enrichment(
     if args.dry_run or args.skip_enrichment:
         return ingestion_result
     if supabase is None:
-        raise RuntimeError("Supabase credentials are required for UGC enrichment.")
+        raise RuntimeError("Supabase credentials are required for organic enrichment.")
 
     enrichment_limit = args.enrichment_limit or fetched_count(ingestion_result)
     if enrichment_limit < 1:
         return {"ingestion": ingestion_result, "enrichment": None}
 
-    enrichment = enrich_ugc_items(
+    enrichment = enrich_organic_items(
         config=config,
         supabase=supabase,
         run_id=args.run_id,

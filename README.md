@@ -9,22 +9,22 @@ Lean ingestion and transcript-backfill foundation for InstaAgent's ad selection 
 - `future-add-ons.md`: good ideas deferred for later.
 - `supabase/schema.sql`: canonical fresh-project Supabase schema for the implemented pipeline.
 - `supabase/migrations/`: incremental migrations for existing Supabase projects. Verify a live database against these before adding search/clustering on top of old data.
-  - `001_split_paid_ads_and_ugc.sql`: split the obsolete shared creative table into paid ads and UGC tables.
-  - `002_topyappers_columns.sql` and `003_ugc_saved_to_supabase_at.sql`: early UGC column patches, superseded by `004` for newer databases.
+  - `001_split_paid_ads_and_ugc.sql`: split the obsolete shared creative table into paid ads and organic tables.
+  - `002_topyappers_columns.sql` and `003_ugc_saved_to_supabase_at.sql`: early organic column patches, superseded by `004` for newer databases.
   - `004_topyappers_exact_shape.sql`: reset `ugc_items` to the TopYappers-shaped table.
   - `005_paid_ads_apify_shape.sql`: reset `paid_ads` to the Apify Meta Ad Library-shaped table.
   - `006_ugc_video_url.sql` through `012_paid_ads_analysis_columns.sql`: add URL, JSONB overflow, cleanup, allocation, transcript-upsert, and analysis columns/indexes.
   - `013_item_embeddings.sql`: add pgvector item embeddings.
   - `014_item_clusters.sql`: add ICP cluster assignments and cluster labels.
-  - `015_search_space_descriptions_storage.sql`: add the `search` embedding space, `ai_description`/storage URL columns, UGC analysis parity columns, the `match_item_embeddings` RPC, and the `ad-videos` storage bucket.
+  - `015_search_space_descriptions_storage.sql`: add the `search` embedding space, `ai_description`/storage URL columns, organic analysis parity columns, the `match_item_embeddings` RPC, and the `ad-videos` storage bucket.
   - `016_item_enrichments.sql`: add the polymorphic `item_enrichments` table (with backfill), and drop `paid_ad_transcripts`/`ugc_transcripts` plus migrated/unused analysis columns.
 - Python CLI for:
   - creating products/runs and Claude-generated keyword allocations.
   - ingesting Apify Meta Ad Library paid ad candidates into `paid_ads` across stored keyword allocations.
-  - ingesting Apify TikTok UGC candidates into `ugc_items` (with native follower counts) across stored keyword allocations.
+  - ingesting Apify TikTok organic candidates into `ugc_items` (with native follower counts) across stored keyword allocations.
   - ingesting Apify Instagram search reels into `ugc_items`, with follower counts backfilled via `backfill-ig-followers`.
-  - transcribing + analyzing paid ads and UGC videos via OpenRouter vision into `item_enrichments` (auto-runs after ingestion).
-  - embedding items (`icp` and `search` spaces) and clustering ICP embeddings for paid ads and UGC.
+  - transcribing + analyzing paid ads and organic videos via OpenRouter vision into `item_enrichments` (auto-runs after ingestion).
+  - embedding items (`icp` and `search` spaces) and clustering ICP embeddings for paid ads and organic.
 
 ## Setup
 
@@ -49,7 +49,7 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli init-run \
   --product-name "QE cleanser" \
   --category "skincare" \
   --target-market "US skincare buyers" \
-  --campaign-guidelines "Find competitor ads and UGC for a gentle cleanser launch." \
+  --campaign-guidelines "Find competitor ads and organic for a gentle cleanser launch." \
   --target-paid-count 1000 \
   --target-ugc-count 2500
 ```
@@ -61,7 +61,7 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-apify-ads \
   --run-id "<pipeline_run_id>"
 ```
 
-Ingest Apify TikTok UGC:
+Ingest Apify TikTok organic:
 
 ```bash
 PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-tiktok \
@@ -75,7 +75,7 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-instagram \
   --run-id "<pipeline_run_id>"
 ```
 
-Like paid ads, UGC ingestion auto-runs vision enrichment (transcribe + analyze each video into `item_enrichments`). Pass `--skip-enrichment` to ingest only UGC rows without running the enrichment stage.
+Like paid ads, organic ingestion auto-runs vision enrichment (transcribe + analyze each video into `item_enrichments`). Pass `--skip-enrichment` to ingest only organic rows without running the enrichment stage.
 
 Backfill Instagram follower counts (via Apify):
 
@@ -116,9 +116,9 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli cluster-items \
 - `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_ANON_KEY`
 - `CLAUDE_API_KEY`
 - `APIFY_API_KEY`
-  - Required for paid-ad ingestion (`ingest-apify-ads`), UGC ingestion (`ingest-tiktok`/`ingest-instagram`), and Instagram follower backfill (`backfill-ig-followers`).
+  - Required for paid-ad ingestion (`ingest-apify-ads`), organic ingestion (`ingest-tiktok`/`ingest-instagram`), and Instagram follower backfill (`backfill-ig-followers`).
 - `OPENROUTER_API_KEY`
-  - Required for paid-ad and UGC enrichment, and cluster labeling.
+  - Required for paid-ad and organic enrichment, and cluster labeling.
 - `VOYAGE_API_KEY`
   - Required for `embed-items`.
 
@@ -144,7 +144,7 @@ The service role key can write rows through the Supabase REST API after tables e
 
 ## Existing Database Migration
 
-`supabase/schema.sql` is the canonical schema for a clean database. Existing databases should be checked against the committed migration set before search or clustering work continues. If the live schema has only normal pending migrations, run the pending files in `supabase/migrations/` in numeric order from the last migration you know was applied. The current set is `001` through `016`; do not apply superseded early UGC patches after `004_topyappers_exact_shape.sql` unless you are intentionally replaying the full history from an older state.
+`supabase/schema.sql` is the canonical schema for a clean database. Existing databases should be checked against the committed migration set before search or clustering work continues. If the live schema has only normal pending migrations, run the pending files in `supabase/migrations/` in numeric order from the last migration you know was applied. The current set is `001` through `016`; do not apply superseded early organic patches after `004_topyappers_exact_shape.sql` unless you are intentionally replaying the full history from an older state.
 
 If the live database has heavy drift from manual edits or out-of-order migration attempts, prefer a clean rebuild in the same Supabase project from `supabase/schema.sql`, then start a fresh run and treat that run as the canonical corpus. Add a separate project later only for production isolation, not just to avoid cleaning up development drift.
 

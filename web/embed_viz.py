@@ -3,7 +3,7 @@
 
 Pulls item_embeddings (space=icp) + item_clusters for the latest run,
 projects the 1024-d vectors to 2D with t-SNE, and writes:
-  web/embeddings.png   — static two-panel scatter (paid ads | UGC)
+  web/embeddings.png   — static two-panel scatter (paid ads | Organic)
   web/embeddings.html  — interactive Plotly version (hover = item + cluster)
 
 Run:  python web/embed_viz.py   (RUN_ID=<uuid> to override)
@@ -127,9 +127,9 @@ def real_clusters(d):
     return sorted(int(l) for l in set(d["labels"].tolist()) if l != -1)
 
 
-def draw_png(paid, ugc, run_id):
+def draw_png(paid, organic, run_id):
     fig, axes = plt.subplots(1, 2, figsize=(15, 6.5))
-    for ax, (title, d) in zip(axes, [("Paid Ads", paid), ("UGC", ugc)]):
+    for ax, (title, d) in zip(axes, [("Paid Ads", paid), ("Organic", organic)]):
         rc = real_clusters(d)
         for i, lab in enumerate(rc):
             m = d["labels"] == lab
@@ -179,9 +179,9 @@ def panel_traces(d):
     return traces
 
 
-def draw_html(paid, ugc, run_id):
+def draw_html(paid, organic, run_id):
     blocks = [
-        ("UGC", ugc, len(real_clusters(ugc))),
+        ("Organic", organic, len(real_clusters(organic))),
         ("Paid Ads", paid, len(real_clusters(paid))),
     ]
     divs, scripts = [], []
@@ -222,12 +222,12 @@ def main():
     run_id = resolve_run(base, key)
     print(f"run_id: {run_id}")
     paid = project(collect(base, key, run_id, "paid_ad", "paid_ads", "paid_ad_row_id", "name"))
-    ugc = project(collect(base, key, run_id, "ugc_item", "ugc_items", "id", "handle"))
-    for nm, d in [("Paid Ads", paid), ("UGC", ugc)]:
+    organic = project(collect(base, key, run_id, "ugc_item", "ugc_items", "id", "handle"))
+    for nm, d in [("Paid Ads", paid), ("Organic", organic)]:
         print(f"{nm}: {len(d['X'])} items, {len(real_clusters(d))} clusters, "
               f"{int((d['labels'] == -1).sum())} noise")
-    draw_png(paid, ugc, run_id)
-    draw_html(paid, ugc, run_id)
+    draw_png(paid, organic, run_id)
+    draw_html(paid, organic, run_id)
 
 
 if __name__ == "__main__":

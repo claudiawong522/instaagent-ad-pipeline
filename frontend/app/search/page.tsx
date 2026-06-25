@@ -19,7 +19,7 @@ function formatNum(n: number | null | undefined): string {
 const TYPE_OPTIONS: { label: string; value: ItemType | null }[] = [
   { label: 'All', value: null },
   { label: 'Paid ads', value: 'paid_ad' },
-  { label: 'UGC', value: 'ugc_item' },
+  { label: 'Organic', value: 'ugc_item' },
 ]
 
 // Enum values mirror src/instaagent_pipeline/audience_enrichment.py (AGE_BRACKETS,
@@ -203,13 +203,13 @@ export default function SearchPage() {
             ))}
           </select>
 
-          {/* Performance filters are type-scoped: views/virality are UGC-only, days-live is paid-only. */}
+          {/* Performance filters are type-scoped: views/virality are organic-only, days-live is paid-only. */}
           {itemType !== 'paid_ad' && (
             <Input
               type="number"
               value={minViews}
               onChange={(e) => setMinViews(e.target.value)}
-              placeholder="Min views (UGC)"
+              placeholder="Min views (organic)"
               className="h-8 w-36 text-xs md:text-xs"
             />
           )}
@@ -333,7 +333,7 @@ function VideoCard({ result: r }: { result: VideoResult }) {
         </div>
         <div className="flex flex-wrap gap-1">
           <Badge variant={r.item_type === 'paid_ad' ? 'default' : 'outline'}>
-            {r.item_type === 'paid_ad' ? 'Paid' : 'UGC'}
+            {r.item_type === 'paid_ad' ? 'Paid' : 'Organic'}
           </Badge>
           {r.content_formats.map((f) => (
             <Badge key={`fmt-${f}`} variant="outline">{f}</Badge>

@@ -117,18 +117,18 @@ def test_search_ranks_hydrates_and_attaches_transcripts() -> None:
     assert isinstance(params["p_query"], str) and params["p_query"].startswith("[")
 
     assert [r["item_id"] for r in results] == ["u1", "p1"]  # preserves rank order
-    ugc, paid = results
-    assert ugc["platform"] == "tiktok"
-    assert ugc["video_url"] == "https://store/u1.mp4"
-    assert ugc["views"] == 321200
-    assert ugc["similarity"] == 0.9  # now the rerank score, not cosine
+    organic, paid = results
+    assert organic["platform"] == "tiktok"
+    assert organic["video_url"] == "https://store/u1.mp4"
+    assert organic["views"] == 321200
+    assert organic["similarity"] == 0.9  # now the rerank score, not cosine
     # Enrichment fields + transcript hydrate from item_enrichments (same output keys).
-    assert ugc["ai_description"] == "ASMR cleanser pump."
-    assert ugc["hook"] == "Watch this pump"
-    assert ugc["content_format"] == "asmr"
-    assert ugc["product_category"] == "skincare"
-    assert ugc["video_topic"] == "cleanser asmr"
-    assert ugc["transcript"] == "ugc transcript"
+    assert organic["ai_description"] == "ASMR cleanser pump."
+    assert organic["hook"] == "Watch this pump"
+    assert organic["content_format"] == "asmr"
+    assert organic["product_category"] == "skincare"
+    assert organic["video_topic"] == "cleanser asmr"
+    assert organic["transcript"] == "ugc transcript"
     assert paid["platform"] == "facebook"
     assert paid["ai_description"] == "A clean demo of a cleanser."
     assert paid["hook"] == "Stop using harsh soap"
@@ -138,7 +138,7 @@ def test_search_ranks_hydrates_and_attaches_transcripts() -> None:
     assert paid["transcript"] == "paid transcript"
     assert paid["views"] is None
     # Multi-value content_formats hydrates as a list on each result.
-    assert ugc["content_formats"] == ["ugc", "asmr"]
+    assert organic["content_formats"] == ["ugc", "asmr"]
     assert paid["content_formats"] == ["talking_head", "testimonial"]
 
 

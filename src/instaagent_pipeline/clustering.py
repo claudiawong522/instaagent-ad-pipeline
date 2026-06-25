@@ -25,7 +25,7 @@ ICP_SPACE = "icp"
 DEFAULT_MIN_CLUSTER_SIZE = 5
 EXEMPLAR_COUNT = 5
 
-# item_type per source, ordered so paid ads cluster before UGC in "all".
+# item_type per source, ordered so paid ads cluster before organic in "all".
 ITEM_TYPES = {
     "paid": ("paid_ad",),
     "ugc": ("ugc_item",),
