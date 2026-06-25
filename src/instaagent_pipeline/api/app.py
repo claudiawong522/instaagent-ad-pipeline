@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..config import Config
 from ..supabase_client import SupabaseClient
+from .routes_campaigns import router as campaigns_router
 from .routes_search import router
 
 
@@ -25,6 +26,7 @@ def create_app() -> FastAPI:
         else None
     )
     app.include_router(router)
+    app.include_router(campaigns_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:

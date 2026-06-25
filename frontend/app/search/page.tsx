@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Search, Loader2 } from 'lucide-react'
+import { Search, Loader2, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -87,6 +87,27 @@ export default function SearchPage() {
       setLoading(false)
     }
   }
+
+  function clearFilters() {
+    setItemType(null)
+    setPlatform('')
+    setRunId('')
+    setMinViews('')
+    setMinDaysLive('')
+    setPriceTier('')
+    setAgeBrackets(new Set())
+    setLanguages(new Set())
+  }
+
+  const filtersActive =
+    itemType !== null ||
+    platform !== '' ||
+    runId !== '' ||
+    minViews !== '' ||
+    minDaysLive !== '' ||
+    priceTier !== '' ||
+    ageBrackets.size > 0 ||
+    languages.size > 0
 
   return (
     <div className="space-y-6">
@@ -193,6 +214,16 @@ export default function SearchPage() {
               placeholder="Min days live (paid)"
               className="h-8 w-36 text-xs"
             />
+          )}
+
+          {filtersActive && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="flex h-8 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground hover:text-foreground"
+            >
+              <X className="size-3.5" /> Clear filters
+            </button>
           )}
         </div>
 

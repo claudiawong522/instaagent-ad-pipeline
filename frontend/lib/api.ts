@@ -1,4 +1,15 @@
-import type { SearchFilters, SearchResponse, RunSummary, VideoResult, ItemType } from './types'
+import type {
+  SearchFilters,
+  SearchResponse,
+  RunSummary,
+  VideoResult,
+  ItemType,
+  Campaign,
+  CreateCampaignInput,
+  CreateCampaignResult,
+  Product,
+  ScrapeStats,
+} from './types'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -39,4 +50,32 @@ export async function listRuns(): Promise<{ runs: RunSummary[] }> {
 
 export async function getItem(itemType: ItemType, itemId: string): Promise<VideoResult> {
   return request(`/items/${itemType}/${itemId}`)
+}
+
+export async function listProducts(): Promise<{ products: Product[] }> {
+  return request('/products')
+}
+
+export async function listCampaigns(): Promise<{ campaigns: Campaign[] }> {
+  return request('/campaigns')
+}
+
+export async function createCampaign(input: CreateCampaignInput): Promise<CreateCampaignResult> {
+  return request('/campaigns', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export async function getScrapeStats(runId: string): Promise<ScrapeStats> {
+  return request(`/campaigns/${runId}/scrape-stats`)
+}
+
+export type ScrapePlatform = 'facebook' | 'instagram' | 'tiktok'
+
+export async function triggerScrape(
+  runId: string,
+  platform: ScrapePlatform,
+): Promise<{ started: boolean; platform: string; reason?: string }> {
+  return request(`/campaigns/${runId}/scrape`, {
+    method: 'POST',
+    body: JSON.stringify({ platform }),
+  })
 }

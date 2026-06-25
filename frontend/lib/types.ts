@@ -49,6 +49,56 @@ export interface SearchFilters {
   limit?: number
 }
 
+export interface Product {
+  id: string
+  name: string
+  category: string | null
+  target_market: string | null
+  notes: string | null
+  created_at: string | null
+}
+
+export interface Campaign {
+  run_id: string
+  status: string | null
+  product_name: string | null
+  category: string | null
+  target_market: string | null
+  campaign_name: string | null
+  marketing_goals: string[]
+  campaign_objective: string | null
+  target_paid_count: number | null
+  target_ugc_count: number | null
+  created_at: string | null
+}
+
+export interface CreateCampaignInput {
+  product_name: string
+  category?: string | null
+  target_market?: string | null
+  notes?: string | null
+  campaign_name: string
+  marketing_goals: string[]
+  campaign_objective?: string | null
+  target_paid_count: number
+  target_ugc_count: number
+}
+
+export interface CreateCampaignResult {
+  run_id: string
+  product_id: string
+  keyword_count: number
+  warning: string | null
+}
+
+export interface ScrapeStats {
+  run_id: string
+  facebook_ads: number
+  instagram_reels: number
+  tiktoks: number
+  running: string[] // platforms mid-scrape: facebook | instagram | tiktok
+}
+
 export interface RunSummary {
   run_id: string
   status: string | null

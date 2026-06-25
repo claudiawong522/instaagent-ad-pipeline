@@ -4,7 +4,10 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 
-const navLinks = [{ href: '/search', label: 'Search' }]
+const navLinks = [
+  { href: '/campaigns', label: 'Campaigns' },
+  { href: '/search', label: 'Search' },
+]
 
 export function Navbar() {
   const pathname = usePathname()
