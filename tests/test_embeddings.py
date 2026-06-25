@@ -13,6 +13,7 @@ from instaagent_pipeline.embeddings import (
     build_icp_text,
     build_search_text,
     collect_candidates,
+    embed_items,
     flatten_jsonish,
     parse_voyage_response,
     vector_literal,
@@ -165,6 +166,46 @@ def test_collect_candidates_yields_icp_and_search_for_complete_row() -> None:
     assert "format: unboxing" in out[1].source_text
     assert result.skipped_existing == 0
     assert result.skipped_no_text == 0
+
+
+class _FakeSupabase:
+    """Minimal stub: one enrichment row per item_type, and a pre-existing embedding for
+    each (item, space) so the skip-vs-overwrite branch can be exercised."""
+
+    def select(self, table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        if table == "item_enrichments":
+            it = "paid_ad" if params.get("item_type") == "eq.paid_ad" else "ugc_item"
+            return [{"item_id": "x1", "persona": "gym goers",
+                     "ai_description": "A demo.", "content_formats": ["unboxing"]}]
+        if table == "item_embeddings":
+            # x1 already embedded in both spaces (paid_ad).
+            return [
+                {"item_type": "paid_ad", "item_id": "x1", "space": "icp"},
+                {"item_type": "paid_ad", "item_id": "x1", "space": "search"},
+            ]
+        return []
+
+
+def test_embed_items_skips_existing_without_overwrite() -> None:
+    # model= short-circuits config access; dry_run skips Voyage/upsert entirely.
+    result = embed_items(
+        config=None, supabase=_FakeSupabase(), run_id="r1", source="paid",
+        dry_run=True, model="voyage-4-lite",
+    )
+    # Both spaces already embedded for the one paid row → nothing to do.
+    assert result.candidates == 0
+    assert result.skipped_existing == 2
+
+
+def test_embed_items_overwrite_reembeds_existing() -> None:
+    result = embed_items(
+        config=None, supabase=_FakeSupabase(), run_id="r1", source="paid",
+        dry_run=True, overwrite=True, model="voyage-4-lite",
+    )
+    # --overwrite ignores the existing guard → both spaces re-embedded.
+    assert result.candidates == 2
+    assert result.skipped_existing == 0
+    assert sorted(d["space"] for d in result.details) == ["icp", "search"]
 
 
 def test_parse_voyage_response_orders_by_index() -> None:

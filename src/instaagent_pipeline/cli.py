@@ -138,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model,
             input_json=args.input_json,
             timeout=args.timeout,
+            overwrite=args.overwrite,
         )
     elif args.command == "enrich-audience":
         result = enrich_audience(
@@ -268,6 +269,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Embedding space(s) to build. 'all' builds icp/search; use 'search' to backfill only the search vectors.",
     )
     embed.add_argument("--limit", type=int, default=1000, help="Maximum items to fetch per source.")
+    embed.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-embed items that already have vectors (upserts in place). Use after a "
+        "text-builder change, e.g. new tag fields.",
+    )
     embed.add_argument("--model", help="Voyage embedding model. Defaults to EMBEDDING_MODEL or voyage-4-lite.")
     embed.add_argument("--timeout", type=int, default=120)
     embed.add_argument("--dry-run", action="store_true")

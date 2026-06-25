@@ -71,6 +71,7 @@ def embed_items(
     model: str | None = None,
     input_json: Path | None = None,
     timeout: int = 120,
+    overwrite: bool = False,
 ) -> EmbedResult:
     if supabase is None:
         raise RuntimeError("Supabase credentials are required to load embedding candidates.")
@@ -84,7 +85,13 @@ def embed_items(
         raise ValueError(f"Unknown embedding space(s): {', '.join(unknown)}.")
 
     embedding_model = model or config.embedding_model
-    existing = existing_embedding_keys(supabase, run_id=run_id, embedding_model=embedding_model)
+    # --overwrite re-embeds everything: the upsert (conflict key item_type,item_id,space,
+    # embedding_model) replaces stale vectors in place — needed after a text-builder change.
+    existing = (
+        set()
+        if overwrite
+        else existing_embedding_keys(supabase, run_id=run_id, embedding_model=embedding_model)
+    )
 
     result = EmbedResult()
     candidates: list[EmbeddingCandidate] = []

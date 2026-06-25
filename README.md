@@ -97,6 +97,9 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli embed-items \
   --limit 1000
 ```
 
+By default this skips items that already have vectors. After changing what gets embedded
+(e.g. a new enrichment tag field), pass `--overwrite` to re-embed in place.
+
 Cluster ICP embeddings into `item_clusters` and `clusters` (on existing databases, run `supabase/migrations/014_item_clusters.sql` first):
 
 ```bash
