@@ -13,6 +13,7 @@ const geist = localFont({
 export const metadata: Metadata = {
   title: 'InstaAgent — Ad Search',
   description: 'Semantic search over a database of paid ads and organic videos.',
+  icons: { icon: '/instaagent-icon.png' },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
