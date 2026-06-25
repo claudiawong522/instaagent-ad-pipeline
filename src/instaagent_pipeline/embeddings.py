@@ -26,15 +26,18 @@ ALL_SPACES = ("icp", "search")
 # reads persona + target_demographic; the search builder reads ai_description, the
 # SEARCH_TAG_FIELDS tag block, and the full transcript_text. item_id is the polymorphic
 # key (= paid_ads.paid_ad_row_id or ugc_items.id).
-# Base columns that always exist. target_generation is a Phase 4 column (migration 018);
-# it is selected when present and skipped via the 400-fallback in _select_enrichment_rows
-# when the migration hasn't been applied yet, so embedding never breaks pre-migration.
+# Base columns that always exist. target_generation (migration 018) and content_formats
+# (migration 020) are newer columns: selected when present and skipped via the 400-fallback
+# in _select_enrichment_rows when the migration hasn't been applied yet, so embedding never
+# breaks pre-migration. production_quality + emotional_drivers (migration 016, base) feed the
+# icp space; content_formats supersedes the single-value content_format in the search space.
 ENRICHMENT_SELECT_COLUMNS_BASE = (
-    "item_id,persona,target_demographic,ai_description,content_format,main_category,"
+    "item_id,persona,target_demographic,ai_description,main_category,"
     "content_category,product_category,video_topic,niches,hook,setting,primary_emotion,"
-    "brand_mentioned,transcript_text,content_tone,visual_style"
+    "brand_mentioned,transcript_text,content_tone,visual_style,production_quality,"
+    "emotional_drivers"
 )
-ENRICHMENT_SELECT_COLUMNS = ENRICHMENT_SELECT_COLUMNS_BASE + ",target_generation"
+ENRICHMENT_SELECT_COLUMNS = ENRICHMENT_SELECT_COLUMNS_BASE + ",target_generation,content_formats"
 
 
 @dataclass
@@ -133,8 +136,9 @@ def embed_items(
 def _select_enrichment_rows(
     supabase: SupabaseClient, *, run_id: str, item_type: str, limit: int
 ) -> list[dict[str, Any]]:
-    """Select enrichment rows, falling back to base columns if the Phase 4 columns
-    (target_generation) don't exist yet — keeps embedding working pre-migration-018."""
+    """Select enrichment rows, falling back to base columns if the newer columns
+    (target_generation / content_formats) don't exist yet — keeps embedding working
+    pre-migration-018/020."""
     params = {
         "run_id": f"eq.{run_id}",
         "item_type": f"eq.{item_type}",
@@ -356,7 +360,9 @@ def batched(items: list[EmbeddingCandidate], size: int) -> list[list[EmbeddingCa
 # queries about audience/generation/tone (genz, luxury, scientific, professional) have
 # vocabulary to match — these attributes are absent from the literal-visual search space.
 # Field order is fixed so cosine distances stay comparable. target_generation is read
-# None-safely; it becomes populated once the Phase 4 enrichment pass lands.
+# None-safely; it becomes populated once the Phase 4 enrichment pass lands. quality
+# (production_quality) + drivers (emotional_drivers) are abstract vibe/persuasion attributes
+# — they belong here, not in the literal-visual search space.
 ICP_TAG_FIELDS = (
     ("persona", "persona"),
     ("audience", "target_demographic"),
@@ -364,6 +370,8 @@ ICP_TAG_FIELDS = (
     ("tone", "content_tone"),
     ("style", "visual_style"),
     ("emotion", "primary_emotion"),
+    ("quality", "production_quality"),
+    ("drivers", "emotional_drivers"),
 )
 
 
@@ -382,7 +390,7 @@ def build_icp_text(row: dict[str, Any]) -> str | None:
 # text is appended after the tag block (no truncation) so spoken-word queries match.
 # Field order is fixed so cosine distances stay comparable.
 SEARCH_TAG_FIELDS = (
-    ("format", "content_format"),
+    ("format", "content_formats"),
     ("category", "main_category"),
     ("subcategory", "content_category"),
     ("product", "product_category"),

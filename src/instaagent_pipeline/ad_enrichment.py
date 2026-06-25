@@ -39,9 +39,12 @@ INLINE_VIDEO_MAX_BYTES = 100 * 1024 * 1024
 # analysis_model/analyzed_at bookkeeping. Keys absent from the model JSON
 # stay untouched; explicit nulls are written as null.
 # Trimmed analysis set (see plan): the vision-generated ai_description (the search
-# payload) plus 20 high-value fields. Dropped (noisy/low-payoff/optics): race,
+# payload) plus 17 high-value fields. Dropped (noisy/low-payoff/optics): race,
 # hair_color, gender, age, has_face, face_count, color_palette, creative_targeting,
-# market_target, is_ai_generated. Their columns remain in the DB but go unpopulated.
+# market_target, is_ai_generated, and (no downstream consumer) has_text_overlay,
+# is_trending_format, time_product_was_mentioned. Their columns remain in the DB but
+# go unpopulated. Note: production format now comes from the multi-value content_formats
+# tag (audience_enrichment.py), superseding the single-value content_format here.
 PAID_AD_ANALYSIS_COLUMNS = (
     "ai_description",
     "hook",
@@ -56,20 +59,15 @@ PAID_AD_ANALYSIS_COLUMNS = (
     "production_quality",
     "setting",
     "has_product",
-    "has_text_overlay",
-    "is_trending_format",
     "brand_mentioned",
     "persona",
     "emotional_drivers",
     "product_category",
     "niches",
-    "time_product_was_mentioned",
 )
 
 NULLABLE_STRING = {"type": ["string", "null"]}
 NULLABLE_BOOLEAN = {"type": ["boolean", "null"]}
-NULLABLE_INTEGER = {"type": ["integer", "null"]}
-NULLABLE_NUMBER = {"type": ["number", "null"]}
 NULLABLE_STRING_ARRAY = {"type": ["array", "null"], "items": {"type": "string"}}
 
 ENRICHMENT_SCHEMA: dict[str, Any] = {
@@ -103,14 +101,11 @@ ENRICHMENT_SCHEMA: dict[str, Any] = {
         "production_quality": NULLABLE_STRING,
         "setting": NULLABLE_STRING,
         "has_product": NULLABLE_BOOLEAN,
-        "has_text_overlay": NULLABLE_BOOLEAN,
-        "is_trending_format": NULLABLE_BOOLEAN,
         "brand_mentioned": NULLABLE_STRING_ARRAY,
         "persona": NULLABLE_STRING,
         "emotional_drivers": NULLABLE_STRING_ARRAY,
         "product_category": NULLABLE_STRING,
         "niches": NULLABLE_STRING_ARRAY,
-        "time_product_was_mentioned": NULLABLE_NUMBER,
     },
     "required": ["transcript_text", "transcript_segments", *PAID_AD_ANALYSIS_COLUMNS],
 }
@@ -148,9 +143,6 @@ Tasks:
    - niches: list of niche descriptors.
    - production_quality: one of low, medium, high, professional.
    - has_product: whether a product is shown on screen.
-   - has_text_overlay: whether burned-in captions or text overlays appear.
-   - is_trending_format: whether the video uses a recognizable trending social format.
-   - time_product_was_mentioned: seconds into the video when the product is first mentioned or shown, null if never.
    - brand_mentioned: list of brand names spoken or shown.
 
 Copy context:

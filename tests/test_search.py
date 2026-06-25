@@ -68,6 +68,7 @@ class FakeSupabase:
                         "ai_description": "A clean demo of a cleanser.",
                         "hook": "Stop using harsh soap",
                         "content_format": "demo",
+                        "content_formats": ["talking_head", "testimonial"],
                         "product_category": "skincare",
                         "video_topic": "cleanser demo",
                         "transcript_text": "paid transcript",
@@ -80,6 +81,7 @@ class FakeSupabase:
                         "ai_description": "ASMR cleanser pump.",
                         "hook": "Watch this pump",
                         "content_format": "asmr",
+                        "content_formats": ["ugc", "asmr"],
                         "product_category": "skincare",
                         "video_topic": "cleanser asmr",
                         "transcript_text": "ugc transcript",
@@ -135,6 +137,9 @@ def test_search_ranks_hydrates_and_attaches_transcripts() -> None:
     assert paid["video_topic"] == "cleanser demo"
     assert paid["transcript"] == "paid transcript"
     assert paid["views"] is None
+    # Multi-value content_formats hydrates as a list on each result.
+    assert ugc["content_formats"] == ["ugc", "asmr"]
+    assert paid["content_formats"] == ["talking_head", "testimonial"]
 
 
 def test_platform_filter() -> None:
@@ -151,3 +156,18 @@ def test_item_type_forwarded_to_rpc() -> None:
     supabase = FakeSupabase()
     search_module.search_ads(make_config(), supabase, query="x", item_type="ugc_item")
     assert supabase.rpc_calls[0][1]["p_item_type"] == "ugc_item"
+
+
+def test_content_formats_filter_matches_by_overlap() -> None:
+    # u1 = [ugc, asmr], p1 = [talking_head, testimonial]. "asmr" overlaps only u1.
+    results = search_module.search_ads(
+        make_config(), FakeSupabase(), query="x", content_formats=["asmr"]
+    )
+    assert [r["item_id"] for r in results] == ["u1"]
+
+
+def test_content_formats_filter_drops_rows_without_match() -> None:
+    results = search_module.search_ads(
+        make_config(), FakeSupabase(), query="x", content_formats=["meme"]
+    )
+    assert results == []

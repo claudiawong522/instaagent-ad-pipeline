@@ -1,12 +1,14 @@
 """Phase 4 — text-only audience/tone enrichment.
 
 Derives the abstract attributes that literal vision descriptions don't capture
-(target generation, price positioning, age groups, languages) by re-reading the
-already-stored ai_description + transcript with a cheap text LLM. No video download.
+(target generation, price positioning, age groups, languages, production formats) by
+re-reading the already-stored ai_description + transcript with a cheap text LLM. No
+video download.
 
 The fields land on item_enrichments and feed: target_generation -> the icp embedding
-space (build_icp_text); price_positioning/age_brackets/languages -> the categorical
-search filters. Requires migration 018 to have added the columns.
+space (build_icp_text); price_positioning/age_brackets/languages/content_formats -> the
+categorical search filters; content_formats also -> the search embedding (build_search_text),
+superseding the single-value content_format. Requires migrations 018 + 020.
 """
 
 from __future__ import annotations
@@ -27,6 +29,13 @@ from .supabase_client import SupabaseClient
 TARGET_GENERATIONS = ("genz", "millennial", "genx", "boomer", "mixed")
 PRICE_TIERS = ("budget", "mid", "premium", "luxury")
 AGE_BRACKETS = ("13-17", "18-24", "25-34", "35-44", "45-54", "55+")
+# Production formats — multi-value/overlapping (a video can be both meme and ugc).
+# Product-agnostic (beauty/food/electronics/gym). Supersedes the single-value
+# content_format; feeds the search embedding (build_search_text) + the format filter.
+CONTENT_FORMATS = (
+    "talking_head", "ugc", "product_montage", "voiceover", "meme", "grwm",
+    "unboxing", "tutorial", "testimonial", "before_after", "skit", "listicle", "asmr",
+)
 
 AUDIENCE_SCHEMA = {
     "type": "object",
@@ -38,8 +47,14 @@ AUDIENCE_SCHEMA = {
             "items": {"type": "string", "enum": list(AGE_BRACKETS)},
         },
         "languages": {"type": "array", "items": {"type": "string"}},
+        "content_formats": {
+            "type": "array",
+            "items": {"type": "string", "enum": list(CONTENT_FORMATS)},
+        },
     },
-    "required": ["target_generation", "price_positioning", "age_brackets", "languages"],
+    "required": [
+        "target_generation", "price_positioning", "age_brackets", "languages", "content_formats",
+    ],
     "additionalProperties": False,
 }
 
@@ -54,13 +69,24 @@ PROMPT_TEMPLATE = (
     "- age_brackets: an array of EVERY age group the video targets or prominently "
     f"depicts (people on screen + intended audience), each one of {', '.join(AGE_BRACKETS)}.\n"
     "- languages: an array of the spoken/written languages, canonical English names "
-    "(e.g. English, Cantonese, Mandarin).\n\n"
+    "(e.g. English, Cantonese, Mandarin).\n"
+    "- content_formats: an array of EVERY production format that applies (they OVERLAP — a "
+    f"video can be several at once), each one of {', '.join(CONTENT_FORMATS)}. Definitions are "
+    "product-agnostic: product_montage = polished shots of the product with no person on screen "
+    "(a serum bottle, a sneaker, a gadget, a plated dish); ugc = casual phone-shot creator style; "
+    "talking_head = a person speaking to camera; voiceover = narration over b-roll with no speaker "
+    "on screen; grwm = get-ready/routine; before_after = a transformation; listicle = numbered "
+    "tips. Return [] if none clearly apply.\n\n"
+    "HAS_PRODUCT_ON_SCREEN: {has_product}\n\n"
     "DESCRIPTION:\n{description}\n\nTRANSCRIPT:\n{transcript}"
 )
 
 # item_enrichments columns the pass reads. target_generation is included so already-done
-# rows can be skipped; requires migration 018.
-SELECT_COLUMNS = "item_id,item_type,ai_description,transcript_text,target_generation"
+# rows can be skipped; requires migration 018. has_product feeds the content_formats prompt
+# as a hint (product_montage disambiguation).
+SELECT_COLUMNS = (
+    "item_id,item_type,ai_description,transcript_text,target_generation,has_product"
+)
 
 
 @dataclass
@@ -150,9 +176,11 @@ def enrich_audience(
 
 
 def _call_audience_llm(config: Config, row: dict[str, Any], *, timeout: int) -> dict[str, Any]:
+    has_product = row.get("has_product")
     prompt = PROMPT_TEMPLATE.format(
         description=(row.get("ai_description") or "").strip(),
         transcript=(row.get("transcript_text") or "(none)").strip(),
+        has_product="unknown" if has_product is None else str(bool(has_product)).lower(),
     )
     response = request_json(
         "POST",
@@ -208,4 +236,5 @@ def _normalize(analysis: dict[str, Any]) -> dict[str, Any]:
         "price_positioning": _enum(analysis.get("price_positioning"), PRICE_TIERS),
         "age_brackets": _enum_list(analysis.get("age_brackets"), AGE_BRACKETS),
         "languages": _str_list(analysis.get("languages")),
+        "content_formats": _enum_list(analysis.get("content_formats"), CONTENT_FORMATS),
     }

@@ -27,6 +27,8 @@ export interface VideoResult {
   price_positioning: string | null
   age_brackets: string[]
   languages: string[]
+  // Multi-value production format (migration 020); supersedes content_format.
+  content_formats: string[]
 }
 
 export interface SearchResponse {
@@ -45,6 +47,7 @@ export interface SearchFilters {
   min_days_live?: number | null // paid-only (days the ad has been running)
   languages?: string[] | null // multi-select, overlap match
   age_brackets?: string[] | null // multi-select, overlap match
+  content_formats?: string[] | null // multi-select, overlap match (production format)
   price_tier?: string | null // single: budget|mid|premium|luxury
   limit?: number
 }

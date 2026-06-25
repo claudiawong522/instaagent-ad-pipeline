@@ -23,9 +23,12 @@ const TYPE_OPTIONS: { label: string; value: ItemType | null }[] = [
 ]
 
 // Enum values mirror src/instaagent_pipeline/audience_enrichment.py (AGE_BRACKETS,
-// PRICE_TIERS). Languages are free-form on the backend; these are the common set.
+// PRICE_TIERS, CONTENT_FORMATS). Languages are free-form on the backend; these are the common set.
 const AGE_BRACKETS = ['13-17', '18-24', '25-34', '35-44', '45-54', '55+']
 const LANGUAGES = ['English', 'Spanish', 'Portuguese', 'French', 'German', 'Hindi', 'Arabic', 'Chinese', 'Japanese', 'Korean']
+// Production formats — multi-value/overlapping (a video can be several at once).
+const CONTENT_FORMATS = ['talking_head', 'ugc', 'product_montage', 'voiceover', 'meme', 'grwm',
+  'unboxing', 'tutorial', 'testimonial', 'before_after', 'skit', 'listicle', 'asmr']
 const PRICE_TIERS = [
   { label: 'Any price', value: '' },
   { label: 'Budget', value: 'budget' },
@@ -51,6 +54,7 @@ export default function SearchPage() {
   const [priceTier, setPriceTier] = useState<string>('')
   const [ageBrackets, setAgeBrackets] = useState<Set<string>>(new Set())
   const [languages, setLanguages] = useState<Set<string>>(new Set())
+  const [contentFormats, setContentFormats] = useState<Set<string>>(new Set())
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [results, setResults] = useState<VideoResult[]>([])
   const [loading, setLoading] = useState(false)
@@ -78,6 +82,7 @@ export default function SearchPage() {
         price_tier: priceTier || null,
         age_brackets: ageBrackets.size ? Array.from(ageBrackets) : null,
         languages: languages.size ? Array.from(languages) : null,
+        content_formats: contentFormats.size ? Array.from(contentFormats) : null,
       })
       setResults(res.results)
     } catch (e) {
@@ -97,6 +102,7 @@ export default function SearchPage() {
     setPriceTier('')
     setAgeBrackets(new Set())
     setLanguages(new Set())
+    setContentFormats(new Set())
   }
 
   const filtersActive =
@@ -107,7 +113,8 @@ export default function SearchPage() {
     minDaysLive !== '' ||
     priceTier !== '' ||
     ageBrackets.size > 0 ||
-    languages.size > 0
+    languages.size > 0 ||
+    contentFormats.size > 0
 
   return (
     <div className="space-y-6">
@@ -228,6 +235,7 @@ export default function SearchPage() {
         </div>
 
         <div className="flex flex-col gap-2">
+          <ChipFilter label="Format" options={CONTENT_FORMATS} selected={contentFormats} onToggle={(v) => setContentFormats((s) => toggleInSet(s, v))} />
           <ChipFilter label="Age" options={AGE_BRACKETS} selected={ageBrackets} onToggle={(v) => setAgeBrackets((s) => toggleInSet(s, v))} />
           <ChipFilter label="Language" options={LANGUAGES} selected={languages} onToggle={(v) => setLanguages((s) => toggleInSet(s, v))} />
         </div>
@@ -327,7 +335,9 @@ function VideoCard({ result: r }: { result: VideoResult }) {
           <Badge variant={r.item_type === 'paid_ad' ? 'default' : 'outline'}>
             {r.item_type === 'paid_ad' ? 'Paid' : 'UGC'}
           </Badge>
-          {r.content_format && <Badge variant="outline">{r.content_format}</Badge>}
+          {r.content_formats.map((f) => (
+            <Badge key={`fmt-${f}`} variant="outline">{f}</Badge>
+          ))}
           {typeof r.similarity === 'number' && (
             <Badge variant="outline">{Math.round(r.similarity * 100)}% relevance</Badge>
           )}

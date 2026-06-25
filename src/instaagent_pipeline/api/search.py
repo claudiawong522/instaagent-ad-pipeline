@@ -50,6 +50,7 @@ def search_ads(
     min_days_live: float | None = None,
     languages: list[str] | None = None,
     age_brackets: list[str] | None = None,
+    content_formats: list[str] | None = None,
     price_tier: str | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
@@ -66,6 +67,7 @@ def search_ads(
             min_days_live=min_days_live,
             languages=languages,
             age_brackets=age_brackets,
+            content_formats=content_formats,
             price_tier=price_tier,
             limit=limit,
             pool=pool,
@@ -142,7 +144,7 @@ def search_ads(
         order, paid, ugc, paid_enr, ugc_enr, similarity,
         platform=platform, min_virality=min_virality, min_views=min_views,
         min_days_live=min_days_live, languages=languages, age_brackets=age_brackets,
-        price_tier=price_tier, limit=limit,
+        content_formats=content_formats, price_tier=price_tier, limit=limit,
     )
 
 
@@ -197,6 +199,7 @@ def _browse_ads(
     min_days_live: float | None,
     languages: list[str] | None,
     age_brackets: list[str] | None,
+    content_formats: list[str] | None,
     price_tier: str | None,
     limit: int | None,
     pool: int,
@@ -243,7 +246,7 @@ def _browse_ads(
         order, paid, ugc, paid_enr, ugc_enr, {},
         platform=platform, min_virality=min_virality, min_views=min_views,
         min_days_live=min_days_live, languages=languages, age_brackets=age_brackets,
-        price_tier=price_tier, limit=limit,
+        content_formats=content_formats, price_tier=price_tier, limit=limit,
     )
 
 
@@ -261,12 +264,14 @@ def _assemble(
     min_days_live: float | None,
     languages: list[str] | None = None,
     age_brackets: list[str] | None = None,
+    content_formats: list[str] | None = None,
     price_tier: str | None = None,
     limit: int | None,
 ) -> list[dict[str, Any]]:
     """Hydrate ranked/browsed keys into VideoResult dicts, dedupe by video, apply filters."""
     want_languages = {s.strip().title() for s in languages} if languages else None
     want_brackets = {s.strip().lower() for s in age_brackets} if age_brackets else None
+    want_formats = {s.strip().lower() for s in content_formats} if content_formats else None
     want_price = price_tier.strip().lower() if price_tier else None
     cap = MAX_RESULTS if limit is None else limit
     results: list[dict[str, Any]] = []
@@ -307,6 +312,8 @@ def _assemble(
         if want_price is not None and (result.get("price_positioning") or "").lower() != want_price:
             continue
         if want_brackets is not None and not (want_brackets & {b.lower() for b in result.get("age_brackets") or []}):
+            continue
+        if want_formats is not None and not (want_formats & {f.lower() for f in result.get("content_formats") or []}):
             continue
         if want_languages is not None and not (want_languages & {l.title() for l in result.get("languages") or []}):
             continue
@@ -382,9 +389,12 @@ def _hydrate(
 _ENRICH_BASE_COLUMNS = (
     "item_id,ai_description,hook,content_format,product_category,video_topic,transcript_text"
 )
-# Phase 4 columns (migration 018). Selected when present; the 400-fallback drops them
-# pre-migration so search keeps working.
-_ENRICH_FULL_COLUMNS = _ENRICH_BASE_COLUMNS + ",target_generation,price_positioning,age_brackets,languages"
+# Phase 4 columns (migration 018) + content_formats (migration 020). Selected when present;
+# the 400-fallback drops them pre-migration so search keeps working.
+_ENRICH_FULL_COLUMNS = (
+    _ENRICH_BASE_COLUMNS
+    + ",target_generation,price_positioning,age_brackets,languages,content_formats"
+)
 
 
 def _enrichments(
@@ -422,11 +432,13 @@ def _to_video_result(
     video_topic = enr.get("video_topic")
     transcript = enr.get("transcript_text")
     # Phase 4 audience fields (None/[] until migration 018 + enrich-audience populate them).
+    # content_formats (migration 020) is the multi-value successor to content_format.
     audience = {
         "target_generation": enr.get("target_generation"),
         "price_positioning": enr.get("price_positioning"),
         "age_brackets": enr.get("age_brackets") or [],
         "languages": enr.get("languages") or [],
+        "content_formats": enr.get("content_formats") or [],
     }
     if item_type == "paid_ad":
         return {

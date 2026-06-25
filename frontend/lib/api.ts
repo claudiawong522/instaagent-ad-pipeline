@@ -38,6 +38,7 @@ export async function searchAds(filters: SearchFilters): Promise<SearchResponse>
       min_days_live: filters.min_days_live ?? null,
       languages: filters.languages?.length ? filters.languages : null,
       age_brackets: filters.age_brackets?.length ? filters.age_brackets : null,
+      content_formats: filters.content_formats?.length ? filters.content_formats : null,
       price_tier: filters.price_tier ?? null,
       limit: filters.limit ?? null,
     }),

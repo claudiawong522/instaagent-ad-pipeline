@@ -20,6 +20,7 @@ class SearchRequest(BaseModel):
     min_days_live: Optional[float] = None  # paid-only (days the ad has been running)
     languages: Optional[list[str]] = None  # multi-select, overlap match
     age_brackets: Optional[list[str]] = None  # multi-select, overlap match
+    content_formats: Optional[list[str]] = None  # multi-select, overlap match (production format)
     price_tier: Optional[str] = None  # single (budget/mid/premium/luxury)
     # None = no count cap; results are gated by the relevance threshold (search_ads
     # caps at MAX_RESULTS as a safety bound). A value still caps to that many.
@@ -52,6 +53,7 @@ def search(req: SearchRequest, request: Request) -> dict[str, Any]:
             min_days_live=req.min_days_live,
             languages=req.languages,
             age_brackets=req.age_brackets,
+            content_formats=req.content_formats,
             price_tier=req.price_tier,
             limit=req.limit,
         )

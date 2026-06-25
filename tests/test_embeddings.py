@@ -43,20 +43,35 @@ def test_build_icp_text_returns_none_without_signal() -> None:
     assert build_icp_text({"persona": None, "target_demographic": "  "}) is None
 
 
+def test_build_icp_text_includes_quality_and_drivers() -> None:
+    # production_quality + emotional_drivers are abstract vibe/persuasion attributes
+    # that belong in the icp space, not the literal search space.
+    row = {
+        "persona": "gym goers",
+        "production_quality": "professional",
+        "emotional_drivers": ["social proof", "fear of missing out"],
+    }
+    assert build_icp_text(row) == (
+        "persona: gym goers; quality: professional; "
+        "drivers: social proof, fear of missing out"
+    )
+
+
 def test_embedding_spaces_are_icp_and_search_only() -> None:
     assert EMBEDDING_SPACES == ("icp", "search")
     assert ALL_SPACES == ("icp", "search")
 
 
 def test_build_search_text_returns_none_without_description() -> None:
-    assert build_search_text({"ai_description": "", "content_format": "demo"}) is None
+    assert build_search_text({"ai_description": "", "content_formats": ["talking_head"]}) is None
     assert build_search_text({"ai_description": None}) is None
 
 
 def test_build_search_text_combines_description_tags_and_transcript() -> None:
     row = {
         "ai_description": "A creator demos a gentle cleanser before/after.",
-        "content_format": "talking_head",
+        # Multi-value: a video can be several overlapping formats at once.
+        "content_formats": ["talking_head", "before_after"],
         "main_category": "beauty",
         "content_category": "skincare",
         "product_category": "cleanser",
@@ -71,7 +86,7 @@ def test_build_search_text_combines_description_tags_and_transcript() -> None:
     expected = (
         "A creator demos a gentle cleanser before/after."
         "\n\n"
-        "format: talking_head; category: beauty; subcategory: skincare; "
+        "format: talking_head, before_after; category: beauty; subcategory: skincare; "
         "product: cleanser; topic: skin barrier; niches: sensitive skin, redness; "
         "hook: Stop washing your face wrong; setting: bathroom; emotion: trust; "
         "brands: QE Skincare"
@@ -101,7 +116,7 @@ def test_collect_candidates_skips_existing_and_empty_spaces() -> None:
             "persona": "gym goers",
             "target_demographic": None,
             "ai_description": None,
-            "content_format": "demo",
+            "content_formats": ["demo"],
         }
     ]
     result = EmbedResult()
@@ -128,7 +143,7 @@ def test_collect_candidates_yields_icp_and_search_for_complete_row() -> None:
             "persona": "gym goers",
             "target_demographic": "men 18-34",
             "ai_description": "A short demo of a protein shake.",
-            "content_format": "demo",
+            "content_formats": ["unboxing"],
         }
     ]
     result = EmbedResult()
@@ -147,7 +162,7 @@ def test_collect_candidates_yields_icp_and_search_for_complete_row() -> None:
     assert [candidate.space for candidate in out] == ["icp", "search"]
     assert out[0].source_text == "persona: gym goers; audience: men 18-34"
     assert out[1].source_text.startswith("A short demo of a protein shake.")
-    assert "format: demo" in out[1].source_text
+    assert "format: unboxing" in out[1].source_text
     assert result.skipped_existing == 0
     assert result.skipped_no_text == 0
 
