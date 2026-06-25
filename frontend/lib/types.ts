@@ -72,7 +72,8 @@ export interface Campaign {
   marketing_goals: string[]
   campaign_objective: string | null
   target_paid_count: number | null
-  target_ugc_count: number | null
+  target_ugc_count: number | null // reels (Instagram)
+  target_tiktok_count: number | null
   created_at: string | null
 }
 
@@ -84,8 +85,11 @@ export interface CreateCampaignInput {
   campaign_name: string
   marketing_goals: string[]
   campaign_objective?: string | null
-  target_paid_count: number
-  target_ugc_count: number
+  // Scrape targets aren't set at creation — they're chosen per-platform at scrape time.
+  // Omitted here so the backend defaults apply (used only to seed keyword allocation).
+  target_paid_count?: number
+  target_ugc_count?: number // reels (Instagram)
+  target_tiktok_count?: number
 }
 
 export interface CreateCampaignResult {
@@ -160,6 +164,7 @@ export interface RunSummary {
   product_name: string | null
   category: string | null
   target_paid_count: number | null
-  target_ugc_count: number | null
+  target_ugc_count: number | null // reels (Instagram)
+  target_tiktok_count: number | null
   created_at: string | null
 }

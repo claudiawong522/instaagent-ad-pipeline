@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .config import Config
@@ -18,7 +18,8 @@ CLAUDE_BASE_URL = "https://api.anthropic.com"
 class KeywordAllocation:
     keyword_text: str
     target_paid_count: int
-    target_ugc_count: int
+    target_ugc_count: int  # reels (Instagram)
+    target_tiktok_count: int = 0
     source: str = "llm"
     keyword_type: str = "seed"
 
@@ -45,6 +46,7 @@ def generate_keyword_allocations(
     campaign_guidelines: str | None,
     target_paid_count: int,
     target_ugc_count: int,
+    target_tiktok_count: int = 0,
 ) -> KeywordGenerationResult:
     if not config.claude_api_key:
         raise RuntimeError("CLAUDE_API_KEY is required when --keyword is not provided.")
@@ -135,6 +137,7 @@ def generate_keyword_allocations(
             text,
             expected_paid_total=target_paid_count,
             expected_organic_total=target_ugc_count,
+            expected_tiktok_total=target_tiktok_count,
         )
         complete_query(
             supabase=supabase,
@@ -252,6 +255,7 @@ def parse_keyword_allocations(
     *,
     expected_paid_total: int,
     expected_organic_total: int,
+    expected_tiktok_total: int = 0,
 ) -> list[KeywordAllocation]:
     parsed = json.loads(extract_json_object(text))
     rows = parsed.get("keywords") if isinstance(parsed, dict) else None
@@ -288,7 +292,12 @@ def parse_keyword_allocations(
         raise RuntimeError(f"Claude paid allocation total {paid_total} != target {expected_paid_total}.")
     if organic_total != expected_organic_total:
         raise RuntimeError(f"Claude organic allocation total {organic_total} != target {expected_organic_total}.")
-    return allocations
+    # The LLM only allocates paid + reels. Split the TikTok total across the same keywords,
+    # weighted by each keyword's reels share (even split if reels are all zero).
+    tiktok_counts = split_proportionally(
+        expected_tiktok_total, [row.target_ugc_count for row in allocations]
+    )
+    return [replace(row, target_tiktok_count=tiktok_counts[i]) for i, row in enumerate(allocations)]
 
 
 def extract_json_object(text: str) -> str:
@@ -324,6 +333,7 @@ def allocate_manual_keywords(
     *,
     target_paid_count: int,
     target_ugc_count: int,
+    target_tiktok_count: int = 0,
     keyword_type: str,
 ) -> list[KeywordAllocation]:
     cleaned = [keyword.strip() for keyword in keywords if keyword.strip()]
@@ -331,11 +341,13 @@ def allocate_manual_keywords(
         raise RuntimeError("At least one keyword is required.")
     paid_counts = split_evenly(target_paid_count, len(cleaned))
     organic_counts = split_evenly(target_ugc_count, len(cleaned))
+    tiktok_counts = split_evenly(target_tiktok_count, len(cleaned))
     return [
         KeywordAllocation(
             keyword_text=keyword,
             target_paid_count=paid_counts[index],
             target_ugc_count=organic_counts[index],
+            target_tiktok_count=tiktok_counts[index],
             source="manual",
             keyword_type=keyword_type,
         )
@@ -349,6 +361,26 @@ def split_evenly(total: int, parts: int) -> list[int]:
     base = total // parts
     remainder = total % parts
     return [base + (1 if index < remainder else 0) for index in range(parts)]
+
+
+def split_proportionally(total: int, weights: list[int]) -> list[int]:
+    """Distribute `total` across len(weights) buckets proportional to weights, assigning the
+    rounding remainder to the largest fractional parts. Falls back to an even split when all
+    weights are zero. The result always sums to `total`."""
+    if total < 0:
+        raise RuntimeError("Target counts must be non-negative.")
+    parts = len(weights)
+    if parts == 0:
+        return []
+    weight_total = sum(weights)
+    if weight_total <= 0:
+        return split_evenly(total, parts)
+    raw = [total * weight / weight_total for weight in weights]
+    floors = [int(value) for value in raw]
+    remainder = total - sum(floors)
+    for index in sorted(range(parts), key=lambda i: raw[i] - floors[i], reverse=True)[:remainder]:
+        floors[index] += 1
+    return floors
 
 
 def insert_keyword_allocations(
@@ -370,6 +402,7 @@ def insert_keyword_allocations(
                     "active": True,
                     "target_paid_count": allocation.target_paid_count,
                     "target_ugc_count": allocation.target_ugc_count,
+                    "target_tiktok_count": allocation.target_tiktok_count,
                 },
             )
         )
@@ -408,7 +441,7 @@ def active_keyword_allocations(supabase: SupabaseClient, run_id: str) -> list[di
     rows = supabase.select(
         "keywords",
         {
-            "select": "keyword_text,target_paid_count,target_ugc_count",
+            "select": "keyword_text,target_paid_count,target_ugc_count,target_tiktok_count",
             "run_id": f"eq.{run_id}",
             "active": "eq.true",
             "order": "created_at.asc",

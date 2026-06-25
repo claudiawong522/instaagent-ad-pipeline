@@ -334,7 +334,7 @@ def _video_dedupe_key(url: str | None) -> str | None:
 def list_runs(supabase: SupabaseClient) -> list[dict[str, Any]]:
     runs = supabase.select(
         "pipeline_runs",
-        {"select": "id,status,config,target_paid_count,target_ugc_count,created_at,product_id", "order": "created_at.desc"},
+        {"select": "id,status,config,target_paid_count,target_ugc_count,target_tiktok_count,created_at,product_id", "order": "created_at.desc"},
     )
     product_ids = [str(r["product_id"]) for r in runs if r.get("product_id")]
     products = _hydrate(supabase, "products", "id", product_ids, "id,name,category")
@@ -352,6 +352,7 @@ def list_runs(supabase: SupabaseClient) -> list[dict[str, Any]]:
                 "category": (product or {}).get("category"),
                 "target_paid_count": run.get("target_paid_count"),
                 "target_ugc_count": run.get("target_ugc_count"),
+                "target_tiktok_count": run.get("target_tiktok_count"),
                 "created_at": run.get("created_at"),
             }
         )

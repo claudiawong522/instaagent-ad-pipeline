@@ -17,6 +17,7 @@ create table if not exists pipeline_runs (
   config jsonb not null default '{}'::jsonb,
   target_paid_count integer not null default 1000,
   target_ugc_count integer not null default 2500,
+  target_tiktok_count integer not null default 2500,
   top_k integer not null default 3,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -30,6 +31,7 @@ create table if not exists keywords (
   source text not null default 'manual',
   target_paid_count integer not null default 0,
   target_ugc_count integer not null default 0,
+  target_tiktok_count integer not null default 0,
   active boolean not null default true,
   created_at timestamptz not null default now()
 );

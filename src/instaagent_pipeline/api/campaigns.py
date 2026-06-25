@@ -33,7 +33,7 @@ from .search import _hydrate
 _PLATFORMS: dict[str, tuple[Any, str, bool]] = {
     "facebook": (ingest_apify_ads, "target_paid_count", True),
     "instagram": (ingest_instagram, "target_ugc_count", False),
-    "tiktok": (ingest_tiktok, "target_ugc_count", False),
+    "tiktok": (ingest_tiktok, "target_tiktok_count", False),
 }
 
 # Scrapes currently running, so the UI can show a spinner and we refuse duplicates. Keyed
@@ -56,6 +56,7 @@ def create_campaign(
     campaign_objective: str | None,
     target_paid_count: int,
     target_ugc_count: int,
+    target_tiktok_count: int,
 ) -> dict[str, Any]:
     """Create the product + pipeline_run and seed keywords. Mirrors cli.init_run, but stores
     the campaign name / marketing goals / objective in the run config and never hard-fails the
@@ -79,6 +80,7 @@ def create_campaign(
             "product_id": product["id"],
             "target_paid_count": target_paid_count,
             "target_ugc_count": target_ugc_count,
+            "target_tiktok_count": target_tiktok_count,
         },
     )
 
@@ -97,6 +99,7 @@ def create_campaign(
             campaign_guidelines=campaign_objective,
             target_paid_count=target_paid_count,
             target_ugc_count=target_ugc_count,
+            target_tiktok_count=target_tiktok_count,
         )
         keywords = insert_keyword_allocations(supabase, run_id=run["id"], allocations=result.allocations)
         keyword_count = len(keywords)
@@ -116,7 +119,7 @@ def list_campaigns(supabase: SupabaseClient) -> list[dict[str, Any]]:
     runs = supabase.select(
         "pipeline_runs",
         {
-            "select": "id,status,config,target_paid_count,target_ugc_count,created_at,product_id",
+            "select": "id,status,config,target_paid_count,target_ugc_count,target_tiktok_count,created_at,product_id",
             "order": "created_at.desc",
         },
     )
@@ -139,6 +142,7 @@ def list_campaigns(supabase: SupabaseClient) -> list[dict[str, Any]]:
                 "campaign_objective": cfg.get("campaign_objective"),
                 "target_paid_count": run.get("target_paid_count"),
                 "target_ugc_count": run.get("target_ugc_count"),
+                "target_tiktok_count": run.get("target_tiktok_count"),
                 "created_at": run.get("created_at"),
             }
         )

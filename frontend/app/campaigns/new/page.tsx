@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Loader2, Plus, ArrowLeft } from 'lucide-react'
@@ -8,8 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { listProducts, createCampaign } from '@/lib/api'
-import type { Product } from '@/lib/types'
+import { createCampaign } from '@/lib/api'
 
 const MARKETING_GOALS = ['Awareness', 'Traffic', 'Engagement', 'Leads', 'App promotion', 'Sales']
 const NAME_MAX = 120
@@ -25,15 +24,8 @@ export default function NewCampaignPage() {
   const [campaignName, setCampaignName] = useState('')
   const [goals, setGoals] = useState<Set<string>>(new Set())
   const [objective, setObjective] = useState('')
-  const [paidTarget, setPaidTarget] = useState('50')
-  const [organicTarget, setOrganicTarget] = useState('50')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [products, setProducts] = useState<Product[]>([])
-
-  useEffect(() => {
-    listProducts().then((r) => setProducts(r.products)).catch(() => {})
-  }, [])
 
   function toggleGoal(g: string) {
     setGoals((s) => {
@@ -42,13 +34,6 @@ export default function NewCampaignPage() {
       else next.add(g)
       return next
     })
-  }
-
-  function prefillFromProduct(p: Product) {
-    setProductName(p.name)
-    setCategory(p.category ?? '')
-    setTargetMarket(p.target_market ?? '')
-    setNotes(p.notes ?? '')
   }
 
   async function submit() {
@@ -63,8 +48,6 @@ export default function NewCampaignPage() {
         campaign_name: campaignName.trim(),
         marketing_goals: Array.from(goals),
         campaign_objective: objective.trim() || null,
-        target_paid_count: Math.max(1, Number(paidTarget) || 50),
-        target_ugc_count: Math.max(1, Number(organicTarget) || 50),
       })
       // back to the list, where the new campaign appears and can be scraped
       router.push('/campaigns')
@@ -96,22 +79,6 @@ export default function NewCampaignPage() {
         className="space-y-5 rounded-xl border border-border bg-card p-5"
       >
         <Section num="01" title="Product">
-          {products.length > 0 && (
-            <div className="mb-3 flex flex-wrap gap-2">
-              {products.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => prefillFromProduct(p)}
-                  className="rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground hover:border-accent hover:text-foreground"
-                  title="Use this product's details"
-                >
-                  {p.name}
-                  {p.category ? ` · ${p.category}` : ''}
-                </button>
-              ))}
-            </div>
-          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Product name *">
               <Input value={productName} onChange={(e) => setProductName(e.target.value)} placeholder="QV Face Gentle Cleanser" />
@@ -173,17 +140,6 @@ export default function NewCampaignPage() {
             <span className="pointer-events-none absolute bottom-2 right-3 text-xs text-muted-foreground">
               {objective.length}/{OBJECTIVE_MAX}
             </span>
-          </div>
-        </Section>
-
-        <Section num="05" title="Scrape targets">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Facebook ads to scrape">
-              <Input type="number" min={1} value={paidTarget} onChange={(e) => setPaidTarget(e.target.value)} className="w-32" />
-            </Field>
-            <Field label="Organic videos (reels + TikTok)">
-              <Input type="number" min={1} value={organicTarget} onChange={(e) => setOrganicTarget(e.target.value)} className="w-32" />
-            </Field>
           </div>
         </Section>
 

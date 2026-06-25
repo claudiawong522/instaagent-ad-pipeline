@@ -86,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
                 config=config,
                 supabase=supabase,
                 args=args,
-                target_field="target_ugc_count",
+                target_field="target_tiktok_count" if args.command == "ingest-tiktok" else "target_ugc_count",
                 ingest_func=ingest_func,
             )
         result = with_organic_enrichment(
@@ -186,7 +186,8 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--keyword", action="append")
     init.add_argument("--keyword-type", default="seed")
     init.add_argument("--target-paid-count", type=int, default=1000)
-    init.add_argument("--target-ugc-count", type=int, default=2500)
+    init.add_argument("--target-ugc-count", type=int, default=2500, help="reels (Instagram) target")
+    init.add_argument("--target-tiktok-count", type=int, default=2500)
     init.add_argument("--top-k", type=int, default=3)
     init.add_argument("--config-json", default="{}")
     init.add_argument("--dry-run", action="store_true")
@@ -471,6 +472,7 @@ def init_run(args: argparse.Namespace, supabase: SupabaseClient | None, config: 
         "config": run_config,
         "target_paid_count": args.target_paid_count,
         "target_ugc_count": args.target_ugc_count,
+        "target_tiktok_count": args.target_tiktok_count,
         "top_k": args.top_k,
     }
     if args.dry_run:
@@ -479,6 +481,7 @@ def init_run(args: argparse.Namespace, supabase: SupabaseClient | None, config: 
                 args.keyword,
                 target_paid_count=args.target_paid_count,
                 target_ugc_count=args.target_ugc_count,
+                target_tiktok_count=args.target_tiktok_count,
                 keyword_type=args.keyword_type,
             )
         else:
@@ -492,6 +495,7 @@ def init_run(args: argparse.Namespace, supabase: SupabaseClient | None, config: 
                 campaign_guidelines=args.campaign_guidelines,
                 target_paid_count=args.target_paid_count,
                 target_ugc_count=args.target_ugc_count,
+                target_tiktok_count=args.target_tiktok_count,
             )
             allocations = generation_result.allocations
         return {
@@ -512,6 +516,7 @@ def init_run(args: argparse.Namespace, supabase: SupabaseClient | None, config: 
                 args.keyword,
                 target_paid_count=args.target_paid_count,
                 target_ugc_count=args.target_ugc_count,
+                target_tiktok_count=args.target_tiktok_count,
                 keyword_type=args.keyword_type,
             )
         else:
@@ -527,6 +532,7 @@ def init_run(args: argparse.Namespace, supabase: SupabaseClient | None, config: 
                 campaign_guidelines=args.campaign_guidelines,
                 target_paid_count=args.target_paid_count,
                 target_ugc_count=args.target_ugc_count,
+                target_tiktok_count=args.target_tiktok_count,
             )
             allocations = generation_result.allocations
         keywords = insert_keyword_allocations(supabase, run_id=run["id"], allocations=allocations)

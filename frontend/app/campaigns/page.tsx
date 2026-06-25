@@ -247,7 +247,6 @@ function CampaignCard({
             <InputRow label="Campaign" value={c.campaign_name} />
             <InputRow label="Goals" value={c.marketing_goals.join(', ') || null} />
             <InputRow label="Objective" value={c.campaign_objective} />
-            <InputRow label="Scrape targets" value={`${c.target_paid_count ?? '—'} ads · ${c.target_ugc_count ?? '—'} reels + ${c.target_ugc_count ?? '—'} tiktoks`} />
           </dl>
         </div>
       )}
@@ -263,7 +262,7 @@ function CampaignCard({
             total={pbreak(stats, p.key).total}
             lastScraped={stats?.[p.lastKey] ?? null}
             running={stats?.running.includes(p.key) ?? false}
-            defaultTarget={(p.key === 'facebook' ? c.target_paid_count : c.target_ugc_count) ?? 50}
+            defaultTarget={(p.key === 'facebook' ? c.target_paid_count : p.key === 'tiktok' ? c.target_tiktok_count : c.target_ugc_count) ?? 50}
             onScrape={onScrape}
           />
         ))}

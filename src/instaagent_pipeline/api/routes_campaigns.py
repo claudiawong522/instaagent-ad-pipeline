@@ -21,7 +21,8 @@ class CreateCampaignRequest(BaseModel):
     # How many items to scrape per platform. Small defaults — the pipeline's 1000/2500 are
     # for a full production run, not an exploratory UI scrape.
     target_paid_count: int = Field(default=50, ge=1, le=5000)
-    target_ugc_count: int = Field(default=50, ge=1, le=5000)
+    target_ugc_count: int = Field(default=50, ge=1, le=5000)  # reels (Instagram)
+    target_tiktok_count: int = Field(default=50, ge=1, le=5000)
 
 
 class ScrapeRequest(BaseModel):
