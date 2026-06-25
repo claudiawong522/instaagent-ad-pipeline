@@ -144,37 +144,69 @@ def list_campaigns(supabase: SupabaseClient) -> list[dict[str, Any]]:
     return out
 
 
-def _count(supabase: SupabaseClient, table: str, params: dict[str, str]) -> int:
-    # No PostgREST count header exposed on the client, so select the run_id column (tiny) and
-    # length it. Fine at current scale; revisit with a count RPC if a run holds 10k+ items.
-    rows = supabase.select(table, {"select": "run_id", "limit": "100000", **params})
-    return len(rows)
+def _breakdown(rows: list[dict[str, Any]], video_key: str) -> dict[str, Any]:
+    """Bucket a platform's rows by enrichment outcome so the UI can show how many
+    scraped videos became searchable vs expired/failed. `total` is the searchable
+    universe (rows that have a video to enrich) — rows with no video URL are excluded
+    since they can never become searchable. `processing` = has a video but not yet
+    enriched (in-flight or queued)."""
+    out = {"total": 0, "searchable": 0, "expired": 0, "failed": 0, "processing": 0}
+    last: str | None = None
+    for row in rows:
+        saved = row.get("saved_to_supabase_at")
+        if saved and (last is None or saved > last):
+            last = saved
+        status = row.get("enrichment_status")
+        if status == "enriched":
+            out["searchable"] += 1
+        elif status == "expired":
+            out["expired"] += 1
+        elif status == "failed":
+            out["failed"] += 1
+        elif row.get(video_key):
+            out["processing"] += 1
+        else:
+            continue  # no video to enrich — not part of the searchable universe
+        out["total"] += 1
+    out["last_scraped"] = last
+    return out
 
 
-def _last_scraped(supabase: SupabaseClient, table: str, params: dict[str, str]) -> str | None:
-    # When the most recent matching item was ingested = the platform's last-scraped time.
-    rows = supabase.select(
-        table,
-        {"select": "saved_to_supabase_at", "order": "saved_to_supabase_at.desc", "limit": "1", **params},
-    )
-    return rows[0].get("saved_to_supabase_at") if rows else None
+def _platform_stats(prefix: str, b: dict[str, Any]) -> dict[str, Any]:
+    return {
+        f"{prefix}_searchable": b["searchable"],
+        f"{prefix}_expired": b["expired"],
+        f"{prefix}_failed": b["failed"],
+        f"{prefix}_processing": b["processing"],
+        f"{prefix}_total": b["total"],
+        f"{prefix}_last_scraped": b["last_scraped"],
+    }
 
 
 def scrape_stats(supabase: SupabaseClient, run_id: str) -> dict[str, Any]:
-    """Live scraped counts + last-scraped time per platform, plus which are mid-scrape."""
-    fb = {"run_id": f"eq.{run_id}"}
-    ig = {"run_id": f"eq.{run_id}", "source": "eq.instagram"}
-    tt = {"run_id": f"eq.{run_id}", "source": "eq.tiktok"}
+    """Live per-platform scrape health: searchable / expired / failed / processing counts,
+    last-scraped time, and which platforms are mid-scrape. Two selects (paid + ugc), bucketed
+    in Python; fine at current scale (revisit with a count RPC if a run holds 10k+ items)."""
+    cols = "enrichment_status,saved_to_supabase_at"
+    paid = supabase.select("paid_ads", {"select": f"{cols},video", "run_id": f"eq.{run_id}", "limit": "100000"})
+    ugc = supabase.select(
+        "ugc_items", {"select": f"{cols},video_url,source", "run_id": f"eq.{run_id}", "limit": "100000"}
+    )
+    fb = _breakdown(paid, "video")
+    ig = _breakdown([r for r in ugc if r.get("source") == "instagram"], "video_url")
+    tt = _breakdown([r for r in ugc if r.get("source") == "tiktok"], "video_url")
     with _running_lock:
         running = sorted(p for (r, p) in _running if r == run_id)
     return {
         "run_id": run_id,
-        "facebook_ads": _count(supabase, "paid_ads", fb),
-        "instagram_reels": _count(supabase, "ugc_items", ig),
-        "tiktoks": _count(supabase, "ugc_items", tt),
-        "facebook_last_scraped": _last_scraped(supabase, "paid_ads", fb),
-        "instagram_last_scraped": _last_scraped(supabase, "ugc_items", ig),
-        "tiktok_last_scraped": _last_scraped(supabase, "ugc_items", tt),
+        # `*_ads`/`*_reels`/`tiktoks` are the headline "searchable" counts the tiles show
+        # (per product: the scraped number reflects successful videos only).
+        "facebook_ads": fb["searchable"],
+        "instagram_reels": ig["searchable"],
+        "tiktoks": tt["searchable"],
+        **_platform_stats("facebook", fb),
+        **_platform_stats("instagram", ig),
+        **_platform_stats("tiktok", tt),
         "running": running,
     }
 

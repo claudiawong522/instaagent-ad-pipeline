@@ -95,13 +95,41 @@ export interface CreateCampaignResult {
   warning: string | null
 }
 
+// Per-platform enrichment breakdown. searchable = scraped video became searchable;
+// expired = provider URL no longer served video; failed = analysis produced nothing;
+// processing = has a video, not yet enriched. total = searchable universe (videos only).
+export interface PlatformBreakdown {
+  searchable: number
+  expired: number
+  failed: number
+  processing: number
+  total: number
+  last_scraped: string | null
+}
+
 export interface ScrapeStats {
   run_id: string
+  // Headline counts = searchable only (the tiles show successful videos).
   facebook_ads: number
   instagram_reels: number
   tiktoks: number
+  facebook_searchable: number
+  facebook_expired: number
+  facebook_failed: number
+  facebook_processing: number
+  facebook_total: number
   facebook_last_scraped: string | null
+  instagram_searchable: number
+  instagram_expired: number
+  instagram_failed: number
+  instagram_processing: number
+  instagram_total: number
   instagram_last_scraped: string | null
+  tiktok_searchable: number
+  tiktok_expired: number
+  tiktok_failed: number
+  tiktok_processing: number
+  tiktok_total: number
   tiktok_last_scraped: string | null
   running: string[] // platforms mid-scrape: facebook | instagram | tiktok
 }

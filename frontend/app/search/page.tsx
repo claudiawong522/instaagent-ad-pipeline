@@ -183,10 +183,10 @@ export default function SearchPage() {
             onChange={(e) => setRunId(e.target.value)}
             className="h-8 max-w-[220px] rounded-md border border-border bg-background px-2 text-xs"
           >
-            <option value="">All runs</option>
+            <option value="">All campaigns</option>
             {runs.map((r) => (
               <option key={r.run_id} value={r.run_id}>
-                {r.product_name || r.run_id.slice(0, 8)}
+                {r.campaign_name || r.product_name || r.run_id.slice(0, 8)}
               </option>
             ))}
           </select>
@@ -210,7 +210,7 @@ export default function SearchPage() {
               value={minViews}
               onChange={(e) => setMinViews(e.target.value)}
               placeholder="Min views (UGC)"
-              className="h-8 w-32 text-xs"
+              className="h-8 w-36 text-xs md:text-xs"
             />
           )}
           {itemType !== 'ugc_item' && (
@@ -219,7 +219,7 @@ export default function SearchPage() {
               value={minDaysLive}
               onChange={(e) => setMinDaysLive(e.target.value)}
               placeholder="Min days live (paid)"
-              className="h-8 w-36 text-xs"
+              className="h-8 w-40 text-xs md:text-xs"
             />
           )}
 

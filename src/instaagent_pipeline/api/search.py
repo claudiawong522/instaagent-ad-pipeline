@@ -334,7 +334,7 @@ def _video_dedupe_key(url: str | None) -> str | None:
 def list_runs(supabase: SupabaseClient) -> list[dict[str, Any]]:
     runs = supabase.select(
         "pipeline_runs",
-        {"select": "id,status,target_paid_count,target_ugc_count,created_at,product_id", "order": "created_at.desc"},
+        {"select": "id,status,config,target_paid_count,target_ugc_count,created_at,product_id", "order": "created_at.desc"},
     )
     product_ids = [str(r["product_id"]) for r in runs if r.get("product_id")]
     products = _hydrate(supabase, "products", "id", product_ids, "id,name,category")
@@ -345,6 +345,9 @@ def list_runs(supabase: SupabaseClient) -> list[dict[str, Any]]:
             {
                 "run_id": str(run.get("id")),
                 "status": run.get("status"),
+                # campaign_name lives in the run config (set by the campaign wizard); None for
+                # runs created via the bare CLI init_run. Lets search filter/label by campaign.
+                "campaign_name": (run.get("config") or {}).get("campaign_name"),
                 "product_name": (product or {}).get("name"),
                 "category": (product or {}).get("category"),
                 "target_paid_count": run.get("target_paid_count"),
