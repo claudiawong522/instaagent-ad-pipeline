@@ -237,7 +237,7 @@ function CampaignCard({
             <InputRow label="Campaign" value={c.campaign_name} />
             <InputRow label="Goals" value={c.marketing_goals.join(', ') || null} />
             <InputRow label="Objective" value={c.campaign_objective} />
-            <InputRow label="Scrape targets" value={`${c.target_paid_count ?? '—'} ads · ${c.target_ugc_count ?? '—'} UGC`} />
+            <InputRow label="Scrape targets" value={`${c.target_paid_count ?? '—'} ads · ${c.target_ugc_count ?? '—'} reels + ${c.target_ugc_count ?? '—'} tiktoks`} />
           </dl>
         </div>
       )}
