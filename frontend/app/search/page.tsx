@@ -171,14 +171,14 @@ export default function SearchPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex h-8 items-stretch gap-1 rounded-md border border-border p-0.5">
+          <div className="inline-flex items-stretch overflow-hidden rounded-md border border-border">
             {TYPE_OPTIONS.map((opt) => (
               <button
                 key={opt.label}
                 type="button"
                 onClick={() => setItemType(opt.value)}
                 className={cn(
-                  'inline-flex items-center rounded-[5px] px-2.5 text-xs font-medium transition-colors',
+                  'inline-flex items-center px-3 py-1.5 text-xs font-medium transition-colors',
                   itemType === opt.value
                     ? 'bg-accent text-accent-foreground'
                     : 'text-muted-foreground hover:text-foreground',
