@@ -328,9 +328,9 @@ function PlatformTile({
 
   return (
     <div className="flex flex-col items-center gap-1.5 text-center">
-      <span className="text-xl font-semibold tabular-nums">{count}</span>
+      <span className="text-xl font-semibold tabular-nums">{scraped ? `${count} / ${total}` : count}</span>
       <span className="text-[11px] text-muted-foreground">{label} searchable</span>
-      {scraped && total > count && (
+      {scraped && (
         <span className="text-[10px] text-muted-foreground/70">of {total} scraped</span>
       )}
       <span className="text-[10px] text-muted-foreground/80">
