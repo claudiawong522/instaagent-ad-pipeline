@@ -152,8 +152,11 @@ def expand_query(config: Config, query: str) -> str:
     A bare one-word query ("genz") produces a concentrated vector that mismatches the
     multi-concept document vectors; expanding it ("gen z, young, casual, trendy") closes
     that gap. Best-effort: any failure falls back to the raw query so search never breaks.
+
+    Disabled by default (config.query_expansion_enabled) — on the current corpus it changes
+    no results while adding ~2.6s/search; see config for the A/B rationale.
     """
-    if not config.openrouter_api_key:
+    if not config.query_expansion_enabled or not config.openrouter_api_key:
         return query
     prompt = (
         "Expand this short video-search query into a concise comma-separated list of "

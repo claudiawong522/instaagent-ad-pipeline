@@ -113,7 +113,8 @@ tags for both:
 
 ## search flow
 1. user inputs search query
-2. llm expands the query if short to a longer chunk of text
-3. search in the search embedding + icp embedding
-4. we take the top 50 relevant results then we rerank
-5. then we take vidoes that pass the rerank score as search result
+2. search in the search embedding + icp embedding with HNSW, producing about 100 shorlisted videos each
+3. combine videos + dedupe same results across both embeddings
+4. then we rerank the 200ish videos
+5. get actual data(we only have scores now), apply filters, dedupe same video different entry
+6. return the rest
