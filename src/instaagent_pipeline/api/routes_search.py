@@ -15,7 +15,7 @@ class SearchRequest(BaseModel):
     item_type: Optional[str] = None  # 'paid_ad' | 'ugc_item' | None (both)
     platform: Optional[str] = None  # 'tiktok' | 'instagram' | 'meta'
     run_id: Optional[str] = None
-    min_virality: Optional[float] = None  # Organic-only (engagement rate %)
+    min_virality: Optional[float] = None  # Organic-only (normalized virality score, 0-1)
     min_views: Optional[int] = None  # Organic-only
     min_days_live: Optional[float] = None  # paid-only (days the ad has been running)
     languages: Optional[list[str]] = None  # multi-select, overlap match

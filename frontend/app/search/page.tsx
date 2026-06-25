@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Search, Loader2, X } from 'lucide-react'
+import { Search, Loader2, X, HelpCircle } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -309,6 +309,42 @@ function ChipFilter({
   )
 }
 
+// Click-to-toggle explainer for the organic virality score. Click-away backdrop closes it.
+function ViralityHelp() {
+  const [open, setOpen] = useState(false)
+  return (
+    <span className="relative inline-flex items-center">
+      <button
+        type="button"
+        aria-label="How is the virality score computed?"
+        onClick={() => setOpen((v) => !v)}
+        className="ml-0.5 text-muted-foreground/70 transition-colors hover:text-foreground"
+      >
+        <HelpCircle className="h-3 w-3" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute bottom-full left-1/2 z-50 mb-1 w-64 -translate-x-1/2 rounded-md border border-border bg-popover p-3 text-left text-xs leading-relaxed text-popover-foreground shadow-md">
+            <p className="font-medium">Virality score (0–100)</p>
+            <p className="mt-1 text-muted-foreground">
+              Blends how far a post escaped its own follower base with how engaging it was:
+            </p>
+            <p className="mt-1 font-mono text-[11px]">0.6 × reach + 0.4 × engagement</p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted-foreground">
+              <li><span className="font-medium text-popover-foreground">reach</span> = views ÷ followers, capped to stay 0–1</li>
+              <li><span className="font-medium text-popover-foreground">engagement</span> = (likes + comments + shares) ÷ views</li>
+            </ul>
+            <p className="mt-1 text-muted-foreground">
+              Higher means it reached well beyond its audience and got strong engagement.
+            </p>
+          </div>
+        </>
+      )}
+    </span>
+  )
+}
+
 function VideoCard({ result: r }: { result: VideoResult }) {
   return (
     <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-card">
@@ -358,7 +394,12 @@ function VideoCard({ result: r }: { result: VideoResult }) {
           {r.views != null && <span>{formatNum(r.views)} views</span>}
           {r.followers != null && <span>{formatNum(r.followers)} followers</span>}
           {r.likes != null && <span>{formatNum(r.likes)} likes</span>}
-          {r.virality != null && <span>vir {Math.round(r.virality)}</span>}
+          {r.virality != null && (
+            <span className="inline-flex items-center">
+              vir {Math.round(r.virality * 100)}
+              <ViralityHelp />
+            </span>
+          )}
           {r.days_live != null && <span>{Math.round(r.days_live)}d live</span>}
         </div>
         {r.hook && (

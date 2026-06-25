@@ -42,7 +42,7 @@ export interface SearchFilters {
   item_type?: ItemType | null
   platform?: string | null
   run_id?: string | null
-  min_virality?: number | null // organic-only (engagement rate %)
+  min_virality?: number | null // organic-only (normalized virality score, 0-1)
   min_views?: number | null // organic-only
   min_days_live?: number | null // paid-only (days the ad has been running)
   languages?: string[] | null // multi-select, overlap match

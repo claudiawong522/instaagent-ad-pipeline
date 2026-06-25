@@ -341,7 +341,7 @@ def days_since_timestamp(value: str | None) -> int | None:
 # These replace TopYappers as the organic source. The Apify scrapers provide engagement
 # + creator metadata only; the analysis columns (hook, content_format, persona, ...)
 # are filled later by the organic vision enrichment, so they are left null here. virality
-# is recomputed from engagement since these providers do not supply a virality score.
+# is recomputed from reach + engagement since these providers do not supply a virality score.
 
 
 def recompute_virality(
@@ -350,15 +350,29 @@ def recompute_virality(
     likes: int | None,
     comments: int | None,
     shares: int | None,
+    followers: int | None = None,
 ) -> tuple[float | None, str | None]:
-    """Engagement-rate heuristic standing in for TopYappers' virality_score."""
+    """Normalized 0-1 virality blending reach amplification with engagement rate.
+
+    reach = views / followers, squashed via reach/(reach+1) so a post that escapes
+    its follower base (reach > 1) scores high while the metric stays bounded in [0, 1).
+    engagement = (likes + comments + shares) / views, clamped to 1. Final score is
+    0.6*reach + 0.4*engagement. When follower count is unknown the score degrades to
+    engagement-only. Stands in for TopYappers' virality_score (TikTok/IG don't supply one).
+    """
     if not views or views <= 0:
         return None, None
     engagement = (likes or 0) + (comments or 0) + (shares or 0)
-    score = round(engagement / views * 100, 2)
-    if score >= 15:
+    engagement_norm = min(engagement / views, 1.0)
+    if followers and followers > 0:
+        reach = views / followers
+        reach_norm = reach / (reach + 1)
+        score = round(0.6 * reach_norm + 0.4 * engagement_norm, 3)
+    else:
+        score = round(engagement_norm, 3)
+    if score >= 0.6:
         tier = "high"
-    elif score >= 7:
+    elif score >= 0.35:
         tier = "medium"
     elif score > 0:
         tier = "low"
@@ -401,7 +415,10 @@ def normalize_tiktok_item(item: dict[str, Any], run_id: str, raw_payload_id: str
     likes = as_int(item.get("diggCount"))
     comments = as_int(item.get("commentCount"))
     shares = as_int(item.get("shareCount"))
-    score, tier = recompute_virality(views=views, likes=likes, comments=comments, shares=shares)
+    followers = as_int(author.get("fans"))
+    score, tier = recompute_virality(
+        views=views, likes=likes, comments=comments, shares=shares, followers=followers
+    )
     music_name = music_meta.get("musicName") or music_meta.get("musicAuthor")
     return {
         "run_id": run_id,
@@ -413,7 +430,7 @@ def normalize_tiktok_item(item: dict[str, Any], run_id: str, raw_payload_id: str
         "cover": first_present(video_meta, "coverUrl", "originalCoverUrl") or first_present(item, "covers"),
         "description": item.get("text"),
         "hashtags": tiktok_hashtags(item),
-        "followers": as_int(author.get("fans")),
+        "followers": followers,
         "handle": author.get("name"),
         "user_handle": author.get("name"),
         "user_id": stringify_if_needed(author.get("id")),
@@ -458,7 +475,10 @@ def normalize_instagram_reel(item: dict[str, Any], run_id: str, raw_payload_id: 
     likes = as_int(item.get("like_count"))
     comments = as_int(item.get("comment_count"))
     shares = as_int(item.get("share_count"))
-    score, tier = recompute_virality(views=views, likes=likes, comments=comments, shares=shares)
+    followers = as_int(user.get("follower_count"))
+    score, tier = recompute_virality(
+        views=views, likes=likes, comments=comments, shares=shares, followers=followers
+    )
     page_url = f"https://www.instagram.com/reel/{code}/" if code else None
     return {
         "run_id": run_id,
@@ -474,7 +494,7 @@ def normalize_instagram_reel(item: dict[str, Any], run_id: str, raw_payload_id: 
         "user_id": stringify_if_needed(first_present(user, "pk", "id")),
         "nickname": user.get("full_name"),
         "avatar": user.get("profile_pic_url"),
-        "followers": as_int(user.get("follower_count")),
+        "followers": followers,
         "views": views,
         "likes": likes,
         "comments": comments,
