@@ -1,5 +1,7 @@
 # InstaAgent Ad Pipeline
 
+[![CI](https://github.com/claudiawong522/instaagent-ad-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/claudiawong522/instaagent-ad-pipeline/actions/workflows/ci.yml)
+
 Lean ingestion and transcript-backfill foundation for InstaAgent's ad selection pipeline.
 
 ## What Exists Now
