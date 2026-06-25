@@ -472,6 +472,81 @@ def normalize_tiktok_item(item: dict[str, Any], run_id: str, raw_payload_id: str
     }
 
 
+def _first_url_list(obj: Any) -> str | None:
+    """TikTok raw payloads nest media as {uri, url_list: [...]}. Return the first URL."""
+    if isinstance(obj, dict):
+        urls = obj.get("url_list")
+        if isinstance(urls, list) and urls:
+            return str(urls[0])
+    return None
+
+
+def tiktok_trend_video_url(item: dict[str, Any]) -> str | None:
+    """No-watermark download URL, falling back to play_addr (some trending items omit
+    download_addr but still carry a playable URL — dropping them would lose viral hits)."""
+    video = item.get("video") if isinstance(item.get("video"), dict) else {}
+    return _first_url_list(video.get("download_addr")) or _first_url_list(video.get("play_addr"))
+
+
+def normalize_tiktok_trend_item(item: dict[str, Any], run_id: str, raw_payload_id: str | None) -> dict[str, Any]:
+    """novi/tiktok-trend-api (keyword-free For You feed) → ugc_items. Distinct from
+    normalize_tiktok_item: this is TikTok's raw aweme shape (statistics.*, author.unique_id,
+    cha_list), not the clockworks scraper shape. follower_count is absent from the trend
+    payload, so it stays null here and is filled by backfill_tiktok_followers."""
+    author = item.get("author") if isinstance(item.get("author"), dict) else {}
+    video = item.get("video") if isinstance(item.get("video"), dict) else {}
+    music = item.get("music") if isinstance(item.get("music"), dict) else {}
+    stats = item.get("statistics") if isinstance(item.get("statistics"), dict) else {}
+    views = as_int(stats.get("play_count"))
+    likes = as_int(stats.get("digg_count"))
+    comments = as_int(stats.get("comment_count"))
+    shares = as_int(stats.get("share_count"))
+    score, tier = recompute_virality(
+        views=views, likes=likes, comments=comments, shares=shares, followers=None
+    )
+    handle = author.get("unique_id")
+    aweme_id = stringify_if_needed(item.get("aweme_id"))
+    page_url = f"https://www.tiktok.com/@{handle}/video/{aweme_id}" if handle and aweme_id else None
+    hashtags = [
+        tag.get("cha_name")
+        for tag in (item.get("cha_list") or [])
+        if isinstance(tag, dict) and tag.get("cha_name")
+    ] or None
+    music_title = music.get("title")
+    return {
+        "run_id": run_id,
+        "raw_payload_id": raw_payload_id,
+        "external_id": aweme_id or "",
+        "source": "tiktok",
+        "video_id": aweme_id,
+        "video_url": tiktok_trend_video_url(item),
+        "cover": _first_url_list(video.get("origin_cover")) or _first_url_list(video.get("cover")),
+        "description": item.get("desc"),
+        "hashtags": hashtags,
+        "followers": None,
+        "handle": handle,
+        "user_handle": handle,
+        "user_id": stringify_if_needed(first_present(author, "uid", "sec_uid")),
+        "nickname": author.get("nickname"),
+        "avatar": _first_url_list(author.get("avatar_medium")) or _first_url_list(author.get("avatar_168x168")),
+        "views": views,
+        "likes": likes,
+        "comments": comments,
+        "shares": shares,
+        "music": {"title": music_title, "author": music.get("author")} if music_title else None,
+        "date_created": as_timestamp(item.get("create_time")),
+        "virality_score": score,
+        "virality_tier": tier,
+        "source_metrics": {
+            "endpoint_kind": "apify_tiktok_trend",
+            "page_url": page_url,
+            "region": item.get("region"),
+            "duration_ms": video.get("duration"),
+            "is_ads": item.get("is_ads"),
+        },
+    }
+
+
 INSTAGRAM_FIRST_CLASS_KEYS = {
     "id", "pk", "code", "user", "video_url", "thumbnail_url", "caption", "play_count",
     "ig_play_count", "like_count", "comment_count", "share_count", "taken_at",

@@ -21,13 +21,17 @@ from .ingestion import IngestResult, log_api_usage, log_failed_query, start_quer
 from .normalizers import (
     normalize_instagram_reel,
     normalize_tiktok_item,
+    normalize_tiktok_trend_item,
     result_items,
     tiktok_download_url,
+    tiktok_trend_video_url,
 )
 from .supabase_client import SupabaseClient
 
 TIKTOK_ACTOR_ID = "clockworks~tiktok-scraper"
 TIKTOK_PROVIDER = "apify:clockworks/tiktok-scraper"
+TIKTOK_TREND_ACTOR_ID = "novi~tiktok-trend-api"
+TIKTOK_TREND_PROVIDER = "apify:novi/tiktok-trend-api"
 INSTAGRAM_ACTOR_ID = "data-slayer~instagram-search-reels"
 INSTAGRAM_PROVIDER = "apify:data-slayer/instagram-search-reels"
 IG_PROFILE_ACTOR_ID = "apify~instagram-profile-scraper"
@@ -201,6 +205,39 @@ def ingest_tiktok(
     )
 
 
+def ingest_tiktok_trends(
+    *,
+    config: Config,
+    supabase: SupabaseClient | None,
+    run_id: str,
+    region: str,
+    target_count: int,
+    dry_run: bool = False,
+    input_json: Path | None = None,
+    extra_params: dict[str, Any] | None = None,
+) -> IngestResult:
+    """Keyword-free viral discovery: novi/tiktok-trend-api returns a country's For You
+    feed (no search term). Writes to ugc_items like the other organic sources; follower
+    counts are absent from the payload and filled later by backfill_tiktok_followers."""
+    actor_input: dict[str, Any] = {"region": region, "limit": target_count}
+    if extra_params:
+        actor_input.update(extra_params)
+    return _ingest_apify_organic(
+        config=config,
+        supabase=supabase,
+        run_id=run_id,
+        keyword=f"trending:{region}",
+        target_count=target_count,
+        provider=TIKTOK_TREND_PROVIDER,
+        actor_id=TIKTOK_TREND_ACTOR_ID,
+        actor_input=actor_input,
+        normalizer=normalize_tiktok_trend_item,
+        has_video=lambda item: bool(tiktok_trend_video_url(item)),
+        dry_run=dry_run,
+        input_json=input_json,
+    )
+
+
 def ingest_instagram(
     *,
     config: Config,
@@ -301,6 +338,79 @@ def fetch_instagram_followers(
         count = item.get("followersCount")
         if count is None:
             count = item.get("followers_count")
+        if isinstance(username, str) and isinstance(count, (int, float)):
+            out[username] = int(count)
+    return out
+
+
+def backfill_tiktok_followers(
+    *,
+    config: Config,
+    supabase: SupabaseClient | None,
+    run_id: str,
+    limit: int = 500,
+    dry_run: bool = False,
+    input_json: Path | None = None,
+) -> dict[str, Any]:
+    """Fill the TikTok follower counts that the trend API omits, via a deduped per-creator
+    profile scrape (clockworks/tiktok-scraper in profiles mode). Mirrors the IG backfill."""
+    if supabase is None:
+        raise RuntimeError("Supabase credentials are required for the TikTok follower backfill.")
+    rows = supabase.select(
+        "ugc_items",
+        {
+            "select": "id,user_handle",
+            "run_id": f"eq.{run_id}",
+            "source": "eq.tiktok",
+            "followers": "is.null",
+            "limit": str(limit),
+        },
+    )
+    by_user: dict[str, list[str]] = {}
+    for row in rows:
+        username = str(row.get("user_handle") or "").strip()
+        if username and row.get("id"):
+            by_user.setdefault(username, []).append(str(row["id"]))
+    usernames = list(by_user)
+    if not usernames:
+        return {"usernames": 0, "updated": 0}
+    if dry_run:
+        return {"usernames": len(usernames), "updated": 0, "dry_run": True}
+
+    followers_map = fetch_tiktok_followers(config, usernames, input_json=input_json)
+    updated = 0
+    for username, count in followers_map.items():
+        if count is None:
+            continue
+        for row_id in by_user.get(username, []):
+            supabase.update_by_id("ugc_items", row_id, {"followers": count})
+            updated += 1
+    return {"usernames": len(usernames), "resolved": len(followers_map), "updated": updated}
+
+
+def fetch_tiktok_followers(
+    config: Config,
+    usernames: list[str],
+    *,
+    input_json: Path | None = None,
+) -> dict[str, int]:
+    if input_json:
+        items = result_items(json.loads(input_json.read_text()))
+    else:
+        if not config.apify_api_key:
+            raise RuntimeError("APIFY_API_KEY is required for the TikTok follower backfill.")
+        # One video per profile is enough to read authorMeta.fans; keep it cheap.
+        items, _, _, _ = run_apify_actor_items(
+            api_key=config.apify_api_key,
+            actor_id=TIKTOK_ACTOR_ID,
+            actor_input={"profiles": usernames, "resultsPerPage": 1, "shouldDownloadVideos": False},
+            target_count=len(usernames),
+        )
+    out: dict[str, int] = {}
+    for item in items:
+        author = item.get("authorMeta") if isinstance(item.get("authorMeta"), dict) else {}
+        username = author.get("name") or item.get("name")
+        count = author.get("fans")
         if isinstance(username, str) and isinstance(count, (int, float)):
             out[username] = int(count)
     return out

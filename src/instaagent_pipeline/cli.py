@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from .apify_ads import ingest_apify_ads
-from .apify_organic import backfill_instagram_followers, ingest_instagram, ingest_tiktok
+from .apify_organic import (
+    backfill_instagram_followers,
+    backfill_tiktok_followers,
+    ingest_instagram,
+    ingest_tiktok,
+    ingest_tiktok_trends,
+)
 from .config import Config
 from .ad_enrichment import enrich_paid_ads
 from .audience_enrichment import enrich_audience
@@ -94,6 +100,32 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             supabase=supabase,
             args=args,
+        )
+    elif args.command == "ingest-tiktok-trends":
+        result = ingest_tiktok_trends(
+            config=config,
+            supabase=supabase,
+            run_id=args.run_id,
+            region=args.region,
+            target_count=args.target_count,
+            dry_run=args.dry_run,
+            input_json=args.input_json,
+            extra_params=parse_extra_params(args.extra_param),
+        )
+        result = with_organic_enrichment(
+            result,
+            config=config,
+            supabase=supabase,
+            args=args,
+        )
+    elif args.command == "backfill-tiktok-followers":
+        result = backfill_tiktok_followers(
+            config=config,
+            supabase=supabase,
+            run_id=args.run_id,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            input_json=args.input_json,
         )
     elif args.command == "enrich-ugc":
         result = enrich_organic_items(
@@ -218,6 +250,16 @@ def build_parser() -> argparse.ArgumentParser:
     instagram.add_argument("--target-count", type=int, default=2500)
     instagram.add_argument("--page-size", type=int, default=0)
 
+    tiktok_trends = subparsers.add_parser(
+        "ingest-tiktok-trends",
+        help="Discover viral formats (keyword-free) from a country's For You feed via "
+        "novi/tiktok-trend-api into ugc_items. Followers backfilled separately.",
+    )
+    add_ingest_common_args(tiktok_trends)
+    add_organic_enrichment_args(tiktok_trends)
+    tiktok_trends.add_argument("--region", default="US", help="Two-letter country code for the For You feed (default US).")
+    tiktok_trends.add_argument("--target-count", type=int, default=200)
+
     ig_followers = subparsers.add_parser(
         "backfill-ig-followers",
         help="Fill Instagram follower counts (omitted by discovery) via apify/instagram-profile-scraper.",
@@ -226,6 +268,15 @@ def build_parser() -> argparse.ArgumentParser:
     ig_followers.add_argument("--limit", type=int, default=500)
     ig_followers.add_argument("--dry-run", action="store_true")
     ig_followers.add_argument("--input-json", type=Path, help="Use a saved profile-scraper response instead of calling Apify.")
+
+    tiktok_followers = subparsers.add_parser(
+        "backfill-tiktok-followers",
+        help="Fill TikTok follower counts (omitted by the trend API) via clockworks/tiktok-scraper profiles mode.",
+    )
+    tiktok_followers.add_argument("--run-id", required=True)
+    tiktok_followers.add_argument("--limit", type=int, default=500)
+    tiktok_followers.add_argument("--dry-run", action="store_true")
+    tiktok_followers.add_argument("--input-json", type=Path, help="Use a saved tiktok-scraper profiles response instead of calling Apify.")
 
     enrich = subparsers.add_parser(
         "enrich-paid-ads",
