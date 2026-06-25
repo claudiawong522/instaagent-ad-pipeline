@@ -74,9 +74,10 @@ export type ScrapePlatform = 'facebook' | 'instagram' | 'tiktok'
 export async function triggerScrape(
   runId: string,
   platform: ScrapePlatform,
+  targetCount?: number,
 ): Promise<{ started: boolean; platform: string; reason?: string }> {
   return request(`/campaigns/${runId}/scrape`, {
     method: 'POST',
-    body: JSON.stringify({ platform }),
+    body: JSON.stringify({ platform, target_count: targetCount ?? null }),
   })
 }

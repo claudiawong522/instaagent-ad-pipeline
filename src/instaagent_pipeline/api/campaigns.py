@@ -11,9 +11,12 @@ from __future__ import annotations
 import threading
 from typing import Any
 
+from ..ad_enrichment import enrich_paid_ads
 from ..apify_ads import ingest_apify_ads
 from ..apify_ugc import ingest_instagram, ingest_tiktok
+from ..audience_enrichment import enrich_audience
 from ..config import Config
+from ..embeddings import ALL_SPACES, embed_items
 from ..ingestion import utc_now_iso
 from ..keywords import (
     active_keyword_allocations,
@@ -21,6 +24,7 @@ from ..keywords import (
     insert_keyword_allocations,
 )
 from ..supabase_client import SupabaseClient
+from ..ugc_enrichment import enrich_ugc_items
 from .search import _hydrate
 
 # UI platform name -> (ingest function, run target column, Apify page_size).
@@ -128,6 +132,7 @@ def list_campaigns(supabase: SupabaseClient) -> list[dict[str, Any]]:
                 "product_name": product.get("name"),
                 "category": product.get("category"),
                 "target_market": product.get("target_market"),
+                "description": product.get("notes"),
                 "campaign_name": cfg.get("campaign_name"),
                 "marketing_goals": cfg.get("marketing_goals") or [],
                 "campaign_objective": cfg.get("campaign_objective"),
@@ -146,21 +151,42 @@ def _count(supabase: SupabaseClient, table: str, params: dict[str, str]) -> int:
     return len(rows)
 
 
+def _last_scraped(supabase: SupabaseClient, table: str, params: dict[str, str]) -> str | None:
+    # When the most recent matching item was ingested = the platform's last-scraped time.
+    rows = supabase.select(
+        table,
+        {"select": "saved_to_supabase_at", "order": "saved_to_supabase_at.desc", "limit": "1", **params},
+    )
+    return rows[0].get("saved_to_supabase_at") if rows else None
+
+
 def scrape_stats(supabase: SupabaseClient, run_id: str) -> dict[str, Any]:
-    """Live scraped counts for a run, plus which platforms are mid-scrape."""
+    """Live scraped counts + last-scraped time per platform, plus which are mid-scrape."""
+    fb = {"run_id": f"eq.{run_id}"}
+    ig = {"run_id": f"eq.{run_id}", "source": "eq.instagram"}
+    tt = {"run_id": f"eq.{run_id}", "source": "eq.tiktok"}
     with _running_lock:
         running = sorted(p for (r, p) in _running if r == run_id)
     return {
         "run_id": run_id,
-        "facebook_ads": _count(supabase, "paid_ads", {"run_id": f"eq.{run_id}"}),
-        "instagram_reels": _count(supabase, "ugc_items", {"run_id": f"eq.{run_id}", "source": "eq.instagram"}),
-        "tiktoks": _count(supabase, "ugc_items", {"run_id": f"eq.{run_id}", "source": "eq.tiktok"}),
+        "facebook_ads": _count(supabase, "paid_ads", fb),
+        "instagram_reels": _count(supabase, "ugc_items", ig),
+        "tiktoks": _count(supabase, "ugc_items", tt),
+        "facebook_last_scraped": _last_scraped(supabase, "paid_ads", fb),
+        "instagram_last_scraped": _last_scraped(supabase, "ugc_items", ig),
+        "tiktok_last_scraped": _last_scraped(supabase, "ugc_items", tt),
         "running": running,
     }
 
 
-def trigger_scrape(config: Config, run_id: str, platform: str) -> dict[str, Any]:
-    """Kick off the Apify scrape for one platform in a background thread; return immediately."""
+def trigger_scrape(
+    config: Config, run_id: str, platform: str, target_count: int | None = None
+) -> dict[str, Any]:
+    """Kick off the Apify scrape for one platform in a background thread; return immediately.
+
+    target_count, if given, is the new TOTAL to fetch for this platform; it's split across the
+    run's keywords. None falls back to each keyword's stored allocation (the create-time target).
+    """
     if platform not in _PLATFORMS:
         raise ValueError(f"unknown platform {platform!r}; expected one of {sorted(_PLATFORMS)}")
     key = (run_id, platform)
@@ -168,20 +194,29 @@ def trigger_scrape(config: Config, run_id: str, platform: str) -> dict[str, Any]
         if key in _running:
             return {"started": False, "platform": platform, "reason": "already running"}
         _running.add(key)
-    threading.Thread(target=_run_scrape, args=(config, run_id, platform), daemon=True).start()
+    threading.Thread(target=_run_scrape, args=(config, run_id, platform, target_count), daemon=True).start()
     return {"started": True, "platform": platform}
 
 
-def _run_scrape(config: Config, run_id: str, platform: str) -> None:
+def _run_scrape(config: Config, run_id: str, platform: str, target_count: int | None = None) -> None:
+    """Full chain so scraped items become searchable: ingest → enrich (downloads video, vision,
+    uploads to Storage) → audience fields → embed (search + icp). Each stage skips already-done
+    items, so it's safe to re-run. Long-running (minutes) — that's why it lives in a thread."""
     ingest_func, target_field, ads_pagesize = _PLATFORMS[platform]
+    is_paid = target_field == "target_paid_count"
     # Fresh client for the thread — don't share the request handler's session across threads.
     supabase = SupabaseClient(config.supabase_url, config.supabase_key)
     try:
+        # Stage 1 — ingest: fetch from Apify, write rows to paid_ads/ugc_items.
         rows = active_keyword_allocations(supabase, run_id)
-        for row in rows:
-            keyword = str(row.get("keyword_text") or "").strip()
-            target = int(row.get(target_field) or 0)
-            if not keyword or target <= 0:
+        valid = [r for r in rows if str(r.get("keyword_text") or "").strip()]
+        # Split a requested total evenly across the keywords (so "fetch 100" ≈ 100 items, not
+        # 100 per keyword). Without an override, each keyword uses its stored allocation.
+        per_keyword = max(1, target_count // len(valid)) if (target_count and valid) else None
+        for row in valid:
+            keyword = str(row.get("keyword_text")).strip()
+            target = per_keyword if per_keyword is not None else int(row.get(target_field) or 0)
+            if target <= 0:
                 continue
             ingest_func(
                 config=config,
@@ -194,6 +229,18 @@ def _run_scrape(config: Config, run_id: str, platform: str) -> None:
                 input_json=None,
                 extra_params={},
             )
+
+        # Stage 2 — enrich: download each new video → Gemini vision (ai_description, tone…) →
+        # upload mp4 + thumbnail to Supabase Storage → write item_enrichments.
+        if is_paid:
+            enrich_paid_ads(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
+        else:
+            enrich_ugc_items(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
+        # Audience fields (target_generation etc.) — must land before the icp embed reads them.
+        enrich_audience(config=config, supabase=supabase, run_id=run_id, source="all", dry_run=False)
+
+        # Stage 3 — embed both spaces so the new items are searchable. Skips already-embedded.
+        embed_items(config=config, supabase=supabase, run_id=run_id, spaces=ALL_SPACES, dry_run=False)
     except Exception as exc:  # background thread — surface to the server log, nothing to return to
         print(f"[scrape] run={run_id} platform={platform} failed: {exc}")
     finally:

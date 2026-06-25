@@ -67,6 +67,7 @@ export interface Campaign {
   product_name: string | null
   category: string | null
   target_market: string | null
+  description: string | null
   campaign_name: string | null
   marketing_goals: string[]
   campaign_objective: string | null
@@ -99,12 +100,16 @@ export interface ScrapeStats {
   facebook_ads: number
   instagram_reels: number
   tiktoks: number
+  facebook_last_scraped: string | null
+  instagram_last_scraped: string | null
+  tiktok_last_scraped: string | null
   running: string[] // platforms mid-scrape: facebook | instagram | tiktok
 }
 
 export interface RunSummary {
   run_id: string
   status: string | null
+  campaign_name: string | null // from run config (campaign wizard); null for bare CLI runs
   product_name: string | null
   category: string | null
   target_paid_count: number | null

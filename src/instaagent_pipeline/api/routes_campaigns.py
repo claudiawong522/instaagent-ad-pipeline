@@ -26,6 +26,7 @@ class CreateCampaignRequest(BaseModel):
 
 class ScrapeRequest(BaseModel):
     platform: str  # facebook | instagram | tiktok
+    target_count: int | None = Field(default=None, ge=1, le=5000)  # new total to fetch (split per keyword)
 
 
 def _supabase(request: Request):
@@ -57,7 +58,7 @@ def scrape(run_id: str, req: ScrapeRequest, request: Request) -> dict[str, Any]:
     _supabase(request)  # ensure configured before launching the thread
     config = request.app.state.config
     try:
-        return campaigns_module.trigger_scrape(config, run_id, req.platform)
+        return campaigns_module.trigger_scrape(config, run_id, req.platform, req.target_count)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
