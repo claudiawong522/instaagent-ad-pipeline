@@ -12,6 +12,11 @@ from requests.adapters import HTTPAdapter
 
 from .http_client import HttpClientError, JsonResponse, redact_url, request_json, ssl_context
 
+# Writes are not idempotent-free but our upserts/inserts are safe to repeat, so retry transient
+# network drops (e.g. "[Errno 54] Connection reset by peer" mid-scrape). Without this a single reset
+# aborts a whole scrape and discards ads Apify already returned and we already paid for.
+_WRITE_RETRIES = 4
+
 
 class SupabaseClient:
     def __init__(self, url: str, key: str) -> None:
@@ -91,6 +96,7 @@ class SupabaseClient:
             f"{self.url}/rest/v1/{table}",
             headers=self._headers,
             body=payload,
+            retries=_WRITE_RETRIES,
         )
         if isinstance(response.body, list) and response.body:
             return response.body[0]
@@ -108,6 +114,7 @@ class SupabaseClient:
             headers=self._headers,
             params={column: f"eq.{quote(value)}"},
             body=payload,
+            retries=_WRITE_RETRIES,
         )
         if isinstance(response.body, list) and response.body:
             return response.body[0]
@@ -129,6 +136,7 @@ class SupabaseClient:
             headers=headers,
             params={"on_conflict": conflict_columns},
             body=payload,
+            retries=_WRITE_RETRIES,
         )
         if isinstance(response.body, list) and response.body:
             return response.body[0]

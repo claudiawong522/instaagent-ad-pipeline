@@ -242,6 +242,7 @@ def scrape_stats(supabase: SupabaseClient, run_id: str) -> dict[str, Any]:
     fb = _breakdown(paid, "video")
     ig = _breakdown([r for r in organic if r.get("source") == "instagram"], "video_url")
     tt = _breakdown([r for r in organic if r.get("source") == "tiktok"], "video_url")
+    failed = _last_scrape_failed(supabase, run_id)
     with _running_lock:
         running = sorted(p for (r, p) in _running if r == run_id)
     return {
@@ -254,8 +255,37 @@ def scrape_stats(supabase: SupabaseClient, run_id: str) -> dict[str, Any]:
         **_platform_stats("facebook", fb),
         **_platform_stats("instagram", ig),
         **_platform_stats("tiktok", tt),
+        # Per-platform: did the most recent finished scrape attempt fail? Lets the UI flag a
+        # scrape that errored out (e.g. a network drop mid-write) instead of showing it as a
+        # silent partial success. A platform that's currently running is never "failed".
+        "facebook_scrape_failed": "facebook" not in running and failed.get("facebook", False),
+        "instagram_scrape_failed": "instagram" not in running and failed.get("instagram", False),
+        "tiktok_scrape_failed": "tiktok" not in running and failed.get("tiktok", False),
         "running": running,
     }
+
+
+def _last_scrape_failed(supabase: SupabaseClient, run_id: str) -> dict[str, bool]:
+    """Whether the latest scrape_event per platform ended in 'failed'. Best-effort: if the
+    scrape_events table isn't there yet (migration 022 unapplied), report nothing failed."""
+    try:
+        rows = supabase.select(
+            "scrape_events",
+            {
+                "select": "platform,status,started_at",
+                "run_id": f"eq.{run_id}",
+                "order": "started_at.desc",
+                "limit": "200",
+            },
+        )
+    except Exception:
+        return {}
+    out: dict[str, bool] = {}
+    for r in rows:  # newest-first, so the first row seen per platform is the latest
+        platform = r.get("platform")
+        if platform and platform not in out:
+            out[platform] = r.get("status") == "failed"
+    return out
 
 
 def trigger_scrape(
@@ -373,6 +403,7 @@ def _run_scrape(
         print(f"[scrape] run={run_id} could not record scrape_event: {exc}")
     items_ingested = 0
     failed = False
+    keyword_errors = 0
     try:
         # Stage 1 — ingest: fetch from Apify, write rows to paid_ads/ugc_items.
         rows = active_keyword_allocations(supabase, run_id)
@@ -385,18 +416,25 @@ def _run_scrape(
             target = per_keyword if per_keyword is not None else int(row.get(target_field) or 0)
             if target <= 0:
                 continue
-            result = ingest_func(
-                config=config,
-                supabase=supabase,
-                run_id=run_id,
-                keyword=keyword,
-                target_count=target,
-                page_size=target if ads_pagesize else 0,
-                dry_run=False,
-                input_json=None,
-                extra_params={},
-            )
-            items_ingested += getattr(result, "written", 0) or 0
+            # Isolate each keyword: one keyword erroring (e.g. an Apify/network failure) must not
+            # abort the rest of the split, or "fetch 200" silently delivers only the first keyword's
+            # share. Record the error and move on; a partial run is flagged failed so the UI offers retry.
+            try:
+                result = ingest_func(
+                    config=config,
+                    supabase=supabase,
+                    run_id=run_id,
+                    keyword=keyword,
+                    target_count=target,
+                    page_size=target if ads_pagesize else 0,
+                    dry_run=False,
+                    input_json=None,
+                    extra_params={},
+                )
+                items_ingested += getattr(result, "written", 0) or 0
+            except Exception as exc:
+                keyword_errors += 1
+                print(f"[scrape] run={run_id} platform={platform} keyword={keyword!r} ingest failed: {exc}")
 
         # Stage 2 — enrich: download each new video → Gemini vision (ai_description, tone…) →
         # upload mp4 + thumbnail to Supabase Storage → write item_enrichments.
@@ -423,7 +461,9 @@ def _run_scrape(
                     {
                         "actual_cost_usd": actual,
                         "items_ingested": items_ingested,
-                        "status": "failed" if failed else "done",
+                        # Any keyword erroring = a short delivery, so flag failed (the UI shows it
+                        # as a partial and offers retry to fill the gap).
+                        "status": "failed" if (failed or keyword_errors) else "done",
                         "finished_at": utc_now_iso(),
                     },
                 )

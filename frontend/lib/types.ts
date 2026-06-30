@@ -163,6 +163,11 @@ export interface ScrapeStats {
   tiktok_processing: number
   tiktok_total: number
   tiktok_last_scraped: string | null
+  // Most recent finished scrape attempt for the platform ended in error (e.g. a network drop
+  // mid-write). A platform mid-scrape is never flagged failed.
+  facebook_scrape_failed: boolean
+  instagram_scrape_failed: boolean
+  tiktok_scrape_failed: boolean
   running: string[] // platforms mid-scrape: facebook | instagram | tiktok
 }
 

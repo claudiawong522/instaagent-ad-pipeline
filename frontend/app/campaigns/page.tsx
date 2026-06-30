@@ -161,6 +161,9 @@ function emptyStats(runId: string): ScrapeStats {
     tiktok_processing: 0,
     tiktok_total: 0,
     tiktok_last_scraped: null,
+    facebook_scrape_failed: false,
+    instagram_scrape_failed: false,
+    tiktok_scrape_failed: false,
     running: [],
   }
 }
@@ -182,16 +185,18 @@ function pbreak(stats: ScrapeStats | undefined, prefix: PlatformPrefix) {
 
 type NumericStatKey = 'facebook_ads' | 'instagram_reels' | 'tiktoks'
 type LastScrapedKey = 'facebook_last_scraped' | 'instagram_last_scraped' | 'tiktok_last_scraped'
+type FailedKey = 'facebook_scrape_failed' | 'instagram_scrape_failed' | 'tiktok_scrape_failed'
 const PLATFORMS: {
   key: ScrapePlatform
   label: string
   icon: typeof Facebook
   statKey: NumericStatKey
   lastKey: LastScrapedKey
+  failedKey: FailedKey
 }[] = [
-  { key: 'facebook', label: 'Facebook ads', icon: Facebook, statKey: 'facebook_ads', lastKey: 'facebook_last_scraped' },
-  { key: 'instagram', label: 'Instagram reels', icon: Instagram, statKey: 'instagram_reels', lastKey: 'instagram_last_scraped' },
-  { key: 'tiktok', label: 'TikToks', icon: Music2, statKey: 'tiktoks', lastKey: 'tiktok_last_scraped' },
+  { key: 'facebook', label: 'Facebook ads', icon: Facebook, statKey: 'facebook_ads', lastKey: 'facebook_last_scraped', failedKey: 'facebook_scrape_failed' },
+  { key: 'instagram', label: 'Instagram reels', icon: Instagram, statKey: 'instagram_reels', lastKey: 'instagram_last_scraped', failedKey: 'instagram_scrape_failed' },
+  { key: 'tiktok', label: 'TikToks', icon: Music2, statKey: 'tiktoks', lastKey: 'tiktok_last_scraped', failedKey: 'tiktok_scrape_failed' },
 ]
 
 function CampaignCard({
@@ -292,6 +297,7 @@ function CampaignCard({
             total={pbreak(stats, p.key).total}
             lastScraped={stats?.[p.lastKey] ?? null}
             running={stats?.running.includes(p.key) ?? false}
+            failed={stats?.[p.failedKey] ?? false}
             defaultTarget={(p.key === 'facebook' ? c.target_paid_count : p.key === 'tiktok' ? c.target_tiktok_count : c.target_ugc_count) ?? 50}
             onScrape={onScrape}
           />
@@ -308,6 +314,7 @@ function PlatformTile({
   total,
   lastScraped,
   running,
+  failed,
   defaultTarget,
   onScrape,
 }: {
@@ -317,6 +324,7 @@ function PlatformTile({
   total: number // all scraped videos (searchable + expired + failed + processing)
   lastScraped: string | null
   running: boolean
+  failed: boolean // last finished scrape attempt errored out
   defaultTarget: number
   onScrape: (runId: string, platform: ScrapePlatform, targetCount: number, estimatedCost: number) => void
 }) {
@@ -382,12 +390,21 @@ function PlatformTile({
         <span className="text-[10px] text-muted-foreground/70">of {total} scraped</span>
       )}
       <span className="text-[10px] text-muted-foreground/80">
-        {running ? 'scraping now' : last ? `last ${last}` : 'not yet'}
+        {running ? 'scraping now' : failed ? 'last scrape failed' : last ? `last ${last}` : 'not yet'}
       </span>
       {running ? (
         <Button type="button" size="sm" variant="outline" disabled className="h-7 w-full gap-1 px-2 text-xs">
           <Loader2 className="size-3 animate-spin" /> Scraping…
         </Button>
+      ) : failed ? (
+        <div className="flex w-full flex-col items-center gap-1">
+          <span className="flex items-center gap-1 text-[11px] font-medium text-destructive">
+            <AlertTriangle className="size-3" /> Scrape failed{scraped ? ' (partial)' : ''}
+          </span>
+          <Button type="button" size="sm" variant="destructive" onClick={openConfirm} className="h-7 w-full gap-1 px-2 text-xs">
+            <Icon className="size-3" /> Retry scrape
+          </Button>
+        </div>
       ) : scraped ? (
         <div className="flex w-full flex-col items-center gap-1">
           <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-500">Scraped ✓</span>
