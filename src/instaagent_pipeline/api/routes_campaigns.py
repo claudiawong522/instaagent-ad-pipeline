@@ -25,6 +25,18 @@ class CreateCampaignRequest(BaseModel):
     target_tiktok_count: int = Field(default=50, ge=1, le=5000)
 
 
+class UpdateCampaignRequest(BaseModel):
+    # Same editable detail fields as create (minus the scrape target counts, which are set
+    # per-platform at scrape time). All required-on-create fields stay required here.
+    product_name: str = Field(min_length=1)
+    category: str | None = None
+    target_market: str | None = None
+    notes: str | None = None  # product description
+    campaign_name: str = Field(min_length=1, max_length=120)
+    marketing_goals: list[str] = []
+    campaign_objective: str | None = Field(default=None, max_length=2000)
+
+
 class ScrapeRequest(BaseModel):
     platform: str  # facebook | instagram | tiktok
     target_count: int | None = Field(default=None, ge=1, le=5000)  # new total to fetch (split per keyword)
@@ -48,6 +60,15 @@ def create_campaign(req: CreateCampaignRequest, request: Request) -> dict[str, A
 @router.get("/campaigns")
 def list_campaigns(request: Request) -> dict[str, Any]:
     return {"campaigns": campaigns_module.list_campaigns(_supabase(request))}
+
+
+@router.patch("/campaigns/{run_id}")
+def update_campaign(run_id: str, req: UpdateCampaignRequest, request: Request) -> dict[str, Any]:
+    supabase = _supabase(request)
+    try:
+        return campaigns_module.update_campaign(supabase, run_id, **req.model_dump())
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
 
 
 @router.get("/campaigns/{run_id}/scrape-stats")

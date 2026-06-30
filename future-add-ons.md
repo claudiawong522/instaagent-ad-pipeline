@@ -46,3 +46,10 @@ These are good ideas intentionally deferred to keep the first version lean.
 - Embeddings need no changes — `embed-items` works off descriptor columns regardless of media type, and same-schema distillation keeps image and video ads clustering by creative pattern instead of input modality.
 - Deferred because every scraped ad so far is a video ad and InstaAgent clones video creatives first.
 
+## Re-seed keywords on campaign edit
+
+- The inline campaign editor (`PATCH /campaigns/{run_id}`) updates the product + campaign config (name/goals/objective) but does **not** regenerate keyword allocations. Keywords are seeded once at create time from the objective.
+- So editing the objective/product after creation won't change which keywords the scrapers search.
+- To support it: on edit, diff the objective and re-run `generate_keyword_allocations` + `insert_keyword_allocations`, deduping against existing keywords so a re-run doesn't pile up duplicates (and deciding what to do with keywords from already-scraped runs).
+- Deferred because it's a meaningfully bigger change (dedup + cost implications) than the in-place detail edit the UI needed.
+

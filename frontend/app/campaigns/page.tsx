@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Plus, Facebook, Instagram, Music2, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react'
+import { Loader2, Plus, Facebook, Instagram, Music2, ChevronDown, ChevronUp, AlertTriangle, Pencil, Check } from 'lucide-react'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { listCampaigns, getScrapeStats, getScrapeEvents, triggerScrape, type ScrapePlatform } from '@/lib/api'
+import { cn } from '@/lib/utils'
+import { listCampaigns, getScrapeStats, getScrapeEvents, triggerScrape, updateCampaign, type ScrapePlatform } from '@/lib/api'
 import type { Campaign, ScrapeStats, ScrapeEventsResponse } from '@/lib/types'
 
 // Rough blended $/item (Apify + enrichment + embedding) for the pre-scrape estimate. Mirror of
@@ -111,7 +113,7 @@ export default function CampaignsPage() {
       ) : (
         <div className="flex flex-col gap-4">
           {campaigns.map((c) => (
-            <CampaignCard key={c.run_id} campaign={c} stats={stats[c.run_id]} onScrape={onScrape} />
+            <CampaignCard key={c.run_id} campaign={c} stats={stats[c.run_id]} onScrape={onScrape} onSaved={refreshCampaigns} />
           ))}
         </div>
       )}
@@ -196,12 +198,15 @@ function CampaignCard({
   campaign: c,
   stats,
   onScrape,
+  onSaved,
 }: {
   campaign: Campaign
   stats: ScrapeStats | undefined
   onScrape: (runId: string, platform: ScrapePlatform, targetCount: number, estimatedCost: number) => void
+  onSaved: () => void
 }) {
   const [showInputs, setShowInputs] = useState(false)
+  const [editing, setEditing] = useState(false)
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-2">
@@ -239,15 +244,40 @@ function CampaignCard({
         <div className="flex flex-col gap-3">
           <ScrapeHistory runId={c.run_id} stats={stats} />
           <EnrichmentBreakdown stats={stats} />
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-md bg-muted/50 p-3 text-xs">
-            <InputRow label="Product" value={c.product_name} />
-            <InputRow label="Category" value={c.category} />
-            <InputRow label="Target market" value={c.target_market} />
-            <InputRow label="Description" value={c.description} />
-            <InputRow label="Campaign" value={c.campaign_name} />
-            <InputRow label="Goals" value={c.marketing_goals.join(', ') || null} />
-            <InputRow label="Objective" value={c.campaign_objective} />
-          </dl>
+          {editing ? (
+            <CampaignEditor
+              campaign={c}
+              onCancel={() => setEditing(false)}
+              onSaved={() => {
+                setEditing(false)
+                onSaved()
+              }}
+            />
+          ) : (
+            <div className="flex flex-col gap-2 rounded-md bg-muted/50 p-3 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-muted-foreground">Inputs</span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setEditing(true)}
+                  className="h-6 gap-1 px-2 text-xs"
+                >
+                  <Pencil className="size-3" /> Edit
+                </Button>
+              </div>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                <InputRow label="Product" value={c.product_name} />
+                <InputRow label="Category" value={c.category} />
+                <InputRow label="Target market" value={c.target_market} />
+                <InputRow label="Description" value={c.description} />
+                <InputRow label="Campaign" value={c.campaign_name} />
+                <InputRow label="Goals" value={c.marketing_goals.join(', ') || null} />
+                <InputRow label="Objective" value={c.campaign_objective} />
+              </dl>
+            </div>
+          )}
         </div>
       )}
 
@@ -508,5 +538,144 @@ function InputRow({ label, value }: { label: string; value: string | null | unde
       <dt className="font-medium text-muted-foreground">{label}</dt>
       <dd className="text-foreground">{value || <span className="text-muted-foreground/60">—</span>}</dd>
     </>
+  )
+}
+
+const MARKETING_GOALS = ['Awareness', 'Traffic', 'Engagement', 'Leads', 'App promotion', 'Sales']
+const NAME_MAX = 120
+const OBJECTIVE_MAX = 800
+
+/** Inline editor for a campaign's details — same fields as the New Campaign form, pre-filled.
+ * Saves via PATCH /campaigns/{run_id}; on success the parent refetches the list. */
+function CampaignEditor({
+  campaign: c,
+  onCancel,
+  onSaved,
+}: {
+  campaign: Campaign
+  onCancel: () => void
+  onSaved: () => void
+}) {
+  const [productName, setProductName] = useState(c.product_name ?? '')
+  const [category, setCategory] = useState(c.category ?? '')
+  const [targetMarket, setTargetMarket] = useState(c.target_market ?? '')
+  const [notes, setNotes] = useState(c.description ?? '')
+  const [campaignName, setCampaignName] = useState(c.campaign_name ?? '')
+  const [goals, setGoals] = useState<Set<string>>(new Set(c.marketing_goals))
+  const [objective, setObjective] = useState(c.campaign_objective ?? '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function toggleGoal(g: string) {
+    setGoals((s) => {
+      const next = new Set(s)
+      if (next.has(g)) next.delete(g)
+      else next.add(g)
+      return next
+    })
+  }
+
+  async function save() {
+    setSaving(true)
+    setError(null)
+    try {
+      await updateCampaign(c.run_id, {
+        product_name: productName.trim(),
+        category: category.trim() || null,
+        target_market: targetMarket.trim() || null,
+        notes: notes.trim() || null,
+        campaign_name: campaignName.trim(),
+        marketing_goals: Array.from(goals),
+        campaign_objective: objective.trim() || null,
+      })
+      onSaved()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save')
+      setSaving(false)
+    }
+  }
+
+  const canSave = productName.trim().length > 0 && campaignName.trim().length > 0 && !saving
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (canSave) save()
+      }}
+      className="flex flex-col gap-3 rounded-md bg-muted/50 p-3 text-xs"
+    >
+      <div className="grid gap-2 sm:grid-cols-2">
+        <EditField label="Product name *">
+          <Input value={productName} onChange={(e) => setProductName(e.target.value)} className="h-8 text-sm" />
+        </EditField>
+        <EditField label="Category">
+          <Input value={category} onChange={(e) => setCategory(e.target.value)} className="h-8 text-sm" />
+        </EditField>
+        <EditField label="Target market">
+          <Input value={targetMarket} onChange={(e) => setTargetMarket(e.target.value)} className="h-8 text-sm" />
+        </EditField>
+        <EditField label="Description">
+          <Input value={notes} onChange={(e) => setNotes(e.target.value)} className="h-8 text-sm" />
+        </EditField>
+        <EditField label="Campaign name *">
+          <Input
+            value={campaignName}
+            onChange={(e) => setCampaignName(e.target.value.slice(0, NAME_MAX))}
+            className="h-8 text-sm"
+          />
+        </EditField>
+      </div>
+      <EditField label="Marketing goals">
+        <div className="flex flex-wrap gap-1.5">
+          {MARKETING_GOALS.map((g) => {
+            const active = goals.has(g)
+            return (
+              <button
+                key={g}
+                type="button"
+                onClick={() => toggleGoal(g)}
+                className={cn(
+                  'rounded-md border px-2.5 py-1 text-xs transition-colors',
+                  active
+                    ? 'border-primary bg-primary/10 text-foreground'
+                    : 'border-border text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {g}
+              </button>
+            )
+          })}
+        </div>
+      </EditField>
+      <EditField label="Objective">
+        <Textarea
+          value={objective}
+          onChange={(e) => setObjective(e.target.value.slice(0, OBJECTIVE_MAX))}
+          className="min-h-20 text-sm"
+        />
+      </EditField>
+      {error && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-destructive">{error}</div>
+      )}
+      <div className="flex items-center gap-2">
+        <Button type="submit" size="sm" disabled={!canSave} className="h-7 gap-1 px-3 text-xs">
+          {saving ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
+          {saving ? 'Saving…' : 'Save'}
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onCancel} className="h-7 px-3 text-xs">
+          Cancel
+        </Button>
+      </div>
+    </form>
+  )
+}
+
+function EditField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      {children}
+    </label>
   )
 }

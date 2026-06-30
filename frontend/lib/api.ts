@@ -7,6 +7,7 @@ import type {
   Campaign,
   CreateCampaignInput,
   CreateCampaignResult,
+  UpdateCampaignInput,
   Product,
   ScrapeStats,
   ScrapeEventsResponse,
@@ -64,6 +65,13 @@ export async function listCampaigns(): Promise<{ campaigns: Campaign[] }> {
 
 export async function createCampaign(input: CreateCampaignInput): Promise<CreateCampaignResult> {
   return request('/campaigns', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export async function updateCampaign(
+  runId: string,
+  input: UpdateCampaignInput,
+): Promise<{ run_id: string; product_id: string }> {
+  return request(`/campaigns/${runId}`, { method: 'PATCH', body: JSON.stringify(input) })
 }
 
 export async function getScrapeStats(runId: string): Promise<ScrapeStats> {

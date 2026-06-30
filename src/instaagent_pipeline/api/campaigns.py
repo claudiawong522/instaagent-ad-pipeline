@@ -149,6 +149,46 @@ def list_campaigns(supabase: SupabaseClient) -> list[dict[str, Any]]:
     return out
 
 
+def update_campaign(
+    supabase: SupabaseClient,
+    run_id: str,
+    *,
+    product_name: str,
+    category: str | None,
+    target_market: str | None,
+    notes: str | None,
+    campaign_name: str,
+    marketing_goals: list[str],
+    campaign_objective: str | None,
+) -> dict[str, Any]:
+    """Edit a campaign's details in place: the product fields and the run's campaign config
+    (name / goals / objective). Does NOT regenerate keywords — those are seeded at create time,
+    so editing the objective here won't re-seed them (see future-add-ons.md)."""
+    runs = supabase.select(
+        "pipeline_runs", {"select": "id,config,product_id", "id": f"eq.{run_id}", "limit": "1"}
+    )
+    if not runs:
+        raise ValueError(f"campaign {run_id} not found")
+    run = runs[0]
+    supabase.update_by_id(
+        "products",
+        str(run["product_id"]),
+        {"name": product_name, "category": category, "target_market": target_market, "notes": notes},
+    )
+    config = dict(run.get("config") or {})
+    config.update(
+        {
+            "campaign_name": campaign_name,
+            "marketing_goals": marketing_goals,
+            "campaign_objective": campaign_objective,
+            # keep campaign_guidelines in sync — it's the key the keyword generator reads.
+            "campaign_guidelines": campaign_objective,
+        }
+    )
+    supabase.update_by_id("pipeline_runs", run_id, {"config": config})
+    return {"run_id": run_id, "product_id": str(run["product_id"])}
+
+
 def _breakdown(rows: list[dict[str, Any]], video_key: str) -> dict[str, Any]:
     """Bucket a platform's rows by enrichment outcome so the UI can show how many
     scraped videos became searchable vs expired/failed. `total` is the searchable

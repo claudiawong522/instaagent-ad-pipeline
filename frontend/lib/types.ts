@@ -92,6 +92,18 @@ export interface CreateCampaignInput {
   target_tiktok_count?: number
 }
 
+// Editing a campaign's details in place. Same fields as create minus the scrape target
+// counts (those are chosen per-platform at scrape time).
+export interface UpdateCampaignInput {
+  product_name: string
+  category?: string | null
+  target_market?: string | null
+  notes?: string | null
+  campaign_name: string
+  marketing_goals: string[]
+  campaign_objective?: string | null
+}
+
 export interface CreateCampaignResult {
   run_id: string
   product_id: string
