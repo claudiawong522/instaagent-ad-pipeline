@@ -9,14 +9,16 @@ def test_parse_keyword_allocations_requires_totals_to_match() -> None:
     text = """
     {
       "keywords": [
-        {"keyword_text": "cleanser", "target_paid_count": 4, "target_ugc_count": 10},
-        {"keyword_text": "gentle cleanser", "target_paid_count": 3, "target_ugc_count": 10},
-        {"keyword_text": "sensitive skin cleanser", "target_paid_count": 3, "target_ugc_count": 10}
+        {"keyword_text": "cleanser", "target_paid_count": 4, "target_ugc_count": 10, "target_tiktok_count": 7},
+        {"keyword_text": "gentle cleanser", "target_paid_count": 3, "target_ugc_count": 10, "target_tiktok_count": 7},
+        {"keyword_text": "sensitive skin cleanser", "target_paid_count": 3, "target_ugc_count": 10, "target_tiktok_count": 6}
       ]
     }
     """
 
-    allocations = parse_keyword_allocations(text, expected_paid_total=10, expected_organic_total=30)
+    allocations = parse_keyword_allocations(
+        text, expected_paid_total=10, expected_organic_total=30, expected_tiktok_total=20
+    )
 
     assert [allocation.keyword_text for allocation in allocations] == [
         "cleanser",
@@ -25,21 +27,24 @@ def test_parse_keyword_allocations_requires_totals_to_match() -> None:
     ]
     assert sum(allocation.target_paid_count for allocation in allocations) == 10
     assert sum(allocation.target_ugc_count for allocation in allocations) == 30
+    assert sum(allocation.target_tiktok_count for allocation in allocations) == 20
 
 
 def test_parse_keyword_allocations_rejects_wrong_totals() -> None:
     text = """
     {
       "keywords": [
-        {"keyword_text": "cleanser", "target_paid_count": 1, "target_ugc_count": 10},
-        {"keyword_text": "gentle cleanser", "target_paid_count": 1, "target_ugc_count": 10},
-        {"keyword_text": "sensitive skin cleanser", "target_paid_count": 1, "target_ugc_count": 10}
+        {"keyword_text": "cleanser", "target_paid_count": 1, "target_ugc_count": 10, "target_tiktok_count": 10},
+        {"keyword_text": "gentle cleanser", "target_paid_count": 1, "target_ugc_count": 10, "target_tiktok_count": 10},
+        {"keyword_text": "sensitive skin cleanser", "target_paid_count": 1, "target_ugc_count": 10, "target_tiktok_count": 10}
       ]
     }
     """
 
     with pytest.raises(RuntimeError, match="paid allocation total"):
-        parse_keyword_allocations(text, expected_paid_total=10, expected_organic_total=30)
+        parse_keyword_allocations(
+            text, expected_paid_total=10, expected_organic_total=30, expected_tiktok_total=30
+        )
 
 
 def test_allocate_manual_keywords_splits_targets_exactly() -> None:

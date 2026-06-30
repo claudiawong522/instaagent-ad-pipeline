@@ -24,6 +24,7 @@ from ..keywords import (
     active_keyword_allocations,
     generate_keyword_allocations,
     insert_keyword_allocations,
+    split_proportionally,
 )
 from ..supabase_client import SupabaseClient
 from ..organic_enrichment import enrich_organic_items
@@ -514,19 +515,21 @@ def _run_scrape(
         rows = active_keyword_allocations(supabase, run_id)
         valid = [r for r in rows if str(r.get("keyword_text") or "").strip()]
         # The UI always supplies the ceiling. Top up toward it: split only the GAP between
-        # target_count and what's already collected across the keywords — so a re-scrape adds
-        # ~target−have new items, not a fresh full fetch stacked on the pile. Floor division (no
-        # min-1) keeps the total at or under the target; a gap smaller than the keyword count just
-        # fetches nothing this round. With no target there's nothing to top up toward, so fetch
-        # nothing rather than re-stacking each keyword's full stored allocation on every re-run.
+        # target_count and what's already collected — so a re-scrape adds ~target−have new items,
+        # not a fresh full fetch stacked on the pile. Distribute the gap by each keyword's stored
+        # allocation weight (the create-time split), so a keyword Claude judged heavier pulls
+        # proportionally more; falls back to an even split when no weights are stored (legacy runs).
+        # The proportional split sums to exactly the gap, keeping the total at or under the target;
+        # a gap smaller than the keyword count just leaves some keywords at 0 this round. With no
+        # target there's nothing to top up toward, so fetch nothing rather than re-stacking.
         if target_count and valid:
             gap = max(0, target_count - _existing_count(supabase, run_id, platform))
-            per_keyword = gap // len(valid)
+            weights = [int(r.get(target_field) or 0) for r in valid]
+            per_keyword_counts = split_proportionally(gap, weights)
         else:
-            per_keyword = 0
-        for row in valid:
+            per_keyword_counts = [0] * len(valid)
+        for row, target in zip(valid, per_keyword_counts):
             keyword = str(row.get("keyword_text")).strip()
-            target = per_keyword
             if target <= 0:
                 continue
             # Isolate each keyword: one keyword erroring (e.g. an Apify/network failure) must not
@@ -656,11 +659,20 @@ def _resume(config: Config, event: dict[str, Any]) -> None:
         failed = True
         print(f"[resume] run={run_id} platform={platform} failed: {exc}")
     finally:
+        # Reconcile the real spend from api_usage (started_at onward) so an interrupted pull's cost
+        # stops showing as the pre-scrape estimate. items_ingested stays as-is: the killed worker's
+        # ingest count lived in memory and can't be recovered here, so leave it null (UI shows "—").
+        started_at = event.get("started_at")
         try:
+            actual = reconcile_actual_cost(supabase, run_id, started_at) if started_at else None
             supabase.update_by_id(
                 "scrape_events",
                 event_id,
-                {"status": "failed" if failed else "done", "finished_at": utc_now_iso()},
+                {
+                    "status": "failed" if failed else "done",
+                    "actual_cost_usd": actual,
+                    "finished_at": utc_now_iso(),
+                },
             )
         except Exception as exc:
             print(f"[resume] run={run_id} could not close scrape_event: {exc}")

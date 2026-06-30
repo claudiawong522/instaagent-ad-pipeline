@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 from .config import Config
@@ -90,6 +90,7 @@ def generate_keyword_allocations(
                     campaign_guidelines=campaign_guidelines,
                     target_paid_count=target_paid_count,
                     target_ugc_count=target_ugc_count,
+                    target_tiktok_count=target_tiktok_count,
                 ),
             }
         ],
@@ -200,6 +201,7 @@ def keyword_prompt(
     campaign_guidelines: str | None,
     target_paid_count: int,
     target_ugc_count: int,
+    target_tiktok_count: int = 0,
 ) -> str:
     return f"""
 Product name: {product_name}
@@ -209,7 +211,8 @@ Product notes: {notes or ""}
 Campaign guidelines: {campaign_guidelines or ""}
 
 Target paid ads: {target_paid_count}
-Target organic videos: {target_ugc_count}
+Target reels (Instagram): {target_ugc_count}
+Target tiktoks: {target_tiktok_count}
 
 Create 3-5 single-word search keywords for provider API discovery.
 Aim for 4 keywords. Each keyword_text must be exactly one word with no spaces.
@@ -219,9 +222,10 @@ Avoid adjectives and generic descriptors (e.g. gentle, clean, fresh, natural, gl
 match unrelated trending content. Favor broad, common category-level nouns (e.g. skincare, cleanser, acne)
 over narrow niche terms (e.g. niacinamide).
 
-Allocate target_paid_count and target_ugc_count across the keywords.
+Allocate target_paid_count, target_ugc_count, and target_tiktok_count across the keywords.
 The sum of all target_paid_count values must equal {target_paid_count}.
 The sum of all target_ugc_count values must equal {target_ugc_count}.
+The sum of all target_tiktok_count values must equal {target_tiktok_count}.
 Use non-negative integers only.
 
 Return exactly this JSON shape:
@@ -230,7 +234,8 @@ Return exactly this JSON shape:
     {{
       "keyword_text": "cleanser",
       "target_paid_count": 250,
-      "target_ugc_count": 625
+      "target_ugc_count": 625,
+      "target_tiktok_count": 625
     }}
   ]
 }}
@@ -278,26 +283,26 @@ def parse_keyword_allocations(
         seen.add(normalized)
         paid_count = as_nonnegative_int(row.get("target_paid_count"), "target_paid_count")
         organic_count = as_nonnegative_int(row.get("target_ugc_count"), "target_ugc_count")
+        tiktok_count = as_nonnegative_int(row.get("target_tiktok_count"), "target_tiktok_count")
         allocations.append(
             KeywordAllocation(
                 keyword_text=keyword,
                 target_paid_count=paid_count,
                 target_ugc_count=organic_count,
+                target_tiktok_count=tiktok_count,
             )
         )
 
     paid_total = sum(row.target_paid_count for row in allocations)
     organic_total = sum(row.target_ugc_count for row in allocations)
+    tiktok_total = sum(row.target_tiktok_count for row in allocations)
     if paid_total != expected_paid_total:
         raise RuntimeError(f"Claude paid allocation total {paid_total} != target {expected_paid_total}.")
     if organic_total != expected_organic_total:
         raise RuntimeError(f"Claude organic allocation total {organic_total} != target {expected_organic_total}.")
-    # The LLM only allocates paid + reels. Split the TikTok total across the same keywords,
-    # weighted by each keyword's reels share (even split if reels are all zero).
-    tiktok_counts = split_proportionally(
-        expected_tiktok_total, [row.target_ugc_count for row in allocations]
-    )
-    return [replace(row, target_tiktok_count=tiktok_counts[i]) for i, row in enumerate(allocations)]
+    if tiktok_total != expected_tiktok_total:
+        raise RuntimeError(f"Claude tiktok allocation total {tiktok_total} != target {expected_tiktok_total}.")
+    return allocations
 
 
 def extract_json_object(text: str) -> str:
