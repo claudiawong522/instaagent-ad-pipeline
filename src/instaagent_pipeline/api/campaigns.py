@@ -52,6 +52,28 @@ STALE_AFTER_SECONDS = 10 * 60
 # Don't auto-resume jobs older than this. Recent kills (a reload) are worth self-healing;
 # a run abandoned days ago shouldn't suddenly re-spend when the server next boots.
 MAX_RESUME_AGE_SECONDS = 48 * 60 * 60
+# Backstop for a worker that hangs *after* fetching (e.g. a stalled vision/embed call): if its
+# event sits in 'running' this long, mark it failed so the UI stops spinning forever and offers a
+# re-run, and free the _running slot. Sized above a full first post-pass, not a tight SLA — the
+# run-wide passes are serialized and skip already-done items, so only one worker pays full cost.
+WATCHDOG_SECONDS = 30 * 60
+
+# The post-ingest passes (organic enrich, audience, embed) all cover a run's WHOLE item set, not
+# just one scrape's. With several platform workers live at once, running them in parallel just makes
+# N workers hammer the same rate-limited vision/embed APIs and crawl — which is what leaves an event
+# stuck 'running' long after its fetch is done. Serialize them per run: one lock per run_id, lazily
+# created under a guard. Apify ingest stays parallel; only post-processing is single-file.
+_postpass_locks: dict[str, threading.Lock] = {}
+_postpass_guard = threading.Lock()
+
+
+def _postpass_lock(run_id: str) -> threading.Lock:
+    with _postpass_guard:
+        lock = _postpass_locks.get(run_id)
+        if lock is None:
+            lock = threading.Lock()
+            _postpass_locks[run_id] = lock
+        return lock
 
 
 def create_campaign(
@@ -424,6 +446,31 @@ def _existing_count(supabase: SupabaseClient, run_id: str, platform: str) -> int
     return len(rows)
 
 
+def _watchdog_timeout(config: Config, run_id: str, platform: str, event_id: str) -> None:
+    """Fired by a Timer if a worker overruns WATCHDOG_SECONDS. Flips a still-'running' event to
+    failed (so the UI offers a re-run instead of spinning forever) and frees the _running slot.
+    No-op if the worker already closed the event — the worker cancels this Timer in its finally,
+    so this only runs when the worker is genuinely stuck and never reached that finally."""
+    supabase = SupabaseClient(config.supabase_url, config.supabase_key)
+    try:
+        rows = supabase.select("scrape_events", {"select": "status", "id": f"eq.{event_id}", "limit": "1"})
+        if rows and rows[0].get("status") == "running":
+            supabase.update_by_id(
+                "scrape_events",
+                event_id,
+                {
+                    "status": "failed",
+                    "error_message": "Scrape timed out — the worker stalled. Re-run to finish.",
+                    "finished_at": utc_now_iso(),
+                },
+            )
+            print(f"[scrape] run={run_id} platform={platform} watchdog: stalled scrape marked failed")
+    except Exception as exc:
+        print(f"[scrape] run={run_id} watchdog update failed: {exc}")
+    with _running_lock:
+        _running.discard((run_id, platform))
+
+
 def _run_scrape(
     config: Config,
     run_id: str,
@@ -452,6 +499,13 @@ def _run_scrape(
         event_id, started_at = event.get("id"), event.get("started_at")
     except Exception as exc:
         print(f"[scrape] run={run_id} could not record scrape_event: {exc}")
+    # Backstop a hung worker: if we never reach the finally below in time, this fires and closes the
+    # event (see _watchdog_timeout). Cancelled in the finally the moment the worker finishes normally.
+    watchdog: threading.Timer | None = None
+    if event_id:
+        watchdog = threading.Timer(WATCHDOG_SECONDS, _watchdog_timeout, args=(config, run_id, platform, str(event_id)))
+        watchdog.daemon = True
+        watchdog.start()
     items_ingested = 0
     failed = False
     keyword_errors = 0
@@ -459,19 +513,20 @@ def _run_scrape(
         # Stage 1 — ingest: fetch from Apify, write rows to paid_ads/ugc_items.
         rows = active_keyword_allocations(supabase, run_id)
         valid = [r for r in rows if str(r.get("keyword_text") or "").strip()]
-        # When the caller asks for a total ("fetch up to N"), top up toward it: split only the GAP
-        # between N and what's already collected across the keywords — so a re-scrape adds ~N−have
-        # new items, not N per keyword stacked on the pile. Plain floor division (no min-1) keeps the
-        # total at or under N; a gap smaller than the keyword count just fetches nothing this round.
-        # Without an override, each keyword uses its stored allocation.
+        # The UI always supplies the ceiling. Top up toward it: split only the GAP between
+        # target_count and what's already collected across the keywords — so a re-scrape adds
+        # ~target−have new items, not a fresh full fetch stacked on the pile. Floor division (no
+        # min-1) keeps the total at or under the target; a gap smaller than the keyword count just
+        # fetches nothing this round. With no target there's nothing to top up toward, so fetch
+        # nothing rather than re-stacking each keyword's full stored allocation on every re-run.
         if target_count and valid:
             gap = max(0, target_count - _existing_count(supabase, run_id, platform))
             per_keyword = gap // len(valid)
         else:
-            per_keyword = None
+            per_keyword = 0
         for row in valid:
             keyword = str(row.get("keyword_text")).strip()
-            target = per_keyword if per_keyword is not None else int(row.get(target_field) or 0)
+            target = per_keyword
             if target <= 0:
                 continue
             # Isolate each keyword: one keyword erroring (e.g. an Apify/network failure) must not
@@ -494,21 +549,29 @@ def _run_scrape(
                 keyword_errors += 1
                 print(f"[scrape] run={run_id} platform={platform} keyword={keyword!r} ingest failed: {exc}")
 
-        # Stage 2 — enrich: download each new video → Gemini vision (ai_description, tone…) →
-        # upload mp4 + thumbnail to Supabase Storage → write item_enrichments.
-        if is_paid:
-            enrich_paid_ads(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
-        else:
-            enrich_organic_items(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
-        # Audience fields (target_generation etc.) — must land before the icp embed reads them.
-        enrich_audience(config=config, supabase=supabase, run_id=run_id, source="all", dry_run=False)
+        # Stages 2–3 are run-wide (they cover every platform's items, not just this scrape's), so
+        # serialize them per run — concurrent platform workers would otherwise throttle each other
+        # on the same vision/embed APIs. Skip-already-done makes the later workers cheap; the last
+        # one through embeds any stragglers. Apify ingest above stayed parallel.
+        with _postpass_lock(run_id):
+            # Stage 2 — enrich: download each new video → Gemini vision (ai_description, tone…) →
+            # upload mp4 + thumbnail to Supabase Storage → write item_enrichments.
+            if is_paid:
+                enrich_paid_ads(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
+            else:
+                enrich_organic_items(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
+            # Audience fields (target_generation etc.) — must land before the icp embed reads them.
+            enrich_audience(config=config, supabase=supabase, run_id=run_id, source="all", dry_run=False)
 
-        # Stage 3 — embed both spaces so the new items are searchable. Skips already-embedded.
-        embed_items(config=config, supabase=supabase, run_id=run_id, spaces=ALL_SPACES, dry_run=False)
+            # Stage 3 — embed both spaces so the new items are searchable. Skips already-embedded.
+            embed_items(config=config, supabase=supabase, run_id=run_id, spaces=ALL_SPACES, dry_run=False)
     except Exception as exc:  # background thread — surface to the server log, nothing to return to
         failed = True
         print(f"[scrape] run={run_id} platform={platform} failed: {exc}")
     finally:
+        # Worker finished (or errored) on its own — call off the backstop before it can fire.
+        if watchdog is not None:
+            watchdog.cancel()
         # Reconcile the real spend (Apify USD + token-priced LLM/embeds) for this scrape's window.
         if event_id:
             try:
@@ -579,12 +642,15 @@ def _resume(config: Config, event: dict[str, Any]) -> None:
     try:
         # facebook is the only paid platform; everything else (instagram, tiktok, tiktok-trends)
         # is organic. Discovery does its scoring before enrichment, so leftovers only need this.
-        if platform == "facebook":
-            enrich_paid_ads(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
-        else:
-            enrich_organic_items(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
-        enrich_audience(config=config, supabase=supabase, run_id=run_id, source="all", dry_run=False)
-        embed_items(config=config, supabase=supabase, run_id=run_id, spaces=ALL_SPACES, dry_run=False)
+        # Same run-wide passes as a live scrape — serialize per run so a resume can't run them
+        # concurrently with a fresh scrape and throttle it.
+        with _postpass_lock(run_id):
+            if platform == "facebook":
+                enrich_paid_ads(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
+            else:
+                enrich_organic_items(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
+            enrich_audience(config=config, supabase=supabase, run_id=run_id, source="all", dry_run=False)
+            embed_items(config=config, supabase=supabase, run_id=run_id, spaces=ALL_SPACES, dry_run=False)
         print(f"[resume] run={run_id} platform={platform} finished leftover enrichment/embed")
     except Exception as exc:
         failed = True
