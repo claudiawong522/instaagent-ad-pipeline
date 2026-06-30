@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Sparkles, ArrowRight, CheckCircle2, AlertTriangle, Wallet } from 'lucide-react'
+import { Loader2, Sparkles, ArrowRight, CheckCircle2, AlertTriangle, Wallet, HelpCircle } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { ProgressBar } from '@/components/ui/progress-bar'
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { triggerDiscovery, getScrapeStats, getScrapeEvents, listRuns } from '@/lib/api'
 import type { ScrapeStats, ScrapeEventsResponse, RunSummary } from '@/lib/types'
 
@@ -299,7 +300,7 @@ function DiscoveryRunCard({
         </div>
       )}
 
-      <RunFooter runId={run.run_id} stats={stats} createdAt={run.created_at} />
+      <RunFooter runId={run.run_id} stats={stats} />
     </div>
   )
 }
@@ -334,17 +335,17 @@ function StatusPill({ state }: { state: 'running' | 'error' | 'interrupted' | 'd
   )
 }
 
-/** One muted line: when the pull ran and what it cost (Apify + enrichment + embeddings, summed).
- * Cost is an estimate while running / unreconciled (marked "~"), exact once the run settles.
- * Refetches whenever the run's state changes so a just-finished run's real cost lands. */
+/** Every pull this run has done and what each cost (Apify + enrichment + embeddings, summed).
+ * Discovery reuses one run, so each "Discover" click is its own scrape — list them all (date ·
+ * items pulled · cost), newest first, plus a summed total, rather than only the latest. A cost is
+ * an estimate while running / unreconciled (marked "~"), exact once the run settles. Refetches
+ * whenever the run's state changes so a just-finished run's real cost lands. */
 function RunFooter({
   runId,
   stats,
-  createdAt,
 }: {
   runId: string
   stats: ScrapeStats | undefined
-  createdAt: string | null
 }) {
   const [data, setData] = useState<ScrapeEventsResponse | null>(null)
   const refreshKey = [stats?.running.join(','), stats?.tiktok_last_scraped].join('|')
@@ -354,13 +355,77 @@ function RunFooter({
       .catch(() => {})
   }, [runId, refreshKey])
 
-  const when = stats?.tiktok_last_scraped ?? createdAt
-  const estimate = !!data?.events.some((e) => e.cost_kind === 'estimate')
-  const cost = data ? `${estimate ? '~' : ''}${money(data.total_spent_usd)}` : '—'
+  const events = data?.events ?? []
+  const anyEstimate = events.some((e) => e.cost_kind === 'estimate')
+  const total = data ? `${anyEstimate ? '~' : ''}${money(data.total_spent_usd)}` : '—'
+
+  // An interrupted pull never recorded its own count (the killed worker lost it). When exactly one
+  // pull is missing its count, it's just the run total minus the counts we do have — so fill it in
+  // rather than leaving a blank. With two+ unknowns the remainder can't be split, so we show "—".
+  const knownItems = events.reduce((s, e) => s + (e.items ?? 0), 0)
+  const unknownCount = events.filter((e) => e.items == null).length
+  const inferred = unknownCount === 1 ? Math.max(0, (stats?.tiktok_scraped ?? 0) - knownItems) : null
+
   return (
-    <div className="border-t border-border pt-3 text-xs text-muted-foreground">
-      Pulled {dateTime(when)} · cost {cost}
+    <div className="flex flex-col gap-2 border-t border-border pt-3 text-xs text-muted-foreground">
+      <div className="flex items-center justify-between font-medium text-foreground/80">
+        <span>{events.length} pull{events.length === 1 ? '' : 's'}</span>
+        <span className="flex items-center gap-1.5">
+          total {total}
+          <CostInfo />
+        </span>
+      </div>
+      {events.length > 0 && (
+        <ul className="flex flex-col gap-1">
+          {events.map((e) => {
+            const count = e.items != null ? e.items : inferred
+            return (
+              <li key={e.id} className="flex items-center justify-between gap-2 tabular-nums">
+                <span>{dateTime(e.when)}</span>
+                <span className="flex items-center gap-3">
+                  <span
+                    title={
+                      e.items == null && count != null
+                        ? 'Inferred from the run total — this pull was interrupted before recording its own count'
+                        : undefined
+                    }
+                  >
+                    {count == null ? '—' : `${count} pulled`}
+                  </span>
+                  <span className="w-14 text-right text-foreground/80">
+                    {e.cost_kind === 'estimate' ? '~' : ''}
+                    {money(e.cost_usd)}
+                  </span>
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
     </div>
+  )
+}
+
+/** A small "?" that explains, on hover/focus, what the cost figure includes. The numbers come from
+ * costs.py: Apify reports a real USD scrape cost; the LLM enrichment and embeddings only log tokens,
+ * so those are priced from a per-model rate table. While a pull runs the figure is a rough per-item
+ * estimate (shown with "~"); once it finishes it's reconciled to the actual API spend. */
+function CostInfo() {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        aria-label="How cost is computed"
+        className="inline-flex size-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
+        <HelpCircle className="size-3.5" />
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs text-left leading-relaxed">
+        Cost is the real spend for each pull: Apify&apos;s reported scrape cost, plus the LLM
+        enrichment (Gemini) and embeddings (Voyage) priced from the tokens they used — summed across
+        the whole chain. While a pull is running it&apos;s a rough estimate (marked &ldquo;~&rdquo;);
+        once it finishes it&apos;s reconciled to the actual API spend.
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
