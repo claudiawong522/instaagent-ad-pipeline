@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Sparkles, ArrowRight, CheckCircle2, Circle } from 'lucide-react'
+import { Loader2, Sparkles, ArrowRight, CheckCircle2, AlertTriangle, Wallet } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button, buttonVariants } from '@/components/ui/button'
+import { ProgressBar } from '@/components/ui/progress-bar'
 import { triggerDiscovery, getScrapeStats, getScrapeEvents, listRuns } from '@/lib/api'
 import type { ScrapeStats, ScrapeEventsResponse, RunSummary } from '@/lib/types'
 
@@ -184,7 +185,14 @@ export default function DiscoverPage() {
       ) : (
         <div className="flex flex-col gap-4">
           {runs.map((run, i) => (
-            <DiscoveryRunCard key={run.run_id} run={run} stats={stats[run.run_id]} latest={i === 0} />
+            <DiscoveryRunCard
+              key={run.run_id}
+              run={run}
+              stats={stats[run.run_id]}
+              latest={i === 0}
+              onRerun={onDiscover}
+              rerunDisabled={starting || anyRunning}
+            />
           ))}
         </div>
       )}
@@ -192,128 +200,152 @@ export default function DiscoverPage() {
   )
 }
 
-/** One discovery run's live panel: phase status, scraped/processing/searchable stats, the
- * runs-&-cost log, and the searchable breakdown. The newest run is labelled "Latest discovery";
- * older ones show their date. Identical content to the campaigns scrape panel, per run. */
+/** One discovery run as a single top-to-bottom story: a status pill, the one number that matters
+ * (how many are ready to search) shown big with a progress bar over how many were pulled, a
+ * plain-English line for anything that didn't make it, and a one-line cost footer. The newest run
+ * is "Latest discovery"; older ones show their date. */
 function DiscoveryRunCard({
   run,
   stats,
   latest,
+  onRerun,
+  rerunDisabled,
 }: {
   run: RunSummary
   stats: ScrapeStats | undefined
   latest: boolean
+  onRerun: () => void
+  rerunDisabled: boolean
 }) {
   const running = !!stats?.running.includes(DISCOVERY_PLATFORM)
-  // Items scraped but stuck unprocessed with nothing running = the job was killed mid-enrichment.
+  const collected = stats?.tiktok_scraped ?? 0
+  const ready = stats?.tiktok_searchable ?? 0
+  const processing = stats?.tiktok_processing ?? 0
+  // The discovery scrape ran out of Apify/OpenRouter credits — refill and re-run to finish.
+  const creditError = running ? null : stats?.tiktok_scrape_error ?? null
+  // Items pulled but stuck unprocessed with nothing running = the job was killed mid-enrichment.
   // The backend auto-resumes leftovers on its next restart; until then, show the truth, not "Done".
-  const interrupted = !running && (stats?.tiktok_processing ?? 0) > 0
-  const heading = running
-    ? 'Discovery in progress'
-    : interrupted
-      ? 'Discovery interrupted'
-      : latest
-        ? 'Latest discovery'
-        : `Discovery · ${dateTime(run.created_at)}`
+  const interrupted = !running && !creditError && processing > 0
+  const state: 'running' | 'error' | 'interrupted' | 'done' =
+    running ? 'running' : creditError ? 'error' : interrupted ? 'interrupted' : 'done'
+
+  const title = latest ? 'Latest discovery' : `Discovery · ${dateTime(run.created_at)}`
+  const pct = collected > 0 ? Math.round((ready / collected) * 100) : 0
+  // Reasons exclude "still loading" while interrupted — the amber note below says that more clearly.
+  const reasons = enrichmentReasons(stats, 'tiktok').filter((r) => !(interrupted && r.label === 'loading'))
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium">{heading}</h2>
+    <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <StatusPill state={state} />
+          <h2 className="text-sm font-medium text-muted-foreground">{title}</h2>
+        </div>
         <Link href="/search" className={buttonVariants({ variant: 'outline', size: 'sm' }) + ' gap-1.5'}>
           View in Search <ArrowRight className="size-3.5" />
         </Link>
       </div>
-      <PhaseStatus stats={stats} running={running} />
-      <DiscoveryFunnel stats={stats} />
-      <ScrapeHistory runId={run.run_id} stats={stats} />
-      {interrupted ? (
-        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
-          Interrupted — {stats?.tiktok_processing} item{stats?.tiktok_processing === 1 ? '' : 's'} scraped but not
-          yet enriched (the job was killed before finishing). The server automatically re-runs the leftover
-          enrichment when it next restarts; this panel will update once it does.
+
+      {collected === 0 ? (
+        <div className="flex flex-col gap-2 py-1">
+          <span className="text-sm text-muted-foreground">
+            {running ? 'Pulling viral TikToks…' : 'Nothing pulled yet.'}
+          </span>
+          <ProgressBar pct={0} indeterminate={running} />
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">
-          {running
-            ? 'Scraping, enriching, and scoring — this panel updates live. You can leave; the run continues server-side.'
-            : 'Done. Open Search and filter to Organic to browse the formats, sorted by virality.'}
-        </p>
+        <div className="flex flex-col gap-2">
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-semibold tabular-nums text-[#9d1555]">{ready}</span>
+            <span className="text-sm font-medium">ready to search</span>
+          </div>
+          <ProgressBar pct={pct} />
+          <span className="text-xs text-muted-foreground">of {collected} pulled</span>
+          {reasons.length > 0 && (
+            <p className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
+              {reasons.map((r) => (
+                <span key={r.label} className={r.cls}>
+                  {r.text}
+                </span>
+              ))}
+            </p>
+          )}
+        </div>
       )}
+
+      {interrupted && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
+          {processing} item{processing === 1 ? '' : 's'} pulled but not yet made searchable — the job was
+          killed before finishing. The server re-runs the leftover work when it next restarts; this panel
+          will update once it does.
+        </div>
+      )}
+
+      {creditError && (
+        <div className="flex flex-col gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-500">
+          <span className="flex items-center gap-1.5 font-medium">
+            <Wallet className="size-3.5" /> {creditError}
+          </span>
+          <Button
+            onClick={onRerun}
+            disabled={rerunDisabled}
+            size="sm"
+            variant="outline"
+            className="h-7 self-start gap-1.5 border-amber-500/50 text-amber-700 hover:bg-amber-500/10 dark:text-amber-500"
+          >
+            {rerunDisabled ? <Loader2 className="size-3.5 animate-spin" /> : <Wallet className="size-3.5" />}
+            Refill &amp; re-run
+          </Button>
+        </div>
+      )}
+
+      <RunFooter runId={run.run_id} stats={stats} createdAt={run.created_at} />
     </div>
   )
 }
 
-function Stat({ label, value, highlight }: { label: string; value: number | undefined; highlight?: boolean }) {
-  return (
-    <div className="rounded-lg bg-muted/50 p-3">
-      <div className={highlight ? 'text-2xl font-semibold text-[#9d1555]' : 'text-2xl font-semibold'}>
-        {value ?? '—'}
-      </div>
-      <div className="text-xs text-muted-foreground">{label}</div>
-    </div>
-  )
-}
-
-/** Two-phase truth of a discovery run: items are scraped first, then enriched (made searchable).
- * Scraped ticks once items land; Enriched stays a spinner while anything is still processing and
- * only ticks when enrichment is genuinely complete (nothing left in processing). */
-function PhaseStatus({ stats, running }: { stats: ScrapeStats | undefined; running: boolean }) {
-  const collected = stats?.tiktok_scraped ?? 0
-  const processing = stats?.tiktok_processing ?? 0
-  const ready = stats?.tiktok_searchable ?? 0
-
-  const collectState = collected > 0 ? 'done' : running ? 'active' : 'pending'
-  // "Ready" ticks only when nothing is left loading; spins while videos are still being made
-  // ready; stays pending until something has been collected.
-  const readyState = collected === 0 ? 'pending' : processing > 0 ? 'active' : 'done'
-
-  return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
-      <Phase
-        label="Collected"
-        state={collectState}
-        detail={collected > 0 ? String(collected) : collectState === 'active' ? '…' : undefined}
-      />
-      <span className="text-muted-foreground/40">→</span>
-      <Phase label="Ready to search" state={readyState} detail={collected > 0 ? String(ready) : undefined} />
-    </div>
-  )
-}
-
-function Phase({
-  label,
-  state,
-  detail,
-}: {
-  label: string
-  state: 'done' | 'active' | 'pending'
-  detail?: string
-}) {
-  const icon =
-    state === 'done' ? (
-      <CheckCircle2 className="size-4 text-emerald-500" />
-    ) : state === 'active' ? (
-      <Loader2 className="size-4 animate-spin text-[#9d1555]" />
-    ) : (
-      <Circle className="size-4 text-muted-foreground/40" />
-    )
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      {icon}
-      <span className={state === 'pending' ? 'text-muted-foreground' : 'font-medium text-foreground'}>
-        {label}
+/** Where the run stands, in one glance: spinning while pulling, amber if interrupted, green once done. */
+function StatusPill({ state }: { state: 'running' | 'error' | 'interrupted' | 'done' }) {
+  if (state === 'running') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-[#9d1555]/10 px-2.5 py-0.5 text-xs font-medium text-[#9d1555]">
+        <Loader2 className="size-3.5 animate-spin" /> In progress
       </span>
-      {detail && <span className="tabular-nums text-muted-foreground">{detail}</span>}
+    )
+  }
+  if (state === 'error') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-500">
+        <Wallet className="size-3.5" /> Out of credits
+      </span>
+    )
+  }
+  if (state === 'interrupted') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-700">
+        <AlertTriangle className="size-3.5" /> Interrupted
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-600">
+      <CheckCircle2 className="size-3.5" /> Done
     </span>
   )
 }
 
-/** Per-run cost history, newest-first, each row with its date/time, item count and total cost
- * (Apify + enrichment + embeddings, summed). Cost is an estimate while running → exact once the
- * run finishes. Refetches whenever the run's state changes so a just-finished run's real cost
- * lands. Mirrors the campaigns Scrapes & cost panel, scoped to discovery's single platform. */
-function ScrapeHistory({ runId, stats }: { runId: string; stats: ScrapeStats | undefined }) {
+/** One muted line: when the pull ran and what it cost (Apify + enrichment + embeddings, summed).
+ * Cost is an estimate while running / unreconciled (marked "~"), exact once the run settles.
+ * Refetches whenever the run's state changes so a just-finished run's real cost lands. */
+function RunFooter({
+  runId,
+  stats,
+  createdAt,
+}: {
+  runId: string
+  stats: ScrapeStats | undefined
+  createdAt: string | null
+}) {
   const [data, setData] = useState<ScrapeEventsResponse | null>(null)
   const refreshKey = [stats?.running.join(','), stats?.tiktok_last_scraped].join('|')
   useEffect(() => {
@@ -322,83 +354,12 @@ function ScrapeHistory({ runId, stats }: { runId: string; stats: ScrapeStats | u
       .catch(() => {})
   }, [runId, refreshKey])
 
-  if (!data || data.events.length === 0) {
-    return (
-      <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
-        No runs yet — each discovery run and its cost appears here.
-      </div>
-    )
-  }
-  const pending = data.events.some((e) => e.cost_kind === 'estimate')
+  const when = stats?.tiktok_last_scraped ?? createdAt
+  const estimate = !!data?.events.some((e) => e.cost_kind === 'estimate')
+  const cost = data ? `${estimate ? '~' : ''}${money(data.total_spent_usd)}` : '—'
   return (
-    <div className="flex flex-col gap-1.5 rounded-md bg-muted/50 p-3 text-xs">
-      <div className="font-medium text-muted-foreground">Runs &amp; cost</div>
-      {data.events.map((e) => {
-        const estimate = e.cost_kind === 'estimate'
-        return (
-          <div key={e.id} className="flex items-baseline justify-between gap-2">
-            <span className="text-foreground">
-              {e.platform === DISCOVERY_PLATFORM ? 'TikTok trends' : e.platform}
-              <span className="text-muted-foreground">
-                {' · '}
-                {dateTime(e.when)}
-                {e.items != null ? ` · ${e.items} items` : ''}
-              </span>
-            </span>
-            <span className="shrink-0 tabular-nums">
-              {estimate ? (
-                <span className="text-muted-foreground/70">
-                  ≈ {money(e.cost_usd)}
-                  {e.status === 'running' ? ' · running…' : ''}
-                </span>
-              ) : (
-                <span className="text-foreground">{money(e.cost_usd)}</span>
-              )}
-            </span>
-          </div>
-        )
-      })}
-      <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-border pt-1.5 font-medium">
-        <span className="text-foreground">Total spent{pending ? ' (so far)' : ''}</span>
-        <span className="shrink-0 tabular-nums text-foreground">{money(data.total_spent_usd)}</span>
-      </div>
-    </div>
-  )
-}
-
-/** Plain-English summary of a discovery pull: how many videos we collected vs how many are ready
- * to search, with a one-line reason for anything in between (still loading / couldn't be loaded /
- * weren't videos). Deliberately avoids jargon ("scraped", "enriched") and internal denominators. */
-function DiscoveryFunnel({ stats }: { stats: ScrapeStats | undefined }) {
-  const collected = stats?.tiktok_scraped ?? 0
-  if (collected === 0) {
-    return (
-      <div className="rounded-md bg-muted/50 p-3 text-center text-xs text-muted-foreground">
-        Nothing collected yet — counts appear here after a run.
-      </div>
-    )
-  }
-  const ready = stats?.tiktok_searchable ?? 0
-  const reasons = enrichmentReasons(stats, 'tiktok')
-
-  return (
-    <div className="flex flex-col gap-2.5">
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-1 text-center">
-        <Stat label="Collected" value={collected} />
-        <span className="text-muted-foreground/40">→</span>
-        <Stat label="Ready to search" value={ready} highlight />
-      </div>
-      {reasons.length === 0 ? (
-        <p className="text-center text-[11px] text-emerald-600 dark:text-emerald-500">✓ all ready to search</p>
-      ) : (
-        <p className="flex flex-wrap justify-center gap-x-3 gap-y-0.5 text-[11px]">
-          {reasons.map((r) => (
-            <span key={r.label} className={r.cls}>
-              {r.text}
-            </span>
-          ))}
-        </p>
-      )}
+    <div className="border-t border-border pt-3 text-xs text-muted-foreground">
+      Pulled {dateTime(when)} · cost {cost}
     </div>
   )
 }
