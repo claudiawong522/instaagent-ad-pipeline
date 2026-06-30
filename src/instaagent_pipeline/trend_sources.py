@@ -41,6 +41,7 @@ DEFAULT_TREND_SOURCES: list[dict[str, str]] = [
 # profile, or hashtag page, which TikTok also links and we must not treat as examples).
 VIDEO_URL_PATTERNS = (
     re.compile(r"tiktok\.com/@[\w.\-]+/video/\d+", re.I),  # canonical TikTok post
+    re.compile(r"tiktok\.com/share/video/\d+", re.I),      # share-link form (JS-rendered embeds)
     re.compile(r"(?:vm|vt)\.tiktok\.com/[\w]+", re.I),     # TikTok short link
     re.compile(r"tiktok\.com/t/[\w]+", re.I),              # TikTok short link (alt)
     re.compile(r"instagram\.com/(?:reel|reels|p)/[\w\-]+", re.I),
@@ -125,17 +126,11 @@ def html_to_text(html: str) -> tuple[str, list[str]]:
     return text, candidates
 
 
-# Apify headless-browser actor used to render JS-only trend pages (render:"js"). We just
-# need the final DOM HTML — its pageFunction waits for the client-side embeds to inject
-# their TikTok links, then returns page.content() for our normal html_to_text harvest.
-_RENDER_ACTOR_ID = "apify~puppeteer-scraper"
-_RENDER_PAGE_FUNCTION = (
-    "async function pageFunction(context) {"
-    " const { page, request } = context;"
-    " await new Promise(r => setTimeout(r, 7000));"
-    " return { url: request.url, html: await page.content() };"
-    " }"
-)
+# Apify headless-browser actor used to render JS-only trend pages (render:"js"). These pages
+# inject their TikTok example links client-side, so we need the post-JS DOM. We use the
+# website-content-crawler (no full-permission approval required) with htmlTransformer:"none"
+# so it returns the raw rendered HTML — readability cleaning would strip the embeds we harvest.
+_RENDER_ACTOR_ID = "apify~website-content-crawler"
 
 
 def _fetch_static_html(url: str, timeout: int) -> str:
@@ -149,7 +144,7 @@ def _fetch_static_html(url: str, timeout: int) -> str:
 
 
 def _fetch_rendered_html(url: str, apify_api_key: str | None) -> str:
-    """Render a JS-only page in Apify's headless browser and return its final HTML."""
+    """Render a JS-only page in Apify's headless browser and return its raw rendered HTML."""
     if not apify_api_key:
         raise RuntimeError(f"APIFY_API_KEY is required to render JS trend page {url}.")
     # Imported here (not at module top) to avoid a heavier import chain for static sources.
@@ -160,9 +155,13 @@ def _fetch_rendered_html(url: str, apify_api_key: str | None) -> str:
         actor_id=_RENDER_ACTOR_ID,
         actor_input={
             "startUrls": [{"url": url}],
-            "pageFunction": _RENDER_PAGE_FUNCTION,
-            "proxyConfiguration": {"useApifyProxy": True},
-            "maxRequestsPerCrawl": 1,
+            "crawlerType": "playwright:firefox",
+            "maxCrawlPages": 1,
+            "maxCrawlDepth": 0,
+            "saveHtml": True,
+            "htmlTransformer": "none",
+            "waitForSelectorOnLoadTimeoutSecs": 15,
+            "maxScrollHeightPixels": 50000,
         },
         target_count=1,
     )
@@ -242,8 +241,10 @@ Candidate video URLs (only assign URLs from this list):
 {candidate_urls}
 """.strip()
 
-# Cap the page text sent to the LLM (trend pages are long; the format list is near the top).
-_MAX_PAGE_CHARS = 24000
+# Cap the page text sent to the LLM. JS-rendered pages (e.g. newengen) inline every example
+# embed, so their text runs ~40k chars with formats spread top-to-bottom — a tight cap would
+# drop the lower formats' videos. ~60k chars (~15k tokens) fits these pages with headroom.
+_MAX_PAGE_CHARS = 60000
 
 
 def parse_trend_formats(config: Config, issue: TrendIssue, *, timeout: int = 120) -> list[dict[str, Any]]:

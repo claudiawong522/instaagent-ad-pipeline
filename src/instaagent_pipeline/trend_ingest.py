@@ -176,7 +176,8 @@ def ingest_trends(
                     vid = _tiktok_video_id(video_url) if _is_tiktok(video_url) else None
                     if vid:
                         vid_to_format[vid] = format_id
-                        tiktok_urls.append(video_url)
+                        # Drop ?referer_url=… noise; the scraper resolves the bare post/share URL.
+                        tiktok_urls.append(video_url.split("?", 1)[0])
                     else:
                         sr.videos_skipped += 1
 
