@@ -23,6 +23,26 @@ const TYPE_OPTIONS: { label: string; value: ItemType | null }[] = [
   { label: 'Organic', value: 'ugc_item' },
 ]
 
+// Platform options are scoped to the type filter: organic lives on TikTok/Instagram (Reels),
+// paid ads on Facebook/Meta. 'All' offers every platform. Keyed by itemType ('all' when null).
+const PLATFORM_OPTIONS: Record<'all' | 'paid_ad' | 'ugc_item', { value: string; label: string }[]> = {
+  ugc_item: [
+    { value: 'tiktok', label: 'TikTok' },
+    { value: 'instagram', label: 'Instagram (Reels)' },
+  ],
+  paid_ad: [
+    { value: 'facebook', label: 'Facebook' },
+    { value: 'instagram', label: 'Instagram' },
+    { value: 'meta', label: 'Meta' },
+  ],
+  all: [
+    { value: 'tiktok', label: 'TikTok' },
+    { value: 'instagram', label: 'Instagram' },
+    { value: 'facebook', label: 'Facebook' },
+    { value: 'meta', label: 'Meta' },
+  ],
+}
+
 // Enum values mirror src/instaagent_pipeline/audience_enrichment.py (AGE_BRACKETS,
 // PRICE_TIERS, CONTENT_FORMATS). Languages are free-form on the backend; these are the common set.
 const AGE_BRACKETS = ['13-17', '18-24', '25-34', '35-44', '45-54', '55+']
@@ -123,6 +143,15 @@ export default function SearchPage() {
     }
   }
 
+  // Switching type re-scopes the platform options; drop a selection that no longer
+  // belongs (e.g. TikTok picked under Organic, then switching to Paid ads).
+  function selectType(value: ItemType | null) {
+    setItemType(value)
+    if (!PLATFORM_OPTIONS[value ?? 'all'].some((o) => o.value === platform)) {
+      setPlatform('')
+    }
+  }
+
   function clearFilters() {
     setItemType(null)
     setPlatform('')
@@ -192,7 +221,7 @@ export default function SearchPage() {
                 <button
                   key={opt.label}
                   type="button"
-                  onClick={() => setItemType(opt.value)}
+                  onClick={() => selectType(opt.value)}
                   className={cn(
                     'inline-flex items-center px-3 py-1.5 text-xs font-medium transition-colors',
                     itemType === opt.value
@@ -261,10 +290,11 @@ export default function SearchPage() {
               className="h-8 rounded-md border border-border bg-background px-2 text-xs"
             >
               <option value="">Any platform</option>
-              <option value="tiktok">TikTok</option>
-              <option value="instagram">Instagram</option>
-              <option value="facebook">Facebook</option>
-              <option value="meta">Meta</option>
+              {PLATFORM_OPTIONS[itemType ?? 'all'].map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
             </select>
           )}
 
