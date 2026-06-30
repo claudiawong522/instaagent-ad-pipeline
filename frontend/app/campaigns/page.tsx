@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Plus, Facebook, Instagram, Music2, ChevronDown, ChevronUp, AlertTriangle, Pencil, Check, Clock } from 'lucide-react'
+import { Loader2, Plus, Facebook, Instagram, Music2, ChevronDown, ChevronUp, AlertTriangle, Pencil, Check, Clock, Wallet } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -170,6 +170,9 @@ function emptyStats(runId: string): ScrapeStats {
     facebook_scrape_failed: false,
     instagram_scrape_failed: false,
     tiktok_scrape_failed: false,
+    facebook_scrape_error: null,
+    instagram_scrape_error: null,
+    tiktok_scrape_error: null,
     running: [],
   }
 }
@@ -194,6 +197,7 @@ function pbreak(stats: ScrapeStats | undefined, prefix: PlatformPrefix) {
 type NumericStatKey = 'facebook_ads' | 'instagram_reels' | 'tiktoks'
 type LastScrapedKey = 'facebook_last_scraped' | 'instagram_last_scraped' | 'tiktok_last_scraped'
 type FailedKey = 'facebook_scrape_failed' | 'instagram_scrape_failed' | 'tiktok_scrape_failed'
+type ErrorKey = 'facebook_scrape_error' | 'instagram_scrape_error' | 'tiktok_scrape_error'
 const PLATFORMS: {
   key: ScrapePlatform
   label: string
@@ -201,10 +205,11 @@ const PLATFORMS: {
   statKey: NumericStatKey
   lastKey: LastScrapedKey
   failedKey: FailedKey
+  errorKey: ErrorKey
 }[] = [
-  { key: 'facebook', label: 'Facebook ads', icon: Facebook, statKey: 'facebook_ads', lastKey: 'facebook_last_scraped', failedKey: 'facebook_scrape_failed' },
-  { key: 'instagram', label: 'Instagram reels', icon: Instagram, statKey: 'instagram_reels', lastKey: 'instagram_last_scraped', failedKey: 'instagram_scrape_failed' },
-  { key: 'tiktok', label: 'TikToks', icon: Music2, statKey: 'tiktoks', lastKey: 'tiktok_last_scraped', failedKey: 'tiktok_scrape_failed' },
+  { key: 'facebook', label: 'Facebook ads', icon: Facebook, statKey: 'facebook_ads', lastKey: 'facebook_last_scraped', failedKey: 'facebook_scrape_failed', errorKey: 'facebook_scrape_error' },
+  { key: 'instagram', label: 'Instagram reels', icon: Instagram, statKey: 'instagram_reels', lastKey: 'instagram_last_scraped', failedKey: 'instagram_scrape_failed', errorKey: 'instagram_scrape_error' },
+  { key: 'tiktok', label: 'TikToks', icon: Music2, statKey: 'tiktoks', lastKey: 'tiktok_last_scraped', failedKey: 'tiktok_scrape_failed', errorKey: 'tiktok_scrape_error' },
 ]
 
 function CampaignCard({
@@ -307,6 +312,7 @@ function CampaignCard({
             lastScraped={stats?.[p.lastKey] ?? null}
             running={stats?.running.includes(p.key) ?? false}
             failed={stats?.[p.failedKey] ?? false}
+            error={stats?.[p.errorKey] ?? null}
             defaultTarget={(p.key === 'facebook' ? c.target_paid_count : p.key === 'tiktok' ? c.target_tiktok_count : c.target_ugc_count) ?? 50}
             onScrape={onScrape}
           />
@@ -325,6 +331,7 @@ function PlatformTile({
   lastScraped,
   running,
   failed,
+  error,
   defaultTarget,
   onScrape,
 }: {
@@ -336,6 +343,7 @@ function PlatformTile({
   lastScraped: string | null
   running: boolean
   failed: boolean // last finished scrape attempt errored out
+  error: string | null // out-of-credits message for the latest scrape (refill & re-run)
   defaultTarget: number
   onScrape: (runId: string, platform: ScrapePlatform, targetCount: number, estimatedCost: number) => void
 }) {
@@ -418,12 +426,23 @@ function PlatformTile({
         </span>
       )}
       <span className="text-[10px] text-muted-foreground/80">
-        {running ? 'scraping now' : failed ? 'last scrape failed' : last ? `last ${last}` : 'not yet'}
+        {running ? 'scraping now' : error ? 'out of credits' : failed ? 'last scrape failed' : last ? `last ${last}` : 'not yet'}
       </span>
       {running ? (
         <Button type="button" size="sm" variant="outline" disabled className="h-7 w-full gap-1 px-2 text-xs">
           <Loader2 className="size-3 animate-spin" /> Scraping…
         </Button>
+      ) : error ? (
+        // Out of credits: tell the user to refill, then the same button re-runs the scrape.
+        <div className="flex w-full flex-col items-center gap-1">
+          <span className="flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-500">
+            <Wallet className="size-3" /> Out of credits
+          </span>
+          <span className="text-[10px] leading-tight text-muted-foreground">{error}</span>
+          <Button type="button" size="sm" variant="outline" onClick={openConfirm} className="h-7 w-full gap-1 border-amber-500/50 px-2 text-xs text-amber-700 hover:bg-amber-500/10 dark:text-amber-500">
+            <Wallet className="size-3" /> Refill &amp; re-run
+          </Button>
+        </div>
       ) : failed ? (
         <div className="flex w-full flex-col items-center gap-1">
           <span className="flex items-center gap-1 text-[11px] font-medium text-destructive">
