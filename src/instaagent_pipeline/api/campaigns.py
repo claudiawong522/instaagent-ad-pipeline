@@ -203,14 +203,19 @@ def update_campaign(
 
 
 def _breakdown(rows: list[dict[str, Any]], video_key: str) -> dict[str, Any]:
-    """Bucket a platform's rows by enrichment outcome so the UI can show how many
-    scraped videos became searchable vs expired/failed. `total` is the searchable
-    universe (rows that have a video to enrich) — rows with no video URL are excluded
-    since they can never become searchable. `processing` = has a video but not yet
-    enriched (in-flight or queued)."""
-    out = {"total": 0, "searchable": 0, "expired": 0, "failed": 0, "processing": 0}
+    """Bucket a platform's rows into the scrape→attempt→searchable funnel.
+
+    `scraped`  = every row ingested (top of funnel).
+    `no_video` = scraped but has no video URL → can never be enriched (skipped).
+    `total`    = the searchable universe (rows that have a video to enrich).
+    `processing` = has a video but no enrichment verdict yet (in-flight / not attempted).
+    `searchable` / `expired` / `failed` = the three terminal enrichment verdicts.
+
+    Attempted (searchable + expired + failed) is derived by the UI, not stored here."""
+    out = {"scraped": 0, "no_video": 0, "total": 0, "searchable": 0, "expired": 0, "failed": 0, "processing": 0}
     last: str | None = None
     for row in rows:
+        out["scraped"] += 1
         saved = row.get("saved_to_supabase_at")
         if saved and (last is None or saved > last):
             last = saved
@@ -224,7 +229,8 @@ def _breakdown(rows: list[dict[str, Any]], video_key: str) -> dict[str, Any]:
         elif row.get(video_key):
             out["processing"] += 1
         else:
-            continue  # no video to enrich — not part of the searchable universe
+            out["no_video"] += 1  # no video to enrich — never part of the searchable universe
+            continue
         out["total"] += 1
     out["last_scraped"] = last
     return out
@@ -237,6 +243,8 @@ def _platform_stats(prefix: str, b: dict[str, Any]) -> dict[str, Any]:
         f"{prefix}_failed": b["failed"],
         f"{prefix}_processing": b["processing"],
         f"{prefix}_total": b["total"],
+        f"{prefix}_scraped": b["scraped"],
+        f"{prefix}_no_video": b["no_video"],
         f"{prefix}_last_scraped": b["last_scraped"],
     }
 

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Plus, Facebook, Instagram, Music2, ChevronDown, ChevronUp, AlertTriangle, Pencil, Check } from 'lucide-react'
+import { Loader2, Plus, Facebook, Instagram, Music2, ChevronDown, ChevronUp, AlertTriangle, Pencil, Check, Clock } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -148,18 +148,24 @@ function emptyStats(runId: string): ScrapeStats {
     facebook_failed: 0,
     facebook_processing: 0,
     facebook_total: 0,
+    facebook_scraped: 0,
+    facebook_no_video: 0,
     facebook_last_scraped: null,
     instagram_searchable: 0,
     instagram_expired: 0,
     instagram_failed: 0,
     instagram_processing: 0,
     instagram_total: 0,
+    instagram_scraped: 0,
+    instagram_no_video: 0,
     instagram_last_scraped: null,
     tiktok_searchable: 0,
     tiktok_expired: 0,
     tiktok_failed: 0,
     tiktok_processing: 0,
     tiktok_total: 0,
+    tiktok_scraped: 0,
+    tiktok_no_video: 0,
     tiktok_last_scraped: null,
     facebook_scrape_failed: false,
     instagram_scrape_failed: false,
@@ -180,6 +186,8 @@ function pbreak(stats: ScrapeStats | undefined, prefix: PlatformPrefix) {
     failed: g('failed'),
     processing: g('processing'),
     total: g('total'),
+    scraped: g('scraped'),
+    no_video: g('no_video'),
   }
 }
 
@@ -295,6 +303,7 @@ function CampaignCard({
             platform={p}
             count={stats?.[p.statKey] ?? 0}
             total={pbreak(stats, p.key).total}
+            processing={pbreak(stats, p.key).processing}
             lastScraped={stats?.[p.lastKey] ?? null}
             running={stats?.running.includes(p.key) ?? false}
             failed={stats?.[p.failedKey] ?? false}
@@ -312,6 +321,7 @@ function PlatformTile({
   platform: { key, label, icon: Icon },
   count,
   total,
+  processing,
   lastScraped,
   running,
   failed,
@@ -322,6 +332,7 @@ function PlatformTile({
   platform: (typeof PLATFORMS)[number]
   count: number // searchable videos (the headline number)
   total: number // all scraped videos (searchable + expired + failed + processing)
+  processing: number // scraped but not yet enriched/embedded (not searchable yet)
   lastScraped: string | null
   running: boolean
   failed: boolean // last finished scrape attempt errored out
@@ -370,6 +381,10 @@ function PlatformTile({
           <AlertTriangle className="mt-px size-3 shrink-0" />
           estimated cost{scraped ? '; may re-fetch dupes' : ''}
         </span>
+        <span className="text-[10px] leading-tight text-muted-foreground/80">
+          Split evenly across the campaign’s keywords, so the final count can land a bit under your
+          number (e.g. 50 → ~48). Thin keywords or videoless results lower it further.
+        </span>
         <div className="flex w-full gap-1">
           <Button type="button" size="sm" variant="ghost" onClick={() => setConfirming(false)} className="h-6 flex-1 px-1 text-xs">
             Cancel
@@ -388,6 +403,12 @@ function PlatformTile({
       <span className="text-[11px] text-muted-foreground">{label} searchable</span>
       {scraped && (
         <span className="text-[10px] text-muted-foreground/70">of {total} scraped</span>
+      )}
+      {processing > 0 && (
+        <span className="flex items-center gap-1 text-[10px] leading-tight text-sky-600 dark:text-sky-400">
+          {running ? <Loader2 className="size-3 animate-spin" /> : <Clock className="size-3" />}
+          {processing} enriching{running ? '…' : ' (resumes on next scrape)'}
+        </span>
       )}
       <span className="text-[10px] text-muted-foreground/80">
         {running ? 'scraping now' : failed ? 'last scrape failed' : last ? `last ${last}` : 'not yet'}
@@ -520,29 +541,36 @@ function EnrichmentBreakdown({ stats }: { stats: ScrapeStats | undefined }) {
   )
 }
 
+/** One platform's scrape → attempt → searchable funnel, compact (inline numbers + loss line) so
+ * three platforms stack cleanly. Attempted = searchable + expired + failed (verdict reached);
+ * processing / no video haven't been (or can't be) attempted. Mirrors the Discover funnel. */
 function SearchableRow({ label, b }: { label: string; b: ReturnType<typeof pbreak> }) {
-  const pct = b.total > 0 ? Math.round((b.searchable / b.total) * 100) : 0
-  const clean = b.expired === 0 && b.failed === 0 && b.processing === 0
+  const attempted = b.searchable + b.expired + b.failed
+  const losses = [
+    { label: 'no video', n: b.no_video, cls: 'text-muted-foreground' },
+    { label: 'processing', n: b.processing, cls: 'text-muted-foreground' },
+    { label: 'expired', n: b.expired, cls: 'text-amber-600 dark:text-amber-500' },
+    { label: 'failed', n: b.failed, cls: 'text-red-600 dark:text-red-500' },
+  ].filter((l) => l.n > 0)
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between gap-2">
         <span className="text-foreground">{label}</span>
         <span className="tabular-nums text-muted-foreground">
-          {b.searchable} of {b.total} searchable
+          {b.scraped} scraped <span className="text-muted-foreground/40">→</span> {attempted} attempted{' '}
+          <span className="text-muted-foreground/40">→</span>{' '}
+          <span className="font-medium text-foreground">{b.searchable} searchable</span>
         </span>
       </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
-      </div>
-      {clean ? (
-        <span className="text-[11px] text-emerald-600 dark:text-emerald-500">✓ all searchable</span>
+      {losses.length === 0 ? (
+        <span className="text-[11px] text-emerald-600 dark:text-emerald-500">✓ every scraped video is searchable</span>
       ) : (
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
-          {b.expired > 0 && (
-            <span className="text-amber-600 dark:text-amber-500">⚠ {b.expired} expired URL</span>
-          )}
-          {b.failed > 0 && <span className="text-red-600 dark:text-red-500">✕ {b.failed} failed</span>}
-          {b.processing > 0 && <span className="text-muted-foreground">◷ {b.processing} processing</span>}
+          {losses.map((l) => (
+            <span key={l.label} className={l.cls}>
+              {l.n} {l.label}
+            </span>
+          ))}
         </div>
       )}
     </div>

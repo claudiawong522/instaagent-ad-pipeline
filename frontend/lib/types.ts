@@ -145,23 +145,31 @@ export interface ScrapeStats {
   facebook_ads: number
   instagram_reels: number
   tiktoks: number
+  // Funnel per platform: scraped (every row) ≥ total (has a video) ≥ attempted
+  // (searchable+expired+failed, derived in the UI) ≥ searchable. no_video = scraped − total.
   facebook_searchable: number
   facebook_expired: number
   facebook_failed: number
   facebook_processing: number
   facebook_total: number
+  facebook_scraped: number
+  facebook_no_video: number
   facebook_last_scraped: string | null
   instagram_searchable: number
   instagram_expired: number
   instagram_failed: number
   instagram_processing: number
   instagram_total: number
+  instagram_scraped: number
+  instagram_no_video: number
   instagram_last_scraped: string | null
   tiktok_searchable: number
   tiktok_expired: number
   tiktok_failed: number
   tiktok_processing: number
   tiktok_total: number
+  tiktok_scraped: number
+  tiktok_no_video: number
   tiktok_last_scraped: string | null
   // Most recent finished scrape attempt for the platform ended in error (e.g. a network drop
   // mid-write). A platform mid-scrape is never flagged failed.
