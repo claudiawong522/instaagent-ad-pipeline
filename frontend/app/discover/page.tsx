@@ -259,28 +259,24 @@ function Stat({ label, value, highlight }: { label: string; value: number | unde
  * Scraped ticks once items land; Enriched stays a spinner while anything is still processing and
  * only ticks when enrichment is genuinely complete (nothing left in processing). */
 function PhaseStatus({ stats, running }: { stats: ScrapeStats | undefined; running: boolean }) {
-  const scraped = stats?.tiktok_total ?? 0
+  const collected = stats?.tiktok_scraped ?? 0
   const processing = stats?.tiktok_processing ?? 0
-  const searchable = stats?.tiktok_searchable ?? 0
+  const ready = stats?.tiktok_searchable ?? 0
 
-  const scrapeState = scraped > 0 ? 'done' : running ? 'active' : 'pending'
-  // Enriched ticks only when nothing is left processing; spins while items are still being
-  // enriched; stays pending until the scrape has produced something to enrich.
-  const enrichState = scraped === 0 ? 'pending' : processing > 0 ? 'active' : 'done'
+  const collectState = collected > 0 ? 'done' : running ? 'active' : 'pending'
+  // "Ready" ticks only when nothing is left loading; spins while videos are still being made
+  // ready; stays pending until something has been collected.
+  const readyState = collected === 0 ? 'pending' : processing > 0 ? 'active' : 'done'
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
       <Phase
-        label="Scraped"
-        state={scrapeState}
-        detail={scraped > 0 ? String(scraped) : scrapeState === 'active' ? '…' : undefined}
+        label="Collected"
+        state={collectState}
+        detail={collected > 0 ? String(collected) : collectState === 'active' ? '…' : undefined}
       />
       <span className="text-muted-foreground/40">→</span>
-      <Phase
-        label="Enriched"
-        state={enrichState}
-        detail={scraped > 0 ? `${searchable}/${scraped}` : undefined}
-      />
+      <Phase label="Ready to search" state={readyState} detail={collected > 0 ? String(ready) : undefined} />
     </div>
   )
 }
@@ -370,56 +366,51 @@ function ScrapeHistory({ runId, stats }: { runId: string; stats: ScrapeStats | u
   )
 }
 
-/** The scrape → attempt → searchable funnel for a discovery pull: three headline numbers in
- * funnel order (each ≥ the next), with a one-line breakdown of where the gaps go. `Attempted` is
- * the videos enrichment reached a verdict on (searchable + expired + failed); `processing` and
- * `no video` haven't been (or can't be) attempted. Driven straight off the tiktok_* stats. */
+/** Plain-English summary of a discovery pull: how many videos we collected vs how many are ready
+ * to search, with a one-line reason for anything in between (still loading / couldn't be loaded /
+ * weren't videos). Deliberately avoids jargon ("scraped", "enriched") and internal denominators. */
 function DiscoveryFunnel({ stats }: { stats: ScrapeStats | undefined }) {
-  const scraped = stats?.tiktok_scraped ?? 0
-  if (scraped === 0) {
+  const collected = stats?.tiktok_scraped ?? 0
+  if (collected === 0) {
     return (
       <div className="rounded-md bg-muted/50 p-3 text-center text-xs text-muted-foreground">
-        Nothing scraped yet — the searchable funnel appears here after a run.
+        Nothing collected yet — counts appear here after a run.
       </div>
     )
   }
-  const searchable = stats?.tiktok_searchable ?? 0
-  const expired = stats?.tiktok_expired ?? 0
-  const failed = stats?.tiktok_failed ?? 0
-  const processing = stats?.tiktok_processing ?? 0
-  const noVideo = stats?.tiktok_no_video ?? 0
-  const attempted = searchable + expired + failed
-  // Order matches the funnel: gaps between Scraped→Attempted first (no video, processing), then
-  // the Attempted→Searchable losses (expired, failed). Only nonzero buckets are shown.
-  const losses = [
-    { label: 'no video', n: noVideo, cls: 'text-muted-foreground' },
-    { label: 'processing', n: processing, cls: 'text-muted-foreground' },
-    { label: 'expired', n: expired, cls: 'text-amber-600 dark:text-amber-500' },
-    { label: 'failed', n: failed, cls: 'text-red-600 dark:text-red-500' },
-  ].filter((l) => l.n > 0)
+  const ready = stats?.tiktok_searchable ?? 0
+  const reasons = enrichmentReasons(stats, 'tiktok')
 
   return (
     <div className="flex flex-col gap-2.5">
-      <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-1 text-center">
-        <Stat label="Scraped" value={scraped} />
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-1 text-center">
+        <Stat label="Collected" value={collected} />
         <span className="text-muted-foreground/40">→</span>
-        <Stat label="Attempted" value={attempted} />
-        <span className="text-muted-foreground/40">→</span>
-        <Stat label="Searchable" value={searchable} highlight />
+        <Stat label="Ready to search" value={ready} highlight />
       </div>
-      {losses.length === 0 ? (
-        <p className="text-center text-[11px] text-emerald-600 dark:text-emerald-500">
-          ✓ every scraped video is searchable
-        </p>
+      {reasons.length === 0 ? (
+        <p className="text-center text-[11px] text-emerald-600 dark:text-emerald-500">✓ all ready to search</p>
       ) : (
         <p className="flex flex-wrap justify-center gap-x-3 gap-y-0.5 text-[11px]">
-          {losses.map((l) => (
-            <span key={l.label} className={l.cls}>
-              {l.n} {l.label}
+          {reasons.map((r) => (
+            <span key={r.label} className={r.cls}>
+              {r.text}
             </span>
           ))}
         </p>
       )}
     </div>
   )
+}
+
+/** Plain-English reasons a collected video isn't ready to search yet, nonzero only. Shared by the
+ * discovery and (via the same field names) campaign summaries so the wording stays identical. */
+function enrichmentReasons(stats: ScrapeStats | undefined, prefix: 'tiktok' | 'facebook' | 'instagram') {
+  const g = (k: string) => (stats ? (stats as unknown as Record<string, number>)[`${prefix}_${k}`] ?? 0 : 0)
+  return [
+    { label: 'loading', n: g('processing'), text: `${g('processing')} still loading`, cls: 'text-muted-foreground' },
+    { label: 'expired', n: g('expired'), text: `${g('expired')} couldn't be loaded (removed)`, cls: 'text-amber-600 dark:text-amber-500' },
+    { label: 'failed', n: g('failed'), text: `${g('failed')} couldn't be processed`, cls: 'text-red-600 dark:text-red-500' },
+    { label: 'novideo', n: g('no_video'), text: `${g('no_video')} weren't videos`, cls: 'text-muted-foreground' },
+  ].filter((r) => r.n > 0)
 }

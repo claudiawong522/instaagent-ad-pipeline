@@ -519,21 +519,21 @@ function ScrapeHistory({ runId, stats }: { runId: string; stats: ScrapeStats | u
   )
 }
 
-/** "X of Y searchable" per platform, with expired/failed/processing breakdown. Shown
- * inside View inputs so you can see how many scraped videos OpenRouter could actually
- * ingest (expired Apify URLs never become searchable). */
+/** Per-platform "collected → ready to search" summary with a plain-English reason for any gap.
+ * Shown inside View inputs so you can see how many collected videos are actually usable (videos
+ * whose Apify URL expired before enrichment can never become ready). */
 function EnrichmentBreakdown({ stats }: { stats: ScrapeStats | undefined }) {
   const rows = PLATFORMS.map((p) => ({ p, b: pbreak(stats, p.key) })).filter((r) => r.b.total > 0)
   if (rows.length === 0) {
     return (
       <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
-        No videos scraped yet — searchable counts appear here after a scrape.
+        Nothing collected yet — counts appear here after a scrape.
       </div>
     )
   }
   return (
     <div className="flex flex-col gap-2.5 rounded-md bg-muted/50 p-3 text-xs">
-      <div className="font-medium text-muted-foreground">Searchable videos</div>
+      <div className="font-medium text-muted-foreground">Ready to search</div>
       {rows.map(({ p, b }) => (
         <SearchableRow key={p.key} label={p.label} b={b} />
       ))}
@@ -541,34 +541,32 @@ function EnrichmentBreakdown({ stats }: { stats: ScrapeStats | undefined }) {
   )
 }
 
-/** One platform's scrape → attempt → searchable funnel, compact (inline numbers + loss line) so
- * three platforms stack cleanly. Attempted = searchable + expired + failed (verdict reached);
- * processing / no video haven't been (or can't be) attempted. Mirrors the Discover funnel. */
+/** One platform's plain-English summary: how many videos we collected vs how many are ready to
+ * search, with a one-line reason for anything in between. Compact so three platforms stack
+ * cleanly; wording matches the Discover summary (no jargon, no internal denominators). */
 function SearchableRow({ label, b }: { label: string; b: ReturnType<typeof pbreak> }) {
-  const attempted = b.searchable + b.expired + b.failed
-  const losses = [
-    { label: 'no video', n: b.no_video, cls: 'text-muted-foreground' },
-    { label: 'processing', n: b.processing, cls: 'text-muted-foreground' },
-    { label: 'expired', n: b.expired, cls: 'text-amber-600 dark:text-amber-500' },
-    { label: 'failed', n: b.failed, cls: 'text-red-600 dark:text-red-500' },
-  ].filter((l) => l.n > 0)
+  const reasons = [
+    { label: 'loading', n: b.processing, text: `${b.processing} still loading`, cls: 'text-muted-foreground' },
+    { label: 'expired', n: b.expired, text: `${b.expired} couldn't be loaded (removed)`, cls: 'text-amber-600 dark:text-amber-500' },
+    { label: 'failed', n: b.failed, text: `${b.failed} couldn't be processed`, cls: 'text-red-600 dark:text-red-500' },
+    { label: 'novideo', n: b.no_video, text: `${b.no_video} weren't videos`, cls: 'text-muted-foreground' },
+  ].filter((r) => r.n > 0)
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between gap-2">
         <span className="text-foreground">{label}</span>
         <span className="tabular-nums text-muted-foreground">
-          {b.scraped} scraped <span className="text-muted-foreground/40">→</span> {attempted} attempted{' '}
-          <span className="text-muted-foreground/40">→</span>{' '}
-          <span className="font-medium text-foreground">{b.searchable} searchable</span>
+          {b.scraped} collected <span className="text-muted-foreground/40">→</span>{' '}
+          <span className="font-medium text-foreground">{b.searchable} ready to search</span>
         </span>
       </div>
-      {losses.length === 0 ? (
-        <span className="text-[11px] text-emerald-600 dark:text-emerald-500">✓ every scraped video is searchable</span>
+      {reasons.length === 0 ? (
+        <span className="text-[11px] text-emerald-600 dark:text-emerald-500">✓ all ready to search</span>
       ) : (
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
-          {losses.map((l) => (
-            <span key={l.label} className={l.cls}>
-              {l.n} {l.label}
+          {reasons.map((r) => (
+            <span key={r.label} className={r.cls}>
+              {r.text}
             </span>
           ))}
         </div>
