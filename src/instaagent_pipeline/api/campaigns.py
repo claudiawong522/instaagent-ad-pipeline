@@ -9,6 +9,7 @@ the UI can show "X Facebook ads / X reels / X TikToks scraped".
 from __future__ import annotations
 
 import threading
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..ad_enrichment import enrich_paid_ads
@@ -41,6 +42,16 @@ _PLATFORMS: dict[str, tuple[Any, str, bool]] = {
 # multi-worker deploy would track this in the DB instead.
 _running: set[tuple[str, str]] = set()
 _running_lock = threading.Lock()
+
+# How long a scrape_event may sit in 'running' with no completion before we treat its worker
+# as dead. A job's thread marks the event done/failed in a finally block; if the process is
+# killed first (e.g. a `uvicorn --reload` restart), the event stays 'running' forever and its
+# items stay stuck at "processing". Real jobs take minutes, so anything older than this whose
+# key isn't in the live _running set is an orphan we can safely re-run.
+STALE_AFTER_SECONDS = 10 * 60
+# Don't auto-resume jobs older than this. Recent kills (a reload) are worth self-healing;
+# a run abandoned days ago shouldn't suddenly re-spend when the server next boots.
+MAX_RESUME_AGE_SECONDS = 48 * 60 * 60
 
 
 def create_campaign(
@@ -471,3 +482,90 @@ def _run_scrape(
                 print(f"[scrape] run={run_id} cost reconcile failed: {exc}")
         with _running_lock:
             _running.discard((run_id, platform))
+
+
+def orphaned_events(supabase: SupabaseClient, run_id: str | None = None) -> list[dict[str, Any]]:
+    """scrape_events whose worker was killed before it could finish: status still 'running',
+    older than STALE_AFTER_SECONDS, and not in this process's live _running set. These are the
+    jobs that leave items stuck at "processing" with no error and never recover on their own."""
+    params: dict[str, str] = {
+        "select": "id,run_id,platform,started_at",
+        "status": "eq.running",
+        "order": "started_at.desc",
+        "limit": "200",
+    }
+    if run_id:
+        params["run_id"] = f"eq.{run_id}"
+    try:
+        rows = supabase.select("scrape_events", params)
+    except Exception:  # table missing (migration 022 unapplied) — nothing to recover
+        return []
+    now = datetime.now(timezone.utc)
+    stale_before = (now - timedelta(seconds=STALE_AFTER_SECONDS)).isoformat()
+    with _running_lock:
+        live = set(_running)
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        started = r.get("started_at") or ""
+        if started >= stale_before:
+            continue  # young enough it may still be legitimately starting up
+        if (str(r.get("run_id")), r.get("platform")) in live:
+            continue  # actually running in this process, not an orphan
+        out.append(r)
+    return out
+
+
+def _resume(config: Config, event: dict[str, Any]) -> None:
+    """Re-run only the post-ingest stages (enrich → audience → embed) for a killed scrape. The
+    ingest already wrote the rows, so we deliberately DON'T re-scrape (no Apify spend); every
+    stage skips already-done items, so this just finishes the leftovers and marks the event done."""
+    run_id = str(event["run_id"])
+    platform = event["platform"]
+    event_id = str(event["id"])
+    supabase = SupabaseClient(config.supabase_url, config.supabase_key)
+    failed = False
+    try:
+        # facebook is the only paid platform; everything else (instagram, tiktok, tiktok-trends)
+        # is organic. Discovery does its scoring before enrichment, so leftovers only need this.
+        if platform == "facebook":
+            enrich_paid_ads(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
+        else:
+            enrich_organic_items(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
+        enrich_audience(config=config, supabase=supabase, run_id=run_id, source="all", dry_run=False)
+        embed_items(config=config, supabase=supabase, run_id=run_id, spaces=ALL_SPACES, dry_run=False)
+        print(f"[resume] run={run_id} platform={platform} finished leftover enrichment/embed")
+    except Exception as exc:
+        failed = True
+        print(f"[resume] run={run_id} platform={platform} failed: {exc}")
+    finally:
+        try:
+            supabase.update_by_id(
+                "scrape_events",
+                event_id,
+                {"status": "failed" if failed else "done", "finished_at": utc_now_iso()},
+            )
+        except Exception as exc:
+            print(f"[resume] run={run_id} could not close scrape_event: {exc}")
+        with _running_lock:
+            _running.discard((run_id, platform))
+
+
+def resume_orphaned_jobs(config: Config, supabase: SupabaseClient) -> int:
+    """Re-run scrape jobs whose worker was killed (e.g. a backend reload), in background threads.
+    Called once at startup so a restart self-heals instead of leaving items stuck at "processing"
+    forever. Skips jobs older than MAX_RESUME_AGE_SECONDS (abandoned, not worth re-spending on).
+    Returns how many were resumed."""
+    resume_after = (datetime.now(timezone.utc) - timedelta(seconds=MAX_RESUME_AGE_SECONDS)).isoformat()
+    resumed = 0
+    for event in orphaned_events(supabase):
+        if (event.get("started_at") or "") < resume_after:
+            print(f"[resume] skipping stale job run={event.get('run_id')} platform={event.get('platform')} (too old)")
+            continue
+        key = (str(event["run_id"]), event["platform"])
+        with _running_lock:
+            if key in _running:
+                continue
+            _running.add(key)
+        threading.Thread(target=_resume, args=(config, event), daemon=True).start()
+        resumed += 1
+    return resumed
