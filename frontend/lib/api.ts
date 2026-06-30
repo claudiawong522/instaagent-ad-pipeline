@@ -8,6 +8,8 @@ import type {
   CreateCampaignInput,
   CreateCampaignResult,
   UpdateCampaignInput,
+  DiscoverInput,
+  DiscoverResult,
   Product,
   ScrapeStats,
   ScrapeEventsResponse,
@@ -72,6 +74,16 @@ export async function updateCampaign(
   input: UpdateCampaignInput,
 ): Promise<{ run_id: string; product_id: string }> {
   return request(`/campaigns/${runId}`, { method: 'PATCH', body: JSON.stringify(input) })
+}
+
+export async function triggerDiscovery(
+  input: DiscoverInput,
+  estimatedCostUsd?: number,
+): Promise<DiscoverResult> {
+  return request('/discover/scrape', {
+    method: 'POST',
+    body: JSON.stringify({ ...input, estimated_cost_usd: estimatedCostUsd ?? null }),
+  })
 }
 
 export async function getScrapeStats(runId: string): Promise<ScrapeStats> {

@@ -129,6 +129,8 @@ def list_campaigns(supabase: SupabaseClient) -> list[dict[str, Any]]:
     for run in runs:
         product = products.get(str(run.get("product_id"))) or {}
         cfg = run.get("config") or {}
+        if cfg.get("discovery"):
+            continue  # the keyword-free Viral Discovery run lives on the Discover page, not here
         out.append(
             {
                 "run_id": str(run.get("id")),

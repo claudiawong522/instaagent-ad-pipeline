@@ -111,6 +111,19 @@ export interface CreateCampaignResult {
   warning: string | null
 }
 
+// Keyword-free viral-format discovery (the Discover page). Not tied to a product/campaign.
+export interface DiscoverInput {
+  region: string // ISO country code, e.g. US / GB
+  target_count: number
+  min_views: number // drop For-You feed-filler below this view count
+}
+
+export interface DiscoverResult {
+  started: boolean
+  run_id: string // the singleton discovery run; poll scrape-stats with it
+  reason?: string
+}
+
 // Per-platform enrichment breakdown. searchable = scraped video became searchable;
 // expired = provider URL no longer served video; failed = analysis produced nothing;
 // processing = has a video, not yet enriched. total = searchable universe (videos only).

@@ -22,9 +22,11 @@ from .normalizers import (
     normalize_instagram_reel,
     normalize_tiktok_item,
     normalize_tiktok_trend_item,
+    recompute_virality,
     result_items,
     tiktok_download_url,
     tiktok_trend_video_url,
+    tiktok_trend_views,
 )
 from .supabase_client import SupabaseClient
 
@@ -212,16 +214,27 @@ def ingest_tiktok_trends(
     run_id: str,
     region: str,
     target_count: int,
+    min_views: int = 0,
     dry_run: bool = False,
     input_json: Path | None = None,
     extra_params: dict[str, Any] | None = None,
 ) -> IngestResult:
     """Keyword-free viral discovery: novi/tiktok-trend-api returns a country's For You
     feed (no search term). Writes to ugc_items like the other organic sources; follower
-    counts are absent from the payload and filled later by backfill_tiktok_followers."""
+    counts are absent from the payload and filled later by backfill_tiktok_followers.
+
+    min_views drops low-view feed-filler at ingest — the For You feed isn't a pure viral
+    filter (it mixes in brand-new posts still being test-distributed), so a floor keeps
+    the pull to genuinely viral content."""
     actor_input: dict[str, Any] = {"region": region, "limit": target_count}
     if extra_params:
         actor_input.update(extra_params)
+
+    def has_video(item: dict[str, Any]) -> bool:
+        if not tiktok_trend_video_url(item):
+            return False
+        return (tiktok_trend_views(item) or 0) >= min_views
+
     return _ingest_apify_organic(
         config=config,
         supabase=supabase,
@@ -232,7 +245,7 @@ def ingest_tiktok_trends(
         actor_id=TIKTOK_TREND_ACTOR_ID,
         actor_input=actor_input,
         normalizer=normalize_tiktok_trend_item,
-        has_video=lambda item: bool(tiktok_trend_video_url(item)),
+        has_video=has_video,
         dry_run=dry_run,
         input_json=input_json,
     )
@@ -414,3 +427,41 @@ def fetch_tiktok_followers(
         if isinstance(username, str) and isinstance(count, (int, float)):
             out[username] = int(count)
     return out
+
+
+def recompute_tiktok_virality(
+    *,
+    config: Config,
+    supabase: SupabaseClient | None,
+    run_id: str,
+    limit: int = 5000,
+) -> dict[str, Any]:
+    """Re-score a run's TikTok items now that follower counts are known. Trend-API items are
+    first scored engagement-only (no followers in the payload), which under-scores mega-viral
+    hits whose reach dwarfs their follower base. Once backfill_tiktok_followers fills `followers`,
+    this switches them onto the reach-blended score. Re-runnable; only writes rows that change."""
+    if supabase is None:
+        raise RuntimeError("Supabase credentials are required to recompute virality.")
+    rows = supabase.select(
+        "ugc_items",
+        {
+            "select": "id,views,likes,comments,shares,followers,virality_score,virality_tier",
+            "run_id": f"eq.{run_id}",
+            "source": "eq.tiktok",
+            "limit": str(limit),
+        },
+    )
+    updated = 0
+    for row in rows:
+        score, tier = recompute_virality(
+            views=row.get("views"),
+            likes=row.get("likes"),
+            comments=row.get("comments"),
+            shares=row.get("shares"),
+            followers=row.get("followers"),
+        )
+        if score == row.get("virality_score") and tier == row.get("virality_tier"):
+            continue
+        supabase.update_by_id("ugc_items", str(row["id"]), {"virality_score": score, "virality_tier": tier})
+        updated += 1
+    return {"scanned": len(rows), "updated": updated}

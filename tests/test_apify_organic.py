@@ -185,6 +185,90 @@ def test_ingest_tiktok_trends_actor_input(monkeypatch) -> None:
     assert result.fetched == 1  # the item has a download_addr, so it's kept
 
 
+def test_ingest_tiktok_trends_min_views_drops_filler(tmp_path) -> None:
+    # A low-view For-You item (still has a video) should be dropped by the min_views floor,
+    # leaving only the genuinely viral one.
+    filler = {
+        "aweme_id": "9001",
+        "statistics": {"play_count": 9600, "digg_count": 100, "comment_count": 2, "share_count": 0},
+        "author": {"unique_id": "apt.in.queens"},
+        "video": {"play_addr": {"url_list": ["https://cdn/filler.mp4"]}},
+    }
+    fixture = tmp_path / "trends.json"
+    fixture.write_text(json.dumps([TIKTOK_TREND_ITEM, filler]))
+    cfg = Config(
+        supabase_url=None,
+        supabase_key=None,
+        apify_api_key=None,
+        claude_api_key=None,
+        claude_model="claude-haiku-4-5",
+    )
+    result = ingest_tiktok_trends(
+        config=cfg,
+        supabase=None,
+        run_id="run1",
+        region="US",
+        target_count=10,
+        min_views=100000,
+        dry_run=True,
+        input_json=fixture,
+    )
+    assert result.fetched == 1  # only the 1.58M-view item clears the floor
+
+
+class _FakeSupabase:
+    """Minimal stand-in: serves preset rows and records update_by_id calls."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.updates: list[tuple[str, dict]] = []
+
+    def select(self, table, params):
+        return self.rows
+
+    def update_by_id(self, table, row_id, patch):
+        self.updates.append((row_id, patch))
+
+
+def test_recompute_tiktok_virality_rescores_after_backfill() -> None:
+    rows = [
+        # Followers now known → reach-blended score (0.457) differs from the stale
+        # engagement-only score (0.363) → row is updated.
+        {
+            "id": "a",
+            "views": 10000,
+            "likes": 1000,
+            "comments": 0,
+            "shares": 0,
+            "followers": 1000,
+            "virality_score": 0.363,
+            "virality_tier": "medium",
+        },
+        # Still no followers and score already matches the engagement-only value → skipped.
+        {
+            "id": "b",
+            "views": 1000,
+            "likes": 200,
+            "comments": 0,
+            "shares": 0,
+            "followers": None,
+            "virality_score": 0.695,
+            "virality_tier": "high",
+        },
+    ]
+    supabase = _FakeSupabase(rows)
+    cfg = Config(
+        supabase_url=None,
+        supabase_key=None,
+        apify_api_key=None,
+        claude_api_key=None,
+        claude_model="claude-haiku-4-5",
+    )
+    result = apify_organic.recompute_tiktok_virality(config=cfg, supabase=supabase, run_id="run1")
+    assert result == {"scanned": 2, "updated": 1}
+    assert supabase.updates == [("a", {"virality_score": 0.457, "virality_tier": "medium"})]
+
+
 def test_ingest_tiktok_drops_no_video(tmp_path) -> None:
     fixture = tmp_path / "tt.json"
     # Second item has no mediaUrls/downloadAddr → no downloadable video → dropped.

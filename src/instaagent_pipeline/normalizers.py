@@ -488,6 +488,12 @@ def tiktok_trend_video_url(item: dict[str, Any]) -> str | None:
     return _first_url_list(video.get("download_addr")) or _first_url_list(video.get("play_addr"))
 
 
+def tiktok_trend_views(item: dict[str, Any]) -> int | None:
+    """Play count from a raw trend aweme — used to drop low-view For You feed-filler."""
+    stats = item.get("statistics") if isinstance(item.get("statistics"), dict) else {}
+    return as_int(stats.get("play_count"))
+
+
 def normalize_tiktok_trend_item(item: dict[str, Any], run_id: str, raw_payload_id: str | None) -> dict[str, Any]:
     """novi/tiktok-trend-api (keyword-free For You feed) → ugc_items. Distinct from
     normalize_tiktok_item: this is TikTok's raw aweme shape (statistics.*, author.unique_id,
