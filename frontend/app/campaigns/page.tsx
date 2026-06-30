@@ -379,8 +379,15 @@ function PlatformTile({
         </span>
         <span className="flex items-start gap-1 text-[10px] leading-tight text-amber-600 dark:text-amber-500">
           <AlertTriangle className="mt-px size-3 shrink-0" />
-          estimated cost{scraped ? '; may re-fetch dupes' : ''}
+          estimated cost
         </span>
+        {key === 'instagram' && (
+          <span className="flex items-start gap-1 text-[10px] leading-tight text-amber-600 dark:text-amber-500">
+            <AlertTriangle className="mt-px size-3 shrink-0" />
+            Re-running mostly returns the same reels, so extra runs barely grow the pool — fetch a
+            large batch in one go.
+          </span>
+        )}
         <span className="text-[10px] leading-tight text-muted-foreground/80">
           Split evenly across the campaign’s keywords, so the final count can land a bit under your
           number (e.g. 50 → ~48). Thin keywords or videoless results lower it further.
