@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { ProgressBar } from '@/components/ui/progress-bar'
 import { cn } from '@/lib/utils'
 import { listCampaigns, getScrapeStats, getScrapeEvents, triggerScrape, updateCampaign, type ScrapePlatform } from '@/lib/api'
 import type { Campaign, ScrapeStats, ScrapeEventsResponse } from '@/lib/types'
@@ -414,10 +415,13 @@ function PlatformTile({
 
   return (
     <div className="flex flex-col items-center gap-1.5 text-center">
-      <span className="text-xl font-semibold tabular-nums">{scraped ? `${count} / ${total}` : count}</span>
+      <span className="text-xl font-semibold tabular-nums text-[#9d1555]">{count}</span>
       <span className="text-[11px] text-muted-foreground">{label} searchable</span>
       {scraped && (
-        <span className="text-[10px] text-muted-foreground/70">of {total} scraped</span>
+        <>
+          <ProgressBar pct={(count / total) * 100} />
+          <span className="text-[10px] text-muted-foreground/70">of {total} scraped</span>
+        </>
       )}
       {processing > 0 && (
         <span className="flex items-center gap-1 text-[10px] leading-tight text-sky-600 dark:text-sky-400">
@@ -577,15 +581,16 @@ function SearchableRow({ label, b }: { label: string; b: ReturnType<typeof pbrea
     { label: 'failed', n: b.failed, text: `${b.failed} couldn't be processed`, cls: 'text-red-600 dark:text-red-500' },
     { label: 'novideo', n: b.no_video, text: `${b.no_video} weren't videos`, cls: 'text-muted-foreground' },
   ].filter((r) => r.n > 0)
+  const pct = b.scraped > 0 ? (b.searchable / b.scraped) * 100 : 0
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-baseline justify-between gap-2">
         <span className="text-foreground">{label}</span>
         <span className="tabular-nums text-muted-foreground">
-          {b.scraped} collected <span className="text-muted-foreground/40">→</span>{' '}
-          <span className="font-medium text-foreground">{b.searchable} ready to search</span>
+          <span className="font-medium text-foreground">{b.searchable}</span> of {b.scraped} ready to search
         </span>
       </div>
+      <ProgressBar pct={pct} />
       {reasons.length === 0 ? (
         <span className="text-[11px] text-emerald-600 dark:text-emerald-500">✓ all ready to search</span>
       ) : (
