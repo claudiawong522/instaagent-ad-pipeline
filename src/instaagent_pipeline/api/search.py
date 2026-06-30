@@ -28,7 +28,7 @@ PAID_HYDRATE_COLUMNS = (
 )
 ORGANIC_HYDRATE_COLUMNS = (
     "id,run_id,handle,user_handle,nickname,source,followers,views,likes,virality_score,"
-    "virality_tier,storage_video_url,storage_thumb_url,video_url,cover"
+    "virality_tier,storage_video_url,storage_thumb_url,video_url,cover,date_created"
 )
 
 # Safety ceiling for an unbounded (limit=None) search. Results are gated by the
@@ -48,6 +48,7 @@ def search_ads(
     min_virality: float | None = None,
     min_views: int | None = None,
     min_days_live: float | None = None,
+    min_date: str | None = None,
     languages: list[str] | None = None,
     age_brackets: list[str] | None = None,
     content_formats: list[str] | None = None,
@@ -65,6 +66,7 @@ def search_ads(
             min_virality=min_virality,
             min_views=min_views,
             min_days_live=min_days_live,
+            min_date=min_date,
             languages=languages,
             age_brackets=age_brackets,
             content_formats=content_formats,
@@ -143,7 +145,7 @@ def search_ads(
     return _assemble(
         order, paid, organic, paid_enr, organic_enr, similarity,
         platform=platform, min_virality=min_virality, min_views=min_views,
-        min_days_live=min_days_live, languages=languages, age_brackets=age_brackets,
+        min_days_live=min_days_live, min_date=min_date, languages=languages, age_brackets=age_brackets,
         content_formats=content_formats, price_tier=price_tier, limit=limit,
     )
 
@@ -197,6 +199,7 @@ def _browse_ads(
     min_virality: float | None,
     min_views: int | None,
     min_days_live: float | None,
+    min_date: str | None,
     languages: list[str] | None,
     age_brackets: list[str] | None,
     content_formats: list[str] | None,
@@ -245,7 +248,7 @@ def _browse_ads(
     return _assemble(
         order, paid, organic, paid_enr, organic_enr, {},
         platform=platform, min_virality=min_virality, min_views=min_views,
-        min_days_live=min_days_live, languages=languages, age_brackets=age_brackets,
+        min_days_live=min_days_live, min_date=min_date, languages=languages, age_brackets=age_brackets,
         content_formats=content_formats, price_tier=price_tier, limit=limit,
     )
 
@@ -262,6 +265,7 @@ def _assemble(
     min_virality: float | None,
     min_views: int | None,
     min_days_live: float | None,
+    min_date: str | None = None,
     languages: list[str] | None = None,
     age_brackets: list[str] | None = None,
     content_formats: list[str] | None = None,
@@ -302,6 +306,10 @@ def _assemble(
         if min_virality is not None and (result["virality"] is None or result["virality"] < min_virality):
             continue
         if min_views is not None and (result["views"] is None or result["views"] < min_views):
+            continue
+        # Posted-since filter (organic). date_created is an ISO timestamp, so a date-only
+        # bound like "2026-06-15" compares lexicographically against "2026-06-15T..." correctly.
+        if min_date and (result.get("date_created") is None or str(result["date_created"]) < min_date):
             continue
         # days_live is paid-only (None for organic), so this filter narrows to paid ads —
         # the longevity analog of the organic-only virality/views filters above.
@@ -348,6 +356,9 @@ def list_runs(supabase: SupabaseClient) -> list[dict[str, Any]]:
                 # campaign_name lives in the run config (set by the campaign wizard); None for
                 # runs created via the bare CLI init_run. Lets search filter/label by campaign.
                 "campaign_name": (run.get("config") or {}).get("campaign_name"),
+                # True for the keyword-free Viral Discovery run, so Search can offer a dedicated
+                # "viral formats only" filter without matching on the campaign name.
+                "discovery": bool((run.get("config") or {}).get("discovery")),
                 "product_name": (product or {}).get("name"),
                 "category": (product or {}).get("category"),
                 "target_paid_count": run.get("target_paid_count"),
@@ -481,6 +492,7 @@ def _to_video_result(
         "views": row.get("views"),
         "likes": row.get("likes"),
         "virality": row.get("virality_score"),
+        "date_created": row.get("date_created"),
         "days_live": None,
         **audience,
         "hook": hook,

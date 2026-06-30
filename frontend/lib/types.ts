@@ -20,6 +20,8 @@ export interface VideoResult {
   video_topic: string | null
   transcript: string | null
   similarity: number | null
+  // Organic-only: when the post was published (ISO timestamp); null for paid.
+  date_created?: string | null
   // Paid-only longevity proxy (days the ad has been running); null for organic.
   days_live: number | null
   // Phase 4 audience fields (null/[] until migration 018 + enrich-audience populate them).
@@ -45,6 +47,7 @@ export interface SearchFilters {
   min_virality?: number | null // organic-only (normalized virality score, 0-1)
   min_views?: number | null // organic-only
   min_days_live?: number | null // paid-only (days the ad has been running)
+  min_date?: string | null // organic-only: only items posted on/after this ISO date
   languages?: string[] | null // multi-select, overlap match
   age_brackets?: string[] | null // multi-select, overlap match
   content_formats?: string[] | null // multi-select, overlap match (production format)
@@ -186,6 +189,7 @@ export interface RunSummary {
   run_id: string
   status: string | null
   campaign_name: string | null // from run config (campaign wizard); null for bare CLI runs
+  discovery?: boolean // true for the keyword-free Viral Discovery run
   product_name: string | null
   category: string | null
   target_paid_count: number | null

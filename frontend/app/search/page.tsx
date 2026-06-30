@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Search, Loader2, X, HelpCircle } from 'lucide-react'
+import { Search, Loader2, X, HelpCircle, Sparkles } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -67,6 +67,8 @@ export default function SearchPage() {
   const [itemType, setItemType] = useState<ItemType | null>(null)
   const [platform, setPlatform] = useState<string>('')
   const [runId, setRunId] = useState<string>('')
+  const [viralOnly, setViralOnly] = useState(false)
+  const [minDate, setMinDate] = useState<string>('')
   const [minViews, setMinViews] = useState<string>('')
   const [minVirality, setMinVirality] = useState<string>('')
   const [minDaysLive, setMinDaysLive] = useState<string>('')
@@ -87,6 +89,11 @@ export default function SearchPage() {
       .catch(() => setRuns([]))
   }, [])
 
+  // The keyword-free Viral Discovery run, if any. The "Viral discovery" toggle scopes results
+  // to it (takes precedence over the campaign dropdown).
+  const discoveryRun = runs.find((r) => r.discovery)
+  const effectiveRunId = viralOnly && discoveryRun ? discoveryRun.run_id : runId
+
   async function runSearch() {
     setLoading(true)
     setError(null)
@@ -94,12 +101,14 @@ export default function SearchPage() {
     try {
       const res = await searchAds({
         query: query.trim(),
-        item_type: itemType,
-        platform: platform || null,
-        run_id: runId || null,
+        // Viral discovery is a single TikTok organic run — force organic and drop platform.
+        item_type: viralOnly ? 'ugc_item' : itemType,
+        platform: viralOnly ? null : platform || null,
+        run_id: effectiveRunId || null,
         min_views: minViews ? Number(minViews) : null,
         min_virality: minVirality ? Number(minVirality) : null,
         min_days_live: minDaysLive ? Number(minDaysLive) : null,
+        min_date: viralOnly && minDate ? minDate : null,
         price_tier: priceTier || null,
         age_brackets: ageBrackets.size ? Array.from(ageBrackets) : null,
         languages: languages.size ? Array.from(languages) : null,
@@ -118,6 +127,8 @@ export default function SearchPage() {
     setItemType(null)
     setPlatform('')
     setRunId('')
+    setViralOnly(false)
+    setMinDate('')
     setMinViews('')
     setMinVirality('')
     setMinDaysLive('')
@@ -131,6 +142,8 @@ export default function SearchPage() {
     itemType !== null ||
     platform !== '' ||
     runId !== '' ||
+    viralOnly ||
+    (viralOnly && minDate !== '') ||
     minViews !== '' ||
     minVirality !== '' ||
     minDaysLive !== '' ||
@@ -171,48 +184,89 @@ export default function SearchPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex items-stretch overflow-hidden rounded-md border border-border">
-            {TYPE_OPTIONS.map((opt) => (
-              <button
-                key={opt.label}
-                type="button"
-                onClick={() => setItemType(opt.value)}
-                className={cn(
-                  'inline-flex items-center px-3 py-1.5 text-xs font-medium transition-colors',
-                  itemType === opt.value
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+          {/* Type / campaign / platform are meaningless in Viral discovery (it's one TikTok-only
+              organic run), so they're hidden while it's on. */}
+          {!viralOnly && (
+            <div className="inline-flex items-stretch overflow-hidden rounded-md border border-border">
+              {TYPE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.label}
+                  type="button"
+                  onClick={() => setItemType(opt.value)}
+                  className={cn(
+                    'inline-flex items-center px-3 py-1.5 text-xs font-medium transition-colors',
+                    itemType === opt.value
+                      ? 'bg-accent text-accent-foreground'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
 
-          <select
-            value={platform}
-            onChange={(e) => setPlatform(e.target.value)}
-            className="h-8 rounded-md border border-border bg-background px-2 text-xs"
-          >
-            <option value="">Any platform</option>
-            <option value="tiktok">TikTok</option>
-            <option value="instagram">Instagram</option>
-            <option value="facebook">Facebook</option>
-            <option value="meta">Meta</option>
-          </select>
+          {discoveryRun && (
+            <button
+              type="button"
+              onClick={() => setViralOnly((v) => !v)}
+              title="Show only the keyword-free Viral Discovery formats"
+              className={cn(
+                'inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs font-medium transition-colors',
+                viralOnly
+                  ? 'border-[#9d1555] bg-[#fdedf4] text-[#9d1555]'
+                  : 'border-border text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Sparkles className="size-3.5" /> Viral discovery
+            </button>
+          )}
 
-          <select
-            value={runId}
-            onChange={(e) => setRunId(e.target.value)}
-            className="h-8 max-w-[220px] rounded-md border border-border bg-background px-2 text-xs"
-          >
-            <option value="">All campaigns</option>
-            {runs.map((r) => (
-              <option key={r.run_id} value={r.run_id}>
-                {r.campaign_name || r.product_name || r.run_id.slice(0, 8)}
-              </option>
-            ))}
-          </select>
+          {viralOnly && (
+            <label
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs text-muted-foreground"
+              title="Only show videos posted on or after this date"
+            >
+              Posted since
+              <input
+                type="date"
+                value={minDate}
+                onChange={(e) => setMinDate(e.target.value)}
+                className="bg-transparent text-foreground outline-none"
+              />
+            </label>
+          )}
+
+          {!viralOnly && (
+            <select
+              value={runId}
+              onChange={(e) => setRunId(e.target.value)}
+              className="h-8 max-w-[220px] rounded-md border border-border bg-background px-2 text-xs"
+            >
+              <option value="">All campaigns</option>
+              {runs
+                .filter((r) => !r.discovery)
+                .map((r) => (
+                  <option key={r.run_id} value={r.run_id}>
+                    {r.campaign_name || r.product_name || r.run_id.slice(0, 8)}
+                  </option>
+                ))}
+            </select>
+          )}
+
+          {!viralOnly && (
+            <select
+              value={platform}
+              onChange={(e) => setPlatform(e.target.value)}
+              className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+            >
+              <option value="">Any platform</option>
+              <option value="tiktok">TikTok</option>
+              <option value="instagram">Instagram</option>
+              <option value="facebook">Facebook</option>
+              <option value="meta">Meta</option>
+            </select>
+          )}
 
           <select
             value={priceTier}
@@ -226,8 +280,9 @@ export default function SearchPage() {
             ))}
           </select>
 
-          {/* Performance filters are type-scoped: views/virality are organic-only, days-live is paid-only. */}
-          {itemType !== 'paid_ad' && (
+          {/* Performance filters are type-scoped: views/virality are organic-only, days-live is paid-only.
+              Viral discovery is organic, so it shows the organic filters and hides days-live. */}
+          {(viralOnly || itemType !== 'paid_ad') && (
             <Input
               type="number"
               value={minViews}
@@ -236,7 +291,7 @@ export default function SearchPage() {
               className="h-8 w-36 text-xs md:text-xs"
             />
           )}
-          {itemType !== 'paid_ad' && (
+          {(viralOnly || itemType !== 'paid_ad') && (
             <Input
               type="number"
               min={0}
@@ -248,7 +303,7 @@ export default function SearchPage() {
               className="h-8 w-44 text-xs md:text-xs"
             />
           )}
-          {itemType !== 'ugc_item' && (
+          {!viralOnly && itemType !== 'ugc_item' && (
             <Input
               type="number"
               value={minDaysLive}
@@ -447,6 +502,7 @@ function VideoCard({ result: r }: { result: VideoResult }) {
             </span>
           )}
           {r.days_live != null && <span>{Math.round(r.days_live)}d live</span>}
+          {r.date_created && <span>posted {new Date(r.date_created).toLocaleDateString()}</span>}
         </div>
         {r.hook && (
           <p className="line-clamp-3 text-xs">

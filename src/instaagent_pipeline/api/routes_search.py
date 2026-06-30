@@ -18,6 +18,7 @@ class SearchRequest(BaseModel):
     min_virality: Optional[float] = None  # Organic-only (normalized virality score, 0-1)
     min_views: Optional[int] = None  # Organic-only
     min_days_live: Optional[float] = None  # paid-only (days the ad has been running)
+    min_date: Optional[str] = None  # organic-only: only items posted on/after this ISO date
     languages: Optional[list[str]] = None  # multi-select, overlap match
     age_brackets: Optional[list[str]] = None  # multi-select, overlap match
     content_formats: Optional[list[str]] = None  # multi-select, overlap match (production format)
@@ -51,6 +52,7 @@ def search(req: SearchRequest, request: Request) -> dict[str, Any]:
             min_virality=req.min_virality,
             min_views=req.min_views,
             min_days_live=req.min_days_live,
+            min_date=req.min_date,
             languages=req.languages,
             age_brackets=req.age_brackets,
             content_formats=req.content_formats,

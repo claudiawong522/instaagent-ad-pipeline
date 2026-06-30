@@ -40,6 +40,7 @@ export async function searchAds(filters: SearchFilters): Promise<SearchResponse>
       min_virality: filters.min_virality ?? null,
       min_views: filters.min_views ?? null,
       min_days_live: filters.min_days_live ?? null,
+      min_date: filters.min_date ?? null,
       languages: filters.languages?.length ? filters.languages : null,
       age_brackets: filters.age_brackets?.length ? filters.age_brackets : null,
       content_formats: filters.content_formats?.length ? filters.content_formats : null,
