@@ -5,8 +5,8 @@ import Link from 'next/link'
 import { Loader2, Sparkles, ArrowRight, CheckCircle2, Circle } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button, buttonVariants } from '@/components/ui/button'
-import { triggerDiscovery, getScrapeStats, getScrapeEvents } from '@/lib/api'
-import type { ScrapeStats, ScrapeEventsResponse } from '@/lib/types'
+import { triggerDiscovery, getScrapeStats, getScrapeEvents, listRuns } from '@/lib/api'
+import type { ScrapeStats, ScrapeEventsResponse, RunSummary } from '@/lib/types'
 
 // Country For-You feeds novi supports. Codes are ISO 3166 alpha-2 (sent uppercased).
 const REGIONS = [
@@ -36,52 +36,68 @@ export default function DiscoverPage() {
   const [region, setRegion] = useState<string>('US')
   const [targetCount, setTargetCount] = useState(200)
   const [minViews, setMinViews] = useState(100000)
-  const [runId, setRunId] = useState<string | null>(null)
-  const [stats, setStats] = useState<ScrapeStats | null>(null)
+  const [runs, setRuns] = useState<RunSummary[]>([])
+  const [stats, setStats] = useState<Record<string, ScrapeStats>>({})
+  const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const running = !!stats?.running.includes(DISCOVERY_PLATFORM)
-  // Items scraped but stuck unprocessed with nothing running = the job was killed mid-enrichment.
-  // The backend auto-resumes leftovers on its next restart; until then, show the truth, not "Done".
-  const interrupted = !running && (stats?.tiktok_processing ?? 0) > 0
   const estCost = COST_PER_ITEM_USD * Math.max(0, targetCount)
+  // Disable the trigger while any discovery run is mid-scrape (only one runs at a time server-side).
+  const anyRunning = runs.some((r) => stats[r.run_id]?.running.includes(DISCOVERY_PLATFORM))
 
-  const poll = useCallback(async (id: string) => {
-    try {
-      setStats(await getScrapeStats(id))
-    } catch {
-      /* transient — keep the last good stats */
-    }
+  const refreshStats = useCallback(async (runIds: string[]) => {
+    const results = await Promise.allSettled(runIds.map((id) => getScrapeStats(id)))
+    setStats((prev) => {
+      const next = { ...prev }
+      results.forEach((res, i) => {
+        if (res.status === 'fulfilled') next[runIds[i]] = res.value
+      })
+      return next
+    })
   }, [])
 
-  // Poll while a discovery run is in flight; stop once the backend reports it's no longer running.
-  useEffect(() => {
-    if (!runId) return
-    poll(runId)
-    pollRef.current = setInterval(() => poll(runId), 4000)
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current)
-    }
-  }, [runId, poll])
+  // Load every past discovery run (newest first) on mount, then its stats — so the latest run and
+  // all previous ones show without needing to re-trigger. Mirrors the campaigns list.
+  const loadRuns = useCallback(async () => {
+    const r = await listRuns()
+    const discovery = r.runs
+      .filter((run) => run.discovery)
+      .sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+    setRuns(discovery)
+    refreshStats(discovery.map((run) => run.run_id))
+  }, [refreshStats])
 
-  // Stop polling only when the run is truly finished — not merely "not running". An interrupted
-  // run keeps polling so the panel updates once the backend restarts and auto-resumes it.
   useEffect(() => {
-    if (stats && !running && !interrupted && pollRef.current) {
-      clearInterval(pollRef.current)
-      pollRef.current = null
-    }
-  }, [stats, running, interrupted])
+    loadRuns()
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [loadRuns])
+
+  // Poll stats for any run still scraping (plus ones we just kicked off) until they settle.
+  const pollRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const id = setInterval(() => {
+      const active = runs
+        .filter((r) => stats[r.run_id]?.running.includes(DISCOVERY_PLATFORM))
+        .map((r) => r.run_id)
+      const toPoll = new Set(active.concat(Array.from(pollRef.current)))
+      if (toPoll.size === 0) return
+      refreshStats(Array.from(toPoll))
+      pollRef.current.forEach((rid) => {
+        if (stats[rid] && !stats[rid].running.includes(DISCOVERY_PLATFORM)) pollRef.current.delete(rid)
+      })
+    }, 4000)
+    return () => clearInterval(id)
+  }, [runs, stats, refreshStats])
 
   async function onDiscover() {
     setStarting(true)
     setError(null)
     try {
       const res = await triggerDiscovery({ region, target_count: targetCount, min_views: minViews }, estCost)
-      setRunId(res.run_id)
-      setStats(null)
+      pollRef.current.add(res.run_id)
+      await loadRuns()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start discovery')
     } finally {
@@ -144,9 +160,9 @@ export default function DiscoverPage() {
             Est. ~{money(estCost)} · runs the full chain (scrape → enrich → backfill followers → score).
             Takes a few minutes.
           </p>
-          <Button onClick={onDiscover} disabled={starting || running} className="gap-1.5">
-            {starting || running ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-            {running ? 'Discovering…' : starting ? 'Starting…' : 'Discover viral formats'}
+          <Button onClick={onDiscover} disabled={starting || anyRunning} className="gap-1.5">
+            {starting || anyRunning ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+            {anyRunning ? 'Discovering…' : starting ? 'Starting…' : 'Discover viral formats'}
           </Button>
         </div>
 
@@ -157,38 +173,72 @@ export default function DiscoverPage() {
         )}
       </div>
 
-      {runId && (
-        <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium">
-              {running ? 'Discovery in progress' : interrupted ? 'Discovery interrupted' : 'Latest discovery'}
-            </h2>
-            <Link href="/search" className={buttonVariants({ variant: 'outline', size: 'sm' }) + ' gap-1.5'}>
-              View in Search <ArrowRight className="size-3.5" />
-            </Link>
-          </div>
-          <PhaseStatus stats={stats ?? undefined} running={running} />
-          <div className="grid grid-cols-3 gap-3 text-center">
-            <Stat label="Scraped" value={stats?.tiktok_total} />
-            <Stat label="Processing" value={stats?.tiktok_processing} />
-            <Stat label="Searchable" value={stats?.tiktok_searchable} highlight />
-          </div>
-          <ScrapeHistory runId={runId} stats={stats ?? undefined} />
-          <SearchableBreakdown stats={stats ?? undefined} />
-          {interrupted ? (
-            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
-              Interrupted — {stats?.tiktok_processing} item{stats?.tiktok_processing === 1 ? '' : 's'} scraped but not
-              yet enriched (the job was killed before finishing). The server automatically re-runs the leftover
-              enrichment when it next restarts; this panel will update once it does.
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              {running
-                ? 'Scraping, enriching, and scoring — this panel updates live. You can leave; the run continues server-side.'
-                : 'Done. Open Search and filter to Organic to browse the formats, sorted by virality.'}
-            </p>
-          )}
+      {loading ? (
+        <div className="flex items-center justify-center py-16 text-muted-foreground">
+          <Loader2 className="mr-2 size-5 animate-spin" /> Loading…
         </div>
+      ) : runs.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border py-12 text-center text-sm text-muted-foreground">
+          No discovery runs yet — start one above and its progress and cost will show here.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {runs.map((run, i) => (
+            <DiscoveryRunCard key={run.run_id} run={run} stats={stats[run.run_id]} latest={i === 0} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** One discovery run's live panel: phase status, scraped/processing/searchable stats, the
+ * runs-&-cost log, and the searchable breakdown. The newest run is labelled "Latest discovery";
+ * older ones show their date. Identical content to the campaigns scrape panel, per run. */
+function DiscoveryRunCard({
+  run,
+  stats,
+  latest,
+}: {
+  run: RunSummary
+  stats: ScrapeStats | undefined
+  latest: boolean
+}) {
+  const running = !!stats?.running.includes(DISCOVERY_PLATFORM)
+  // Items scraped but stuck unprocessed with nothing running = the job was killed mid-enrichment.
+  // The backend auto-resumes leftovers on its next restart; until then, show the truth, not "Done".
+  const interrupted = !running && (stats?.tiktok_processing ?? 0) > 0
+  const heading = running
+    ? 'Discovery in progress'
+    : interrupted
+      ? 'Discovery interrupted'
+      : latest
+        ? 'Latest discovery'
+        : `Discovery · ${dateTime(run.created_at)}`
+
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium">{heading}</h2>
+        <Link href="/search" className={buttonVariants({ variant: 'outline', size: 'sm' }) + ' gap-1.5'}>
+          View in Search <ArrowRight className="size-3.5" />
+        </Link>
+      </div>
+      <PhaseStatus stats={stats} running={running} />
+      <DiscoveryFunnel stats={stats} />
+      <ScrapeHistory runId={run.run_id} stats={stats} />
+      {interrupted ? (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
+          Interrupted — {stats?.tiktok_processing} item{stats?.tiktok_processing === 1 ? '' : 's'} scraped but not
+          yet enriched (the job was killed before finishing). The server automatically re-runs the leftover
+          enrichment when it next restarts; this panel will update once it does.
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          {running
+            ? 'Scraping, enriching, and scoring — this panel updates live. You can leave; the run continues server-side.'
+            : 'Done. Open Search and filter to Organic to browse the formats, sorted by virality.'}
+        </p>
       )}
     </div>
   )
@@ -320,15 +370,16 @@ function ScrapeHistory({ runId, stats }: { runId: string; stats: ScrapeStats | u
   )
 }
 
-/** "X of Y searchable" progress for the discovery pull, with expired/failed/processing
- * breakdown — how many scraped videos OpenRouter could actually ingest. Mirrors the campaigns
- * Searchable videos panel, driven straight off the tiktok_* stats. */
-function SearchableBreakdown({ stats }: { stats: ScrapeStats | undefined }) {
-  const total = stats?.tiktok_total ?? 0
-  if (total === 0) {
+/** The scrape → attempt → searchable funnel for a discovery pull: three headline numbers in
+ * funnel order (each ≥ the next), with a one-line breakdown of where the gaps go. `Attempted` is
+ * the videos enrichment reached a verdict on (searchable + expired + failed); `processing` and
+ * `no video` haven't been (or can't be) attempted. Driven straight off the tiktok_* stats. */
+function DiscoveryFunnel({ stats }: { stats: ScrapeStats | undefined }) {
+  const scraped = stats?.tiktok_scraped ?? 0
+  if (scraped === 0) {
     return (
-      <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
-        No videos scraped yet — searchable counts appear here after a run.
+      <div className="rounded-md bg-muted/50 p-3 text-center text-xs text-muted-foreground">
+        Nothing scraped yet — the searchable funnel appears here after a run.
       </div>
     )
   }
@@ -336,31 +387,39 @@ function SearchableBreakdown({ stats }: { stats: ScrapeStats | undefined }) {
   const expired = stats?.tiktok_expired ?? 0
   const failed = stats?.tiktok_failed ?? 0
   const processing = stats?.tiktok_processing ?? 0
-  const pct = Math.round((searchable / total) * 100)
-  const clean = expired === 0 && failed === 0 && processing === 0
+  const noVideo = stats?.tiktok_no_video ?? 0
+  const attempted = searchable + expired + failed
+  // Order matches the funnel: gaps between Scraped→Attempted first (no video, processing), then
+  // the Attempted→Searchable losses (expired, failed). Only nonzero buckets are shown.
+  const losses = [
+    { label: 'no video', n: noVideo, cls: 'text-muted-foreground' },
+    { label: 'processing', n: processing, cls: 'text-muted-foreground' },
+    { label: 'expired', n: expired, cls: 'text-amber-600 dark:text-amber-500' },
+    { label: 'failed', n: failed, cls: 'text-red-600 dark:text-red-500' },
+  ].filter((l) => l.n > 0)
+
   return (
-    <div className="flex flex-col gap-2.5 rounded-md bg-muted/50 p-3 text-xs">
-      <div className="font-medium text-muted-foreground">Searchable videos</div>
-      <div className="flex flex-col gap-1">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-foreground">TikTok</span>
-          <span className="tabular-nums text-muted-foreground">
-            {searchable} of {total} searchable
-          </span>
-        </div>
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-          <div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
-        </div>
-        {clean ? (
-          <span className="text-[11px] text-emerald-600 dark:text-emerald-500">✓ all searchable</span>
-        ) : (
-          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
-            {expired > 0 && <span className="text-amber-600 dark:text-amber-500">⚠ {expired} expired URL</span>}
-            {failed > 0 && <span className="text-red-600 dark:text-red-500">✕ {failed} failed</span>}
-            {processing > 0 && <span className="text-muted-foreground">◷ {processing} processing</span>}
-          </div>
-        )}
+    <div className="flex flex-col gap-2.5">
+      <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-1 text-center">
+        <Stat label="Scraped" value={scraped} />
+        <span className="text-muted-foreground/40">→</span>
+        <Stat label="Attempted" value={attempted} />
+        <span className="text-muted-foreground/40">→</span>
+        <Stat label="Searchable" value={searchable} highlight />
       </div>
+      {losses.length === 0 ? (
+        <p className="text-center text-[11px] text-emerald-600 dark:text-emerald-500">
+          ✓ every scraped video is searchable
+        </p>
+      ) : (
+        <p className="flex flex-wrap justify-center gap-x-3 gap-y-0.5 text-[11px]">
+          {losses.map((l) => (
+            <span key={l.label} className={l.cls}>
+              {l.n} {l.label}
+            </span>
+          ))}
+        </p>
+      )}
     </div>
   )
 }
