@@ -226,10 +226,32 @@ Stores Apify TikTok / Instagram organic records with stable fields mapped into f
 | `storage_thumb_url` | `text` | Nullable | Persisted Supabase Storage (`ad-videos`) URL of the thumbnail; written by `enrich-ugc` (migration `015`). |
 | `enrichment_status` | `text` | Nullable | Per-video enrichment outcome written by `enrich-ugc` (migration `021`): `enriched` (searchable), `expired` (URL no longer served video), `failed`. Null until enrichment touches the row. |
 | `enrichment_error` | `text` | Nullable | Human-readable reason for an `expired`/`failed` status (migration `021`). |
+| `format_id` | `uuid` | Nullable, references `viral_formats(id)` on delete cascade | Trend pipeline (migration `025`): set when this is an example video of a viral format (`source='trend'`). |
 | `source_metrics` | `jsonb` | Not null, default `{}` | Provider-specific fields not mapped to first-class columns, plus `endpoint_kind`. |
 | `saved_to_supabase_at` | `timestamptz` | Not null, default `now()` | Timestamp when the row was saved to Supabase. |
 
 Unique constraint: `unique (run_id, external_id)`.
+
+### `viral_formats`
+
+Trend pipeline (migration `025`). One row per viral format scraped from a web trend page (`ingest-trends`); example videos hang off it via `ugc_items.format_id` and a format is ranked on the `/trends` dashboard by its videos' aggregate live views. The free-form `niche_constraint` is written by `classify-formats`. Each source has a persistent product/`pipeline_run` (`products.name = 'Trend: <source>'`).
+
+| Column | Type | Constraints / default | Notes |
+| --- | --- | --- | --- |
+| `id` | `uuid` | Primary key, default `gen_random_uuid()` | Row identifier. |
+| `run_id` | `uuid` | Not null, references `pipeline_runs(id)` on delete cascade | The source's persistent trends run. |
+| `source_name` | `text` | Not null | Trend page key, e.g. `ramdam`, `socialbee`. |
+| `source_url` | `text` | Nullable | The page the format was parsed from. |
+| `content_hash` | `text` | Nullable | SHA-256 of the fetched page text; an unchanged hash skips re-parsing. |
+| `issue_date` | `date` | Nullable | The page's publish/update date when known. |
+| `format_name` | `text` | Not null | Short name of the format. |
+| `format_description` | `text` | Nullable | The trend description as written on the page. |
+| `niche_constraint` | `text` | Nullable | Free-form marketing constraint (which niches the format suits); written by `classify-formats`. |
+| `niche_constraint_model` | `text` | Nullable | OpenRouter model that wrote the constraint. |
+| `classified_at` | `timestamptz` | Nullable | When the constraint was written. |
+| `created_at` | `timestamptz` | Not null, default `now()` | Row creation timestamp. |
+
+Unique constraint: `unique (source_name, format_name)` (idempotent re-ingest).
 
 ### `item_enrichments`
 

@@ -46,6 +46,16 @@ These are good ideas intentionally deferred to keep the first version lean.
 - Embeddings need no changes — `embed-items` works off descriptor columns regardless of media type, and same-schema distillation keeps image and video ads clustering by creative pattern instead of input modality.
 - Deferred because every scraped ad so far is a video ad and InstaAgent clones video creatives first.
 
+## Trend pipeline: email sources, Instagram videos, per-video tags
+
+The viral-format trend pipeline (`ingest-trends` → `viral_formats` + `ugc_items`, `/trends` dashboard) currently only ingests **web** trend pages and re-scrapes **TikTok** example videos. Deferred:
+
+- **Email newsletter source.** Add an IMAP + Gmail app-password fetcher (e.g. Social Growth Engineers' Trend Radar) that emits the same `{source_name, source_url, content_hash, text, candidate_urls}` "issue" shape into the existing `TREND_PARSE_PROMPT` path. Needs a `source_type` column (`email`|`web`) and a per-source idempotency key (email `message_id`). Parked at user request — web-first.
+- **Instagram / YouTube example videos.** `_rescrape_and_write` (`trend_ingest.py`) only re-scrapes TikTok URLs (via `clockworks/tiktok-scraper` `postURLs`); IG Reels / Shorts links are counted in `videos_skipped` but not fetched. To support IG, wire a directUrl-capable Apify actor (verify `apify/instagram-scraper` `directUrls`) and a normalizer mapping back to `format_id`. TikTok dominates these pages, so this was deferred.
+- **Short links.** `vm.tiktok.com/…` links carry no `/video/<id>`, so they can't be pre-mapped to a format and are skipped. Resolve them (follow the redirect) before mapping, or match returned items by `webVideoUrl`.
+- **Video-level constraint tagging.** The free-form `niche_constraint` is per-format. If format-level proves too coarse, add per-video niche tags + a video filter on the dashboard (the user's stated fallback).
+- **Scheduling.** `ingest-trends` is manual; a cron/routine could auto-pull weekly. JS-rendered pages (none of the current sources) would need an Apify `website-content-crawler` fallback in `trend_sources.fetch_trend_page`.
+
 ## Re-seed keywords on campaign edit
 
 - The inline campaign editor (`PATCH /campaigns/{run_id}`) updates the product + campaign config (name/goals/objective) but does **not** regenerate keyword allocations. Keywords are seeded once at create time from the objective.

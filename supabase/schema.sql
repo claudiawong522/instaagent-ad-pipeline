@@ -112,6 +112,24 @@ create table if not exists paid_ads (
   unique (run_id, id)
 );
 
+-- Trend pipeline (see migrations/025): one row per viral format scraped from a web trend
+-- page; example videos link via ugc_items.format_id. Defined before ugc_items for the FK.
+create table if not exists viral_formats (
+  id uuid primary key default gen_random_uuid(),
+  run_id uuid not null references pipeline_runs(id) on delete cascade,
+  source_name text not null,
+  source_url text,
+  content_hash text,
+  issue_date date,
+  format_name text not null,
+  format_description text,
+  niche_constraint text,
+  niche_constraint_model text,
+  classified_at timestamptz,
+  created_at timestamptz not null default now(),
+  unique (source_name, format_name)
+);
+
 create table if not exists ugc_items (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references pipeline_runs(id) on delete cascade,
@@ -143,6 +161,8 @@ create table if not exists ugc_items (
   -- 'expired' (URL no longer serves video), 'failed' (analysis produced nothing).
   enrichment_status text,
   enrichment_error text,
+  -- Trend-pipeline link (see migration 025): example videos of a viral_formats row.
+  format_id uuid references viral_formats(id) on delete cascade,
   source_metrics jsonb not null default '{}'::jsonb,
   saved_to_supabase_at timestamptz not null default now(),
   unique (run_id, external_id)
@@ -268,6 +288,8 @@ create index if not exists item_clusters_cluster_idx on item_clusters(item_type,
 create index if not exists clusters_run_idx on clusters(run_id);
 create index if not exists clusters_lookup_idx on clusters(item_type, space);
 create index if not exists scrape_events_run_idx on scrape_events(run_id, started_at desc);
+create index if not exists viral_formats_run_idx on viral_formats(run_id, created_at desc);
+create index if not exists ugc_items_format_idx on ugc_items(format_id);
 
 -- Search layer (see migrations/015): a cosine KNN index + function for query search.
 -- Enrichment (description, transcript, analysis tags) lives in item_enrichments

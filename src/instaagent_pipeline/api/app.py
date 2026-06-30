@@ -9,6 +9,7 @@ from .campaigns import resume_orphaned_jobs
 from .routes_campaigns import router as campaigns_router
 from .routes_discover import router as discover_router
 from .routes_search import router
+from .routes_trends import router as trends_router
 
 
 def create_app() -> FastAPI:
@@ -30,6 +31,7 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.include_router(campaigns_router)
     app.include_router(discover_router)
+    app.include_router(trends_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:

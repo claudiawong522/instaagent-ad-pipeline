@@ -19,6 +19,11 @@ class Config:
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-flash-latest"
     enrichment_provider: str = "openrouter"
+    # Web trend pages to scrape viral formats from (trend_sources.py). JSON list of
+    # {"name": ..., "url": ...} via the TREND_SOURCES env var; falls back to
+    # DEFAULT_TREND_SOURCES when unset. Each page is fetched, stripped to text, and parsed
+    # by the LLM into formats. None means "use the built-in defaults".
+    trend_sources_json: str | None = None
     # Relevance floor for the search-space KNN. Cosine scores scale with query length
     # (bare keywords land ~0.2 lower than multi-word queries against the verbose
     # descriptions), so the floor is set just above the true-nonsense band (~0.24):
@@ -61,6 +66,7 @@ class Config:
             gemini_api_key=os.getenv("GEMINI_API_KEY"),
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-flash-latest"),
             enrichment_provider=os.getenv("ENRICHMENT_PROVIDER", "openrouter"),
+            trend_sources_json=os.getenv("TREND_SOURCES"),
             voyage_api_key=os.getenv("VOYAGE_API_KEY"),
             embedding_model=os.getenv("EMBEDDING_MODEL", "voyage-4-lite"),
             search_min_similarity=float(os.getenv("SEARCH_MIN_SIMILARITY", "0.30")),

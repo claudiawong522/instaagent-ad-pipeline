@@ -28,6 +28,8 @@ from .keywords import (
 )
 from .ingestion import utc_now_iso
 from .supabase_client import SupabaseClient
+from .trend_classify import classify_formats
+from .trend_ingest import ingest_trends
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -41,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         "enrich-audience",
         "embed-items",
         "cluster-items",
+        "classify-formats",
     }
     supabase = build_supabase(config, dry_run=dry_run and not dry_run_needs_supabase)
 
@@ -117,6 +120,28 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             supabase=supabase,
             args=args,
+        )
+    elif args.command == "ingest-trends":
+        result = ingest_trends(
+            config=config,
+            supabase=supabase,
+            only_source=args.source_name,
+            timeout=args.timeout,
+            concurrency=args.concurrency,
+            skip_enrichment=args.skip_enrichment,
+            force=args.force,
+            dry_run=args.dry_run,
+        )
+    elif args.command == "classify-formats":
+        result = classify_formats(
+            config=config,
+            supabase=supabase,
+            source_name=args.source_name,
+            limit=args.limit,
+            overwrite=args.overwrite,
+            dry_run=args.dry_run,
+            timeout=args.timeout,
+            concurrency=args.concurrency,
         )
     elif args.command == "backfill-tiktok-followers":
         result = backfill_tiktok_followers(
@@ -259,6 +284,31 @@ def build_parser() -> argparse.ArgumentParser:
     add_organic_enrichment_args(tiktok_trends)
     tiktok_trends.add_argument("--region", default="US", help="Two-letter country code for the For You feed (default US).")
     tiktok_trends.add_argument("--target-count", type=int, default=200)
+
+    trends = subparsers.add_parser(
+        "ingest-trends",
+        help="Scrape viral formats from configured web trend pages (TREND_SOURCES) into "
+        "viral_formats + ugc_items, re-scraping each example TikTok video for live metrics. "
+        "Chains organic enrichment (MP4 download + analysis) unless --skip-enrichment.",
+    )
+    trends.add_argument("--source-name", help="Only ingest this configured source (e.g. ramdam). Omit for all.")
+    trends.add_argument("--force", action="store_true", help="Re-parse even if the page is unchanged since last run.")
+    trends.add_argument("--timeout", type=int, default=300, help="Per-video enrichment timeout in seconds (covers the MP4 download).")
+    trends.add_argument("--concurrency", type=int, default=32, help="Parallel video enrichments (I/O-bound).")
+    trends.add_argument("--skip-enrichment", action="store_true", help="Ingest formats + videos only; do not download MP4s / run vision analysis.")
+    trends.add_argument("--dry-run", action="store_true", help="Fetch + LLM-parse pages and print formats without writing or re-scraping.")
+
+    classify = subparsers.add_parser(
+        "classify-formats",
+        help="Write a free-form marketing niche constraint per viral format via OpenRouter "
+        "(uses the example videos' enrichment when available).",
+    )
+    classify.add_argument("--source-name", help="Only classify formats from this source. Omit for all.")
+    classify.add_argument("--limit", type=int, default=1000, help="Maximum formats to scan.")
+    classify.add_argument("--overwrite", action="store_true", help="Re-classify formats that already have a niche_constraint.")
+    classify.add_argument("--timeout", type=int, default=60)
+    classify.add_argument("--concurrency", type=int, default=6, help="Parallel LLM calls.")
+    classify.add_argument("--dry-run", action="store_true")
 
     ig_followers = subparsers.add_parser(
         "backfill-ig-followers",

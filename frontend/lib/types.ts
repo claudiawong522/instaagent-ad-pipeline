@@ -204,6 +204,37 @@ export interface ScrapeEventsResponse {
   total_actual_usd: number
 }
 
+// Trends dashboard: a viral format scraped from a web trend page, with its example videos.
+export interface TrendVideo {
+  id: string
+  video_url: string | null // storage MP4 (falls back to provider URL)
+  thumb_url: string | null
+  original_url: string | null // the TikTok/Reel page
+  views: number | null
+  likes: number | null
+  virality: number | null
+  handle: string | null
+  description: string | null
+  enrichment_status: string | null
+}
+
+export interface ViralFormat {
+  id: string
+  source_name: string | null // e.g. ramdam, socialbee
+  source_url: string | null
+  issue_date: string | null
+  format_name: string | null
+  format_description: string | null
+  niche_constraint: string | null // free-form, LLM-written marketing constraint
+  video_count: number
+  total_views: number // aggregate live views across example videos (ranking key)
+  videos: TrendVideo[]
+}
+
+export interface TrendFormatsResponse {
+  formats: ViralFormat[]
+}
+
 export interface RunSummary {
   run_id: string
   status: string | null

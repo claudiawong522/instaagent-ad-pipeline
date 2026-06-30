@@ -11,6 +11,8 @@ dependencies = [
     # Transcode provider cover images (TikTok serves HEIC) to browser-renderable JPEG posters.
     "pillow>=10.3",
     "pillow-heif>=0.16",
+    # Strip web trend pages to text before LLM format extraction (trend_sources.py).
+    "beautifulsoup4>=4.12",
 ]
 
 [project.scripts]
