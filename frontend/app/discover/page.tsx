@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Sparkles, ArrowRight } from 'lucide-react'
+import { Loader2, Sparkles, ArrowRight, CheckCircle2, Circle } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { triggerDiscovery, getScrapeStats, getScrapeEvents } from '@/lib/api'
@@ -167,6 +167,7 @@ export default function DiscoverPage() {
               View in Search <ArrowRight className="size-3.5" />
             </Link>
           </div>
+          <PhaseStatus stats={stats ?? undefined} running={running} />
           <div className="grid grid-cols-3 gap-3 text-center">
             <Stat label="Scraped" value={stats?.tiktok_total} />
             <Stat label="Processing" value={stats?.tiktok_processing} />
@@ -201,6 +202,64 @@ function Stat({ label, value, highlight }: { label: string; value: number | unde
       </div>
       <div className="text-xs text-muted-foreground">{label}</div>
     </div>
+  )
+}
+
+/** Two-phase truth of a discovery run: items are scraped first, then enriched (made searchable).
+ * Scraped ticks once items land; Enriched stays a spinner while anything is still processing and
+ * only ticks when enrichment is genuinely complete (nothing left in processing). */
+function PhaseStatus({ stats, running }: { stats: ScrapeStats | undefined; running: boolean }) {
+  const scraped = stats?.tiktok_total ?? 0
+  const processing = stats?.tiktok_processing ?? 0
+  const searchable = stats?.tiktok_searchable ?? 0
+
+  const scrapeState = scraped > 0 ? 'done' : running ? 'active' : 'pending'
+  // Enriched ticks only when nothing is left processing; spins while items are still being
+  // enriched; stays pending until the scrape has produced something to enrich.
+  const enrichState = scraped === 0 ? 'pending' : processing > 0 ? 'active' : 'done'
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+      <Phase
+        label="Scraped"
+        state={scrapeState}
+        detail={scraped > 0 ? String(scraped) : scrapeState === 'active' ? '…' : undefined}
+      />
+      <span className="text-muted-foreground/40">→</span>
+      <Phase
+        label="Enriched"
+        state={enrichState}
+        detail={scraped > 0 ? `${searchable}/${scraped}` : undefined}
+      />
+    </div>
+  )
+}
+
+function Phase({
+  label,
+  state,
+  detail,
+}: {
+  label: string
+  state: 'done' | 'active' | 'pending'
+  detail?: string
+}) {
+  const icon =
+    state === 'done' ? (
+      <CheckCircle2 className="size-4 text-emerald-500" />
+    ) : state === 'active' ? (
+      <Loader2 className="size-4 animate-spin text-[#9d1555]" />
+    ) : (
+      <Circle className="size-4 text-muted-foreground/40" />
+    )
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {icon}
+      <span className={state === 'pending' ? 'text-muted-foreground' : 'font-medium text-foreground'}>
+        {label}
+      </span>
+      {detail && <span className="tabular-nums text-muted-foreground">{detail}</span>}
+    </span>
   )
 }
 
