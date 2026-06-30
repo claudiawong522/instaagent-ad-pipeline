@@ -102,6 +102,21 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli embed-items \
 By default this skips items that already have vectors. After changing what gets embedded
 (e.g. a new enrichment tag field), pass `--overwrite` to re-embed in place.
 
+Scrape viral *formats* from web trend pages into `viral_formats` + `ugc_items` (on existing databases, run `supabase/migrations/025_viral_formats.sql` first). Each configured page is fetched, LLM-parsed into formats, and each example TikTok is re-scraped for live metrics + an MP4 (chains organic enrichment unless `--skip-enrichment`):
+
+```bash
+PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-trends
+# or one source: --source-name ramdam   |   preview only: --dry-run
+```
+
+Then write a free-form marketing niche constraint per format:
+
+```bash
+PYTHONPATH=src python3 -m instaagent_pipeline.cli classify-formats
+```
+
+The dashboard reads these via `GET /trends/formats` (the frontend `/trends` page). Sources default to Ramdam/Newengen/Later/SocialBee; override with the `TREND_SOURCES` env var.
+
 Cluster ICP embeddings into `item_clusters` and `clusters` (on existing databases, run `supabase/migrations/014_item_clusters.sql` first):
 
 ```bash
@@ -118,9 +133,9 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli cluster-items \
 - `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_ANON_KEY`
 - `CLAUDE_API_KEY`
 - `APIFY_API_KEY`
-  - Required for paid-ad ingestion (`ingest-apify-ads`), organic ingestion (`ingest-tiktok`/`ingest-instagram`), and Instagram follower backfill (`backfill-ig-followers`).
+  - Required for paid-ad ingestion (`ingest-apify-ads`), organic ingestion (`ingest-tiktok`/`ingest-instagram`), Instagram follower backfill (`backfill-ig-followers`), and trend-video re-scrape / JS page rendering (`ingest-trends`).
 - `OPENROUTER_API_KEY`
-  - Required for paid-ad and organic enrichment, and cluster labeling.
+  - Required for paid-ad and organic enrichment, cluster labeling, and trend format parsing/classification (`ingest-trends`, `classify-formats`).
 - `VOYAGE_API_KEY`
   - Required for `embed-items`.
 
@@ -132,6 +147,8 @@ Optional:
   - Defaults to `google/gemini-3-flash-preview`.
 - `EMBEDDING_MODEL`
   - Defaults to `voyage-4-lite` (1024-dim vectors; the `item_embeddings.embedding` column is `vector(1024)`).
+- `TREND_SOURCES`
+  - JSON list of `{"name", "url", optional "render"}` web trend pages for `ingest-trends`. Defaults to Ramdam/Newengen/Later/SocialBee. Set `"render": "js"` for pages that inject example-video links client-side (rendered via Apify).
 - `INSTAAGENT_INSECURE_SSL=1`
   - Local dev workaround only if this Python install cannot verify HTTPS certificates.
   - Do not use this in production.
