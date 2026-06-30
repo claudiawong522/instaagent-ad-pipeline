@@ -722,6 +722,38 @@ def record_item_status(
         logger.warning("Status write failed for %s %s: %s", table, item_id, exc)
 
 
+# Provider cover images aren't always browser-renderable: TikTok in particular serves some
+# covers as HEIC (an ISO-BMFF container that shares MP4's `ftyp` signature, so it slips past the
+# video-bytes check and lands in Storage as a `.jpg` that Chrome/Firefox draw as a black frame).
+# We transcode every cover through Pillow to a real JPEG so the stored poster always displays.
+try:
+    from PIL import Image as _PILImage
+    import pillow_heif as _pillow_heif
+
+    _pillow_heif.register_heif_opener()  # lets Pillow decode HEIC/HEIF
+    _IMAGE_DECODE_OK = True
+except Exception:  # pragma: no cover - optional image deps absent
+    _IMAGE_DECODE_OK = False
+
+
+def thumbnail_to_web_jpeg(data: bytes) -> bytes | None:
+    """Transcode arbitrary cover bytes (HEIC/WebP/PNG/JPEG) to a browser-safe JPEG. Returns None
+    if the bytes can't be decoded, so the caller skips the thumbnail instead of storing a broken
+    one. Falls back to the original bytes if the optional image deps are unavailable."""
+    if not _IMAGE_DECODE_OK:
+        return data
+    from io import BytesIO
+
+    try:
+        with _PILImage.open(BytesIO(data)) as img:
+            out = BytesIO()
+            img.convert("RGB").save(out, "JPEG", quality=85)
+            return out.getvalue()
+    except Exception as exc:  # unreadable/corrupt cover
+        logger.warning("Thumbnail transcode failed (%s); skipping poster", exc)
+        return None
+
+
 def persist_media(
     supabase: SupabaseClient,
     *,
@@ -747,9 +779,11 @@ def persist_media(
     if thumbnail_url:
         try:
             thumb_bytes = fetch_video_bytes(thumbnail_url, timeout=timeout)
-            updates["storage_thumb_url"] = supabase.upload_object(
-                STORAGE_BUCKET, f"{run_id}/{subdir}/{item_id}.jpg", thumb_bytes, "image/jpeg", timeout=timeout
-            )
+            jpeg_bytes = thumbnail_to_web_jpeg(thumb_bytes)
+            if jpeg_bytes:
+                updates["storage_thumb_url"] = supabase.upload_object(
+                    STORAGE_BUCKET, f"{run_id}/{subdir}/{item_id}.jpg", jpeg_bytes, "image/jpeg", timeout=timeout
+                )
         except (HttpClientError, RuntimeError) as exc:
             logger.warning("Thumbnail persist failed for %s %s: %s", item_table, item_id, exc)
     if updates:
