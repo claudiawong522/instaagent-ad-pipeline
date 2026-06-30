@@ -239,6 +239,7 @@ create table if not exists scrape_events (
   estimated_cost_usd numeric,
   actual_cost_usd numeric,
   status text not null default 'running',
+  error_message text,                     -- out-of-credits detail for the UI (null = no billing problem)
   started_at timestamptz not null default now(),
   finished_at timestamptz
 );

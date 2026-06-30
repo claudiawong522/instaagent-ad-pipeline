@@ -17,7 +17,7 @@ from ..apify_ads import ingest_apify_ads
 from ..apify_organic import ingest_instagram, ingest_tiktok
 from ..audience_enrichment import enrich_audience
 from ..config import Config
-from ..costs import estimate_cost, reconcile_actual_cost, reconstruct_history
+from ..costs import detect_out_of_credits, estimate_cost, reconcile_actual_cost, reconstruct_history
 from ..embeddings import ALL_SPACES, embed_items
 from ..ingestion import utc_now_iso
 from ..keywords import (
@@ -261,9 +261,17 @@ def scrape_stats(supabase: SupabaseClient, run_id: str) -> dict[str, Any]:
     fb = _breakdown(paid, "video")
     ig = _breakdown([r for r in organic if r.get("source") == "instagram"], "video_url")
     tt = _breakdown([r for r in organic if r.get("source") == "tiktok"], "video_url")
-    failed = _last_scrape_failed(supabase, run_id)
+    outcome = _last_scrape_outcome(supabase, run_id)
     with _running_lock:
         running = sorted(p for (r, p) in _running if r == run_id)
+
+    def _failed(platform: str) -> bool:
+        return platform not in running and (outcome.get(platform) or {}).get("failed", False)
+
+    def _error(platform: str) -> str | None:
+        # Don't show a stale out-of-credits message once a fresh scrape for the platform is running.
+        return None if platform in running else (outcome.get(platform) or {}).get("error_message")
+
     return {
         "run_id": run_id,
         # `*_ads`/`*_reels`/`tiktoks` are the headline "searchable" counts the tiles show
@@ -277,21 +285,29 @@ def scrape_stats(supabase: SupabaseClient, run_id: str) -> dict[str, Any]:
         # Per-platform: did the most recent finished scrape attempt fail? Lets the UI flag a
         # scrape that errored out (e.g. a network drop mid-write) instead of showing it as a
         # silent partial success. A platform that's currently running is never "failed".
-        "facebook_scrape_failed": "facebook" not in running and failed.get("facebook", False),
-        "instagram_scrape_failed": "instagram" not in running and failed.get("instagram", False),
-        "tiktok_scrape_failed": "tiktok" not in running and failed.get("tiktok", False),
+        "facebook_scrape_failed": _failed("facebook"),
+        "instagram_scrape_failed": _failed("instagram"),
+        "tiktok_scrape_failed": _failed("tiktok"),
+        # Out-of-credits message for the latest scrape (null when there's no billing problem). Shown
+        # by the UI as a "refill and re-run" prompt; set even on an otherwise-'done' scrape whose
+        # enrichment ran out of credits.
+        "facebook_scrape_error": _error("facebook"),
+        "instagram_scrape_error": _error("instagram"),
+        "tiktok_scrape_error": _error("tiktok"),
         "running": running,
     }
 
 
-def _last_scrape_failed(supabase: SupabaseClient, run_id: str) -> dict[str, bool]:
-    """Whether the latest scrape_event per platform ended in 'failed'. Best-effort: if the
-    scrape_events table isn't there yet (migration 022 unapplied), report nothing failed."""
+def _last_scrape_outcome(supabase: SupabaseClient, run_id: str) -> dict[str, dict[str, Any]]:
+    """The latest scrape_event per platform as {failed, error_message}. Best-effort: if the
+    scrape_events table / error_message column isn't there yet (migration 022/024 unapplied),
+    report nothing. 'tiktok-trends' (the Discover run's event) is folded into 'tiktok' so the
+    Discover card, which reads tiktok_* stats, picks up its failure / out-of-credits message."""
     try:
         rows = supabase.select(
             "scrape_events",
             {
-                "select": "platform,status,started_at",
+                "select": "platform,status,error_message,started_at",
                 "run_id": f"eq.{run_id}",
                 "order": "started_at.desc",
                 "limit": "200",
@@ -299,11 +315,13 @@ def _last_scrape_failed(supabase: SupabaseClient, run_id: str) -> dict[str, bool
         )
     except Exception:
         return {}
-    out: dict[str, bool] = {}
+    out: dict[str, dict[str, Any]] = {}
     for r in rows:  # newest-first, so the first row seen per platform is the latest
         platform = r.get("platform")
+        if platform == "tiktok-trends":  # discover.DISCOVERY_PLATFORM (literal avoids a circular import)
+            platform = "tiktok"
         if platform and platform not in out:
-            out[platform] = r.get("status") == "failed"
+            out[platform] = {"failed": r.get("status") == "failed", "error_message": r.get("error_message")}
     return out
 
 
@@ -392,6 +410,20 @@ def list_scrape_events(supabase: SupabaseClient, run_id: str) -> dict[str, Any]:
     }
 
 
+def _existing_count(supabase: SupabaseClient, run_id: str, platform: str) -> int:
+    """How many items this run already holds for the platform — the 'have' a top-up scrape counts
+    against the requested total. Counts every collected row (matches the *_scraped stat), so a
+    re-scrape tops up toward the target instead of stacking a fresh full fetch on top."""
+    if platform == "facebook":
+        rows = supabase.select("paid_ads", {"select": "id", "run_id": f"eq.{run_id}", "limit": "100000"})
+    else:
+        rows = supabase.select(
+            "ugc_items",
+            {"select": "id", "run_id": f"eq.{run_id}", "source": f"eq.{platform}", "limit": "100000"},
+        )
+    return len(rows)
+
+
 def _run_scrape(
     config: Config,
     run_id: str,
@@ -427,9 +459,16 @@ def _run_scrape(
         # Stage 1 — ingest: fetch from Apify, write rows to paid_ads/ugc_items.
         rows = active_keyword_allocations(supabase, run_id)
         valid = [r for r in rows if str(r.get("keyword_text") or "").strip()]
-        # Split a requested total evenly across the keywords (so "fetch 100" ≈ 100 items, not
-        # 100 per keyword). Without an override, each keyword uses its stored allocation.
-        per_keyword = max(1, target_count // len(valid)) if (target_count and valid) else None
+        # When the caller asks for a total ("fetch up to N"), top up toward it: split only the GAP
+        # between N and what's already collected across the keywords — so a re-scrape adds ~N−have
+        # new items, not N per keyword stacked on the pile. Plain floor division (no min-1) keeps the
+        # total at or under N; a gap smaller than the keyword count just fetches nothing this round.
+        # Without an override, each keyword uses its stored allocation.
+        if target_count and valid:
+            gap = max(0, target_count - _existing_count(supabase, run_id, platform))
+            per_keyword = gap // len(valid)
+        else:
+            per_keyword = None
         for row in valid:
             keyword = str(row.get("keyword_text")).strip()
             target = per_keyword if per_keyword is not None else int(row.get(target_field) or 0)
@@ -474,6 +513,10 @@ def _run_scrape(
         if event_id:
             try:
                 actual = reconcile_actual_cost(supabase, run_id, started_at) if started_at else None
+                # Did either leg (Apify ingest / LLM enrichment) run out of credits? Detected from
+                # the run's failed source_queries so the UI can prompt a top-up + re-run. Set even
+                # when status is 'done' (an enrichment credit failure is swallowed per item).
+                credit_error = detect_out_of_credits(supabase, run_id, started_at) if started_at else None
                 supabase.update_by_id(
                     "scrape_events",
                     str(event_id),
@@ -483,6 +526,7 @@ def _run_scrape(
                         # Any keyword erroring = a short delivery, so flag failed (the UI shows it
                         # as a partial and offers retry to fill the gap).
                         "status": "failed" if (failed or keyword_errors) else "done",
+                        "error_message": credit_error,
                         "finished_at": utc_now_iso(),
                     },
                 )

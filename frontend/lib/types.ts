@@ -176,6 +176,12 @@ export interface ScrapeStats {
   facebook_scrape_failed: boolean
   instagram_scrape_failed: boolean
   tiktok_scrape_failed: boolean
+  // Out-of-credits message for the latest scrape (null when there's no billing problem). When set,
+  // the UI shows a "refill and re-run" prompt. Set even on an otherwise-done scrape whose enrichment
+  // ran out of credits.
+  facebook_scrape_error: string | null
+  instagram_scrape_error: string | null
+  tiktok_scrape_error: string | null
   running: string[] // platforms mid-scrape: facebook | instagram | tiktok
 }
 

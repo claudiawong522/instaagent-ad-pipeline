@@ -34,6 +34,43 @@ class HttpClientError(RuntimeError):
 # HTTP statuses worth retrying: rate limit (429) and transient server errors.
 RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 
+# Provider token (found in the failed call's provider/message) -> human label for the UI.
+_BILLING_PROVIDER_LABELS = (
+    ("apify", "Apify (scraping)"),
+    ("openrouter", "OpenRouter (AI analysis)"),
+    ("voyage", "Voyage (embeddings)"),
+)
+# Phrases providers use when an account is out of funds or over quota. 402 (Payment Required) is the
+# canonical status; some providers signal the same thing with a 403/429 carrying one of these.
+_BILLING_HINTS = (
+    "insufficient credit",
+    "insufficient_quota",
+    "out of credit",
+    "payment required",
+    "not enough credit",
+    "negative credit",
+    "add credits",
+    "billing hard limit",
+    "exceeded your monthly",
+    "quota exceeded",
+)
+
+
+def is_out_of_credits(http_status: int | None, message: str) -> bool:
+    """True when a provider rejected a call for lack of funds/quota (not a transient error).
+    Keyed on HTTP 402, else a billing phrase in the error text — so callers can prompt a top-up
+    and re-run instead of a blind retry."""
+    if http_status == 402:
+        return True
+    text = (message or "").lower()
+    return any(hint in text for hint in _BILLING_HINTS)
+
+
+def credit_provider_label(text: str) -> str:
+    """Map a provider name / error string to a UI-friendly provider label ('Apify (scraping)')."""
+    lowered = (text or "").lower()
+    return next((label for token, label in _BILLING_PROVIDER_LABELS if token in lowered), "An API")
+
 
 def request_json(
     method: str,

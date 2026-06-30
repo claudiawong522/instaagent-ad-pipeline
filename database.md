@@ -349,6 +349,7 @@ One row per UI scrape trigger (a click of Scrape / Scrape more for a platform), 
 | `estimated_cost_usd` | `numeric` | Nullable | Pre-scrape estimate. |
 | `actual_cost_usd` | `numeric` | Nullable | Reconciled spend; null until the scrape finishes. |
 | `status` | `text` | Not null, default `running` | `running` / `done` / `failed`. |
+| `error_message` | `text` | Nullable (migration `024_scrape_events_error_message.sql`) | Out-of-credits detail for the UI; null = no billing problem. Detected after the scrape from this run's failed `source_queries` (HTTP 402 or a billing phrase) via `costs.detect_out_of_credits`, so it catches a top-up problem on either the Apify ingest or the LLM enrichment leg — including enrichment credit failures that are swallowed per item and leave the event `done`. Surfaced per-platform by `scrape-stats` as `*_scrape_error`. |
 | `started_at` | `timestamptz` | Not null, default `now()` | Scrape start; the lower bound for cost reconciliation. |
 | `finished_at` | `timestamptz` | Nullable | Set when the scrape completes. |
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .http_client import credit_provider_label, is_out_of_credits
 from .supabase_client import SupabaseClient
 
 # Rough blended USD cost per scraped item (Apify fetch + LLM enrichment + embedding), per platform.
@@ -52,6 +53,34 @@ def reconcile_actual_cost(supabase: SupabaseClient, run_id: str, started_at: str
         params["request_timestamp"] = f"gte.{started_at}"
     rows = supabase.select("api_usage", params)
     return round(sum(_row_usd(row.get("rate_limit") or {}) for row in rows), 4)
+
+
+def detect_out_of_credits(
+    supabase: SupabaseClient, run_id: str, started_at: str | None = None
+) -> str | None:
+    """Scan the run's failed provider calls (from `started_at` onward) for an out-of-credits/quota
+    rejection and return a short message naming the provider, or None. Every failed Apify ingest or
+    LLM enrichment call logs to source_queries with its http_status + error_message, so this catches
+    a top-up problem on *either* leg of the scrape -- including enrichment failures that are swallowed
+    per item and never reach the scrape thread. Best-effort: returns None if the table can't be read."""
+    params: dict[str, str] = {
+        "select": "provider,http_status,error_message",
+        "run_id": f"eq.{run_id}",
+        "status": "eq.failed",
+        "limit": "500",
+    }
+    if started_at:
+        params["started_at"] = f"gte.{started_at}"
+    try:
+        rows = supabase.select("source_queries", params)
+    except Exception:
+        return None
+    for row in rows:
+        message = str(row.get("error_message") or "")
+        if is_out_of_credits(row.get("http_status"), message):
+            label = credit_provider_label(f"{row.get('provider') or ''} {message}")
+            return f"{label} is out of credits — refill and re-run to finish."
+    return None
 
 
 def _row_usd(meta: dict[str, Any]) -> float:

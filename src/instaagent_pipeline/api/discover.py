@@ -25,7 +25,7 @@ from ..apify_organic import (
 )
 from ..audience_enrichment import enrich_audience
 from ..config import Config
-from ..costs import estimate_cost, reconcile_actual_cost
+from ..costs import detect_out_of_credits, estimate_cost, reconcile_actual_cost
 from ..embeddings import ALL_SPACES, embed_items
 from ..ingestion import utc_now_iso
 from ..organic_enrichment import enrich_organic_items
@@ -164,6 +164,10 @@ def _run_discovery(
         if event_id:
             try:
                 actual = reconcile_actual_cost(supabase, run_id, started_at) if started_at else None
+                # Out-of-credits on either leg? Detected from failed source_queries so the Discover
+                # card can prompt a refill + re-run. Set even when status is 'done' (discovery keeps
+                # its scores when enrichment throttles, but the user still needs to know it stalled).
+                credit_error = detect_out_of_credits(supabase, run_id, started_at) if started_at else None
                 supabase.update_by_id(
                     "scrape_events",
                     str(event_id),
@@ -171,6 +175,7 @@ def _run_discovery(
                         "actual_cost_usd": actual,
                         "items_ingested": written,
                         "status": "failed" if failed else "done",
+                        "error_message": credit_error,
                         "finished_at": utc_now_iso(),
                     },
                 )
