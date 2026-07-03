@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Loader2, Search, TrendingUp } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -22,13 +22,21 @@ export default function TrendsPage() {
   const [error, setError] = useState<string | null>(null)
   const [source, setSource] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  // Chips persist across filtered loads: accumulate every source ever seen
+  // (the initial unfiltered load seeds the full set) instead of deriving from
+  // the currently filtered `formats`.
+  const [sources, setSources] = useState<string[]>([])
 
-  // The full unfiltered set drives the source chips; source/query filtering hits the API.
   const load = (opts?: { sourceName?: string | null; q?: string | null }) => {
     setLoading(true)
     listTrendFormats({ sourceName: opts?.sourceName ?? null, q: opts?.q ?? null })
       .then((res) => {
         setFormats(res.formats)
+        setSources((prev) => {
+          const set = new Set(prev)
+          res.formats.forEach((f) => f.source_name && set.add(f.source_name))
+          return Array.from(set).sort()
+        })
         setError(null)
       })
       .catch((e) => setError(String(e)))
@@ -38,12 +46,6 @@ export default function TrendsPage() {
   useEffect(() => {
     load()
   }, [])
-
-  const sources = useMemo(() => {
-    const set = new Set<string>()
-    formats.forEach((f) => f.source_name && set.add(f.source_name))
-    return Array.from(set).sort()
-  }, [formats])
 
   const selectSource = (s: string | null) => {
     setSource(s)
