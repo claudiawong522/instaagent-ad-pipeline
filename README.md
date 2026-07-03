@@ -117,6 +117,8 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli classify-formats
 
 The dashboard reads these via `GET /trends/formats` (the frontend `/trends` page). Sources default to Ramdam/Newengen/Later/SocialBee; override with the `TREND_SOURCES` env var.
 
+**Scheduled runs:** `.github/workflows/trend-scrape.yml` runs `ingest-trends` daily at 13:00 UTC on the default branch (unchanged pages are hash-skipped, and example videos already in `ugc_items` aren't re-scraped, so no-change days cost ~nothing). Requires the `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `APIFY_API_KEY`, and `OPENROUTER_API_KEY` repo secrets. Trigger manually with `gh workflow run trend-scrape.yml` (add `-f force=true` to re-parse unchanged pages).
+
 Cluster ICP embeddings into `item_clusters` and `clusters` (on existing databases, run `supabase/migrations/014_item_clusters.sql` first):
 
 ```bash

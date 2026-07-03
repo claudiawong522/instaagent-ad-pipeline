@@ -38,6 +38,7 @@ class TrendSourceResult:
     videos_found: int = 0
     videos_ingested: int = 0
     videos_skipped: int = 0  # non-TikTok (IG/YT) or unmappable short links — not re-scraped yet
+    videos_already_ingested: int = 0  # in ugc_items from a prior run — not re-scraped (metrics not refreshed)
     error: str | None = None
 
 
@@ -85,6 +86,25 @@ def _latest_content_hash(supabase: SupabaseClient, source_name: str) -> str | No
         },
     )
     return str(rows[0]["content_hash"]) if rows else None
+
+
+def _existing_video_ids(
+    supabase: SupabaseClient, run_id: str, video_ids: list[str]
+) -> set[str]:
+    """Which of video_ids are already in ugc_items for this run (scraped by a prior pass).
+    Changed pages keep their old formats' embeds, so without this every weekly page edit
+    would re-pay the Apify scrape for the whole archive."""
+    if not video_ids:
+        return set()
+    rows = supabase.select(
+        "ugc_items",
+        {
+            "select": "external_id",
+            "run_id": f"eq.{run_id}",
+            "external_id": f"in.({','.join(video_ids)})",
+        },
+    )
+    return {str(row["external_id"]) for row in rows}
 
 
 # ── TikTok URL helpers ────────────────────────────────────────────────────────────
@@ -180,6 +200,12 @@ def ingest_trends(
                         tiktok_urls.append(video_url.split("?", 1)[0])
                     else:
                         sr.videos_skipped += 1
+
+            already = _existing_video_ids(supabase, run_id, list(vid_to_format))
+            if already:
+                sr.videos_already_ingested = len(already)
+                tiktok_urls = [u for u in tiktok_urls if _tiktok_video_id(u) not in already]
+                vid_to_format = {v: f for v, f in vid_to_format.items() if v not in already}
 
             sr.videos_ingested = _rescrape_and_write(
                 config=config,
