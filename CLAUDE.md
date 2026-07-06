@@ -10,6 +10,7 @@ Guidance for Claude Code working in this repo. `AGENTS.md` holds the full projec
 4. **Goal-driven execution.** Turn vague asks into testable success criteria plus a brief checkpointed plan, then verify against them before declaring done.
 5. **Explain concisely.** When there's technical jargon, explain it. don't use that many words. be to the point. 
 6. **Hand off paste-ready artifacts via the clipboard.** When the output is something I have to paste somewhere else — a migration for the Supabase SQL editor, a snippet, a command — pipe it to `pbcopy` and tell me it's copied, instead of just printing it for me to select. I prefer it on the clipboard.
+7. **Never speculate — check.** When I ask *why* something happened, query the real data and confirm the mechanism before answering — e.g. I once blamed empty trend cards on "deleted TikToks" reasoned from the code, when a `Config.from_env()` + `SupabaseClient` query showed the LLM had split one trend into duplicate cards fighting over a single video row; if the data can't confirm a cause, say what's provable vs. unknown instead of dressing up a guess.
 
 
 ## Project-specific gotchas
