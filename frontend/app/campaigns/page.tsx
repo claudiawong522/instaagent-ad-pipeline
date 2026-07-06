@@ -334,9 +334,15 @@ function PlatformTile({
         {running ? 'scraping now' : error ? 'out of credits' : failed ? 'last scrape failed' : last ? `last ${last}` : 'not yet'}
       </span>
       {running ? (
-        <Button type="button" size="sm" variant="outline" disabled className="h-7 w-full gap-1 px-2 text-xs">
-          <Loader2 className="size-3 animate-spin" /> Scraping…
-        </Button>
+        <>
+          <Button type="button" size="sm" variant="outline" disabled className="h-7 w-full gap-1 px-2 text-xs">
+            <Loader2 className="size-3 animate-spin" /> Scraping…
+          </Button>
+          <span className="flex items-start gap-1 text-[10px] leading-tight text-muted-foreground/80">
+            <Clock className="mt-px size-3 shrink-0" />
+            This can take a few minutes and uses API quota. Safe to leave; it runs in the background.
+          </span>
+        </>
       ) : error ? (
         // Out of credits: tell the user to refill, then the same button re-runs the scrape.
         <div className="flex w-full flex-col items-center gap-1">

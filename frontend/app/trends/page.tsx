@@ -95,6 +95,18 @@ export default function TrendsPage() {
     loadScrapeDates(null)
   }, [])
 
+  // Deep-link support: /trends?product=... (e.g. the example chip on the home page) runs the
+  // product-match immediately. Read once on mount, using the param value directly since `product`
+  // state isn't updated until the next render.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get('product')
+    if (p) {
+      setProduct(p)
+      runMatch(p)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const selectSource = (s: string | null) => {
     setSource(s)
     loadScrapeDates(s)
@@ -106,9 +118,8 @@ export default function TrendsPage() {
     load({ sourceName: source, scrapedOn: d })
   }
 
-  const onMatch = (e: React.FormEvent) => {
-    e.preventDefault()
-    const q = product.trim()
+  const runMatch = (raw: string) => {
+    const q = raw.trim()
     if (!q) {
       clearMatch()
       return
@@ -122,6 +133,11 @@ export default function TrendsPage() {
       })
       .catch((e) => setError(String(e)))
       .finally(() => setMatching(false))
+  }
+
+  const onMatch = (e: React.FormEvent) => {
+    e.preventDefault()
+    runMatch(product)
   }
 
   const clearMatch = () => {
