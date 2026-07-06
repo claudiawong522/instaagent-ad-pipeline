@@ -2,15 +2,13 @@ import type {
   SearchFilters,
   SearchResponse,
   RunSummary,
-  VideoResult,
-  ItemType,
   Campaign,
   CreateCampaignInput,
   CreateCampaignResult,
   UpdateCampaignInput,
   DiscoverInput,
   DiscoverResult,
-  Product,
+  ScrapePlatform,
   ScrapeStats,
   ScrapeEventsResponse,
   TrendFormatsResponse,
@@ -54,14 +52,6 @@ export async function searchAds(filters: SearchFilters): Promise<SearchResponse>
 
 export async function listRuns(): Promise<{ runs: RunSummary[] }> {
   return request('/runs')
-}
-
-export async function getItem(itemType: ItemType, itemId: string): Promise<VideoResult> {
-  return request(`/items/${itemType}/${itemId}`)
-}
-
-export async function listProducts(): Promise<{ products: Product[] }> {
-  return request('/products')
 }
 
 export async function listCampaigns(): Promise<{ campaigns: Campaign[] }> {
@@ -121,8 +111,6 @@ export async function getScrapeStats(runId: string): Promise<ScrapeStats> {
 export async function getScrapeEvents(runId: string): Promise<ScrapeEventsResponse> {
   return request(`/campaigns/${runId}/scrape-events`)
 }
-
-export type ScrapePlatform = 'facebook' | 'instagram' | 'tiktok'
 
 export async function triggerScrape(
   runId: string,

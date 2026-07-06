@@ -1,14 +1,17 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Sparkles, ArrowRight, CheckCircle2, AlertTriangle, Wallet, HelpCircle } from 'lucide-react'
+import { Loader2, Sparkles, ArrowRight, CheckCircle2, AlertTriangle, Wallet } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { ProgressBar } from '@/components/ui/progress-bar'
-import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
-import { triggerDiscovery, getScrapeStats, getScrapeEvents, listRuns } from '@/lib/api'
-import type { ScrapeStats, ScrapeEventsResponse, RunSummary } from '@/lib/types'
+import { triggerDiscovery, listRuns } from '@/lib/api'
+import type { ScrapeStats, RunSummary } from '@/lib/types'
+import { dateTime, money } from '@/lib/format'
+import { enrichmentReasons, platformBreakdown } from '@/lib/scrape'
+import { useScrapeEvents, useScrapeStatsPolling } from '@/lib/useScrapeStatsPolling'
+import { HelpPopover } from '@/components/HelpPopover'
 
 // Country For-You feeds novi supports. Codes are ISO 3166 alpha-2 (sent uppercased).
 const REGIONS = [
@@ -21,43 +24,22 @@ const REGIONS = [
 const COST_PER_ITEM_USD = 0.012
 const DISCOVERY_PLATFORM = 'tiktok-trends'
 
-function money(usd: number): string {
-  if (usd > 0 && usd < 0.01) return '<$0.01'
-  return `$${usd.toFixed(2)}`
-}
-
-/** Scrape date/time, e.g. "Jun 23, 6:31 AM". */
-function dateTime(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-}
+// A discovery run mid-scrape keeps getting polled until it settles.
+const discoveryRunning = (s: ScrapeStats) => s.running.includes(DISCOVERY_PLATFORM)
 
 export default function DiscoverPage() {
   const [region, setRegion] = useState<string>('US')
   const [targetCount, setTargetCount] = useState(200)
   const [minViews, setMinViews] = useState(100000)
   const [runs, setRuns] = useState<RunSummary[]>([])
-  const [stats, setStats] = useState<Record<string, ScrapeStats>>({})
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { stats, refreshStats, watch } = useScrapeStatsPolling(discoveryRunning, 4000)
 
   const estCost = COST_PER_ITEM_USD * Math.max(0, targetCount)
   // Disable the trigger while any discovery run is mid-scrape (only one runs at a time server-side).
   const anyRunning = runs.some((r) => stats[r.run_id]?.running.includes(DISCOVERY_PLATFORM))
-
-  const refreshStats = useCallback(async (runIds: string[]) => {
-    const results = await Promise.allSettled(runIds.map((id) => getScrapeStats(id)))
-    setStats((prev) => {
-      const next = { ...prev }
-      results.forEach((res, i) => {
-        if (res.status === 'fulfilled') next[runIds[i]] = res.value
-      })
-      return next
-    })
-  }, [])
 
   // Load every past discovery run (newest first) on mount, then its stats — so the latest run and
   // all previous ones show without needing to re-trigger. Mirrors the campaigns list.
@@ -76,29 +58,12 @@ export default function DiscoverPage() {
       .finally(() => setLoading(false))
   }, [loadRuns])
 
-  // Poll stats for any run still scraping (plus ones we just kicked off) until they settle.
-  const pollRef = useRef<Set<string>>(new Set())
-  useEffect(() => {
-    const id = setInterval(() => {
-      const active = runs
-        .filter((r) => stats[r.run_id]?.running.includes(DISCOVERY_PLATFORM))
-        .map((r) => r.run_id)
-      const toPoll = new Set(active.concat(Array.from(pollRef.current)))
-      if (toPoll.size === 0) return
-      refreshStats(Array.from(toPoll))
-      pollRef.current.forEach((rid) => {
-        if (stats[rid] && !stats[rid].running.includes(DISCOVERY_PLATFORM)) pollRef.current.delete(rid)
-      })
-    }, 4000)
-    return () => clearInterval(id)
-  }, [runs, stats, refreshStats])
-
   async function onDiscover() {
     setStarting(true)
     setError(null)
     try {
       const res = await triggerDiscovery({ region, target_count: targetCount, min_views: minViews }, estCost)
-      pollRef.current.add(res.run_id)
+      watch(res.run_id)
       await loadRuns()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start discovery')
@@ -233,7 +198,7 @@ function DiscoveryRunCard({
   const title = latest ? 'Latest discovery' : `Discovery · ${dateTime(run.created_at)}`
   const pct = collected > 0 ? Math.round((ready / collected) * 100) : 0
   // Reasons exclude "still loading" while interrupted — the amber note below says that more clearly.
-  const reasons = enrichmentReasons(stats, 'tiktok').filter((r) => !(interrupted && r.label === 'loading'))
+  const reasons = enrichmentReasons(platformBreakdown(stats, 'tiktok')).filter((r) => !(interrupted && r.label === 'loading'))
 
   return (
     <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5">
@@ -347,13 +312,8 @@ function RunFooter({
   runId: string
   stats: ScrapeStats | undefined
 }) {
-  const [data, setData] = useState<ScrapeEventsResponse | null>(null)
   const refreshKey = [stats?.running.join(','), stats?.tiktok_last_scraped].join('|')
-  useEffect(() => {
-    getScrapeEvents(runId)
-      .then(setData)
-      .catch(() => {})
-  }, [runId, refreshKey])
+  const data = useScrapeEvents(runId, refreshKey)
 
   const events = data?.events ?? []
   const anyEstimate = events.some((e) => e.cost_kind === 'estimate')
@@ -406,37 +366,23 @@ function RunFooter({
   )
 }
 
-/** A small "?" that explains, on hover/focus, what the cost figure includes. The numbers come from
- * costs.py: Apify reports a real USD scrape cost; the LLM enrichment and embeddings only log tokens,
- * so those are priced from a per-model rate table. While a pull runs the figure is a rough per-item
- * estimate (shown with "~"); once it finishes it's reconciled to the actual API spend. */
+/** A small "?" that explains what the cost figure includes. The numbers come from costs.py: Apify
+ * reports a real USD scrape cost; the LLM enrichment and embeddings only log tokens, so those are
+ * priced from a per-model rate table. While a pull runs the figure is a rough per-item estimate
+ * (shown with "~"); once it finishes it's reconciled to the actual API spend. */
 function CostInfo() {
   return (
-    <Tooltip>
-      <TooltipTrigger
-        aria-label="How cost is computed"
-        className="inline-flex size-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-      >
-        <HelpCircle className="size-3.5" />
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs text-left leading-relaxed">
-        Cost is the real spend for each pull: Apify&apos;s reported scrape cost, plus the LLM
-        enrichment (Gemini) and embeddings (Voyage) priced from the tokens they used — summed across
-        the whole chain. While a pull is running it&apos;s a rough estimate (marked &ldquo;~&rdquo;);
-        once it finishes it&apos;s reconciled to the actual API spend.
-      </TooltipContent>
-    </Tooltip>
+    <HelpPopover
+      ariaLabel="How cost is computed"
+      wrapperClassName="inline-flex items-center"
+      triggerClassName="inline-flex size-4 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      iconClassName="size-3.5"
+      panelClassName="bottom-full right-0 mb-1 w-72 font-normal leading-relaxed"
+    >
+      Cost is the real spend for each pull: Apify&apos;s reported scrape cost, plus the LLM
+      enrichment (Gemini) and embeddings (Voyage) priced from the tokens they used — summed across
+      the whole chain. While a pull is running it&apos;s a rough estimate (marked &ldquo;~&rdquo;);
+      once it finishes it&apos;s reconciled to the actual API spend.
+    </HelpPopover>
   )
-}
-
-/** Plain-English reasons a collected video isn't ready to search yet, nonzero only. Shared by the
- * discovery and (via the same field names) campaign summaries so the wording stays identical. */
-function enrichmentReasons(stats: ScrapeStats | undefined, prefix: 'tiktok' | 'facebook' | 'instagram') {
-  const g = (k: string) => (stats ? (stats as unknown as Record<string, number>)[`${prefix}_${k}`] ?? 0 : 0)
-  return [
-    { label: 'loading', n: g('processing'), text: `${g('processing')} still loading`, cls: 'text-muted-foreground' },
-    { label: 'expired', n: g('expired'), text: `${g('expired')} couldn't be loaded (removed)`, cls: 'text-amber-600 dark:text-amber-500' },
-    { label: 'failed', n: g('failed'), text: `${g('failed')} couldn't be processed`, cls: 'text-red-600 dark:text-red-500' },
-    { label: 'novideo', n: g('no_video'), text: `${g('no_video')} weren't videos`, cls: 'text-muted-foreground' },
-  ].filter((r) => r.n > 0)
 }

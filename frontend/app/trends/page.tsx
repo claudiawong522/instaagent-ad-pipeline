@@ -1,12 +1,15 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-import { HelpCircle, Loader2, Search, Sparkles, TrendingUp, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Loader2, Search, Sparkles, TrendingUp, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { listTrendFormats, matchProduct } from '@/lib/api'
 import type { MatchedFormat, ViralFormat, TrendVideo } from '@/lib/types'
+import { fmtDate, formatNum } from '@/lib/format'
+import { HelpPopover } from '@/components/HelpPopover'
+import { VideoTile } from '@/components/VideoTile'
 
 // Newsletter/trend-roundup sources, kept in sync with DEFAULT_TREND_SOURCES in
 // src/instaagent_pipeline/trend_sources.py — the pages these formats are scraped from.
@@ -16,22 +19,10 @@ const TREND_SOURCE_URLS: { name: string; url: string; cadence: string }[] = [
   { name: 'socialbee', url: 'https://socialbee.com/blog/tiktok-trends/', cadence: 'Updated weekly' },
 ]
 
-function formatNum(n: number | null | undefined): string {
-  if (n == null) return '—'
-  const compact = (v: number) => (v % 1 === 0 ? String(v) : v.toFixed(1))
-  if (n >= 1_000_000) return `${compact(n / 1_000_000)}M`
-  if (n >= 1_000) return `${compact(n / 1_000)}K`
-  return String(n)
-}
-
 // Posted-date presets → an ISO cutoff sent to the API (filters example videos by date_created).
 const RANGE_DAYS: Record<string, number> = { '7d': 7, '30d': 30, '90d': 90 }
 const cutoffFor = (r: string | null): string | null =>
   r && RANGE_DAYS[r] ? new Date(Date.now() - RANGE_DAYS[r] * 86400000).toISOString() : null
-
-function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-}
 
 export default function TrendsPage() {
   const [formats, setFormats] = useState<ViralFormat[]>([])
@@ -218,51 +209,27 @@ export default function TrendsPage() {
 }
 
 function SourcesHelp() {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [open])
-
   return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-label="Trend sources"
-        className="text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <HelpCircle className="h-4 w-4" />
-      </button>
-      {open && (
-        <div className="absolute left-0 top-full z-10 mt-1.5 w-64 rounded-md border border-border bg-popover p-3 text-popover-foreground shadow-md">
-          <p className="mb-2 text-xs font-medium">Formats are scraped from these trend newsletters:</p>
-          <ul className="flex flex-col gap-2">
-            {TREND_SOURCE_URLS.map((s) => (
-              <li key={s.name} className="min-w-0">
-                <a
-                  href={s.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="block min-w-0 hover:underline"
-                >
-                  <span className="block text-xs font-medium capitalize text-primary">
-                    {s.name} <span className="font-normal text-muted-foreground">· {s.cadence}</span>
-                  </span>
-                  <span className="block truncate text-[11px] text-muted-foreground">{s.url}</span>
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
+    <HelpPopover ariaLabel="Trend sources" panelClassName="left-0 top-full mt-1.5 w-64">
+      <p className="mb-2 text-xs font-medium">Formats are scraped from these trend newsletters:</p>
+      <ul className="flex flex-col gap-2">
+        {TREND_SOURCE_URLS.map((s) => (
+          <li key={s.name} className="min-w-0">
+            <a
+              href={s.url}
+              target="_blank"
+              rel="noreferrer"
+              className="block min-w-0 hover:underline"
+            >
+              <span className="block text-xs font-medium capitalize text-primary">
+                {s.name} <span className="font-normal text-muted-foreground">· {s.cadence}</span>
+              </span>
+              <span className="block truncate text-[11px] text-muted-foreground">{s.url}</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </HelpPopover>
   )
 }
 
@@ -359,39 +326,30 @@ function FormatCard({ format: f }: { format: ViralFormat & Partial<MatchedFormat
 
 function TrendVideoCard({ video: v }: { video: TrendVideo }) {
   return (
-    <div className="flex flex-col overflow-hidden rounded-md border border-border bg-background">
-      {v.video_url ? (
-        <video
-          src={v.video_url}
-          poster={v.thumb_url ?? undefined}
-          controls
-          playsInline
-          preload="none"
-          className="aspect-[9/16] w-full bg-black object-cover"
-        />
-      ) : (
-        <div className="flex aspect-[9/16] w-full items-center justify-center bg-muted text-[11px] text-muted-foreground">
-          {v.enrichment_status === 'expired' ? 'video expired' : 'processing…'}
-        </div>
-      )}
-      <div className="flex flex-col gap-1 p-2">
-        <div className="flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
-          {v.views != null && <span>{formatNum(v.views)} views</span>}
-          {v.likes != null && <span>{formatNum(v.likes)} likes</span>}
-          {v.date_created && <span>{fmtDate(v.date_created)}</span>}
-        </div>
-        {v.handle && <span className="truncate text-[11px] text-muted-foreground">@{v.handle}</span>}
-        {v.original_url && (
-          <a
-            href={v.original_url}
-            target="_blank"
-            rel="noreferrer"
-            className="text-[11px] text-primary hover:underline"
-          >
-            Open ↗
-          </a>
-        )}
+    <VideoTile
+      videoUrl={v.video_url}
+      thumbUrl={v.thumb_url}
+      fallback={v.enrichment_status === 'expired' ? 'video expired' : 'processing…'}
+      className="overflow-hidden rounded-md border border-border bg-background"
+      fallbackClassName="text-[11px]"
+      bodyClassName="gap-1 p-2"
+    >
+      <div className="flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
+        {v.views != null && <span>{formatNum(v.views)} views</span>}
+        {v.likes != null && <span>{formatNum(v.likes)} likes</span>}
+        {v.date_created && <span>{fmtDate(v.date_created)}</span>}
       </div>
-    </div>
+      {v.handle && <span className="truncate text-[11px] text-muted-foreground">@{v.handle}</span>}
+      {v.original_url && (
+        <a
+          href={v.original_url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[11px] text-primary hover:underline"
+        >
+          Open ↗
+        </a>
+      )}
+    </VideoTile>
   )
 }

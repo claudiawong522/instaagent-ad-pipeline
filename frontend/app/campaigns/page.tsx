@@ -1,43 +1,30 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Plus, Facebook, Instagram, Music2, ChevronDown, ChevronUp, AlertTriangle, Pencil, Check, Clock, Wallet } from 'lucide-react'
+import { Loader2, Plus, Facebook, Instagram, Music2, ChevronDown, ChevronUp, AlertTriangle, Pencil, Clock, Wallet } from 'lucide-react'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ProgressBar } from '@/components/ui/progress-bar'
-import { cn } from '@/lib/utils'
-import { listCampaigns, getScrapeStats, getScrapeEvents, triggerScrape, updateCampaign, type ScrapePlatform } from '@/lib/api'
-import type { Campaign, ScrapeStats, ScrapeEventsResponse } from '@/lib/types'
+import { listCampaigns, triggerScrape, updateCampaign } from '@/lib/api'
+import type { Campaign, ScrapePlatform, ScrapeStats } from '@/lib/types'
+import { dateTime, money, timeAgo } from '@/lib/format'
+import { emptyStats, enrichmentReasons, platformBreakdown, type PlatformCounts } from '@/lib/scrape'
+import { useScrapeEvents, useScrapeStatsPolling } from '@/lib/useScrapeStatsPolling'
+import { CampaignForm } from '@/components/campaigns/CampaignForm'
 
 // Rough blended $/item (Apify + enrichment + embedding) for the pre-scrape estimate. Mirror of
 // EST_COST_PER_ITEM_USD in src/instaagent_pipeline/costs.py — keep the two in sync.
 const COST_PER_ITEM_USD: Record<ScrapePlatform, number> = { facebook: 0.012, instagram: 0.01, tiktok: 0.01 }
 
-/** Format a USD amount compactly: a "<$0.01" floor for tiny spend, 2 decimals otherwise. */
-function money(usd: number | null | undefined): string {
-  if (usd == null) return '—'
-  if (usd > 0 && usd < 0.01) return '<$0.01'
-  return `$${usd.toFixed(2)}`
-}
+// A campaign with any platform mid-scrape keeps getting polled until it settles.
+const anyPlatformRunning = (s: ScrapeStats) => s.running.length > 0
 
 export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
-  const [stats, setStats] = useState<Record<string, ScrapeStats>>({})
   const [loading, setLoading] = useState(true)
-
-  const refreshStats = useCallback(async (runIds: string[]) => {
-    const results = await Promise.allSettled(runIds.map((id) => getScrapeStats(id)))
-    setStats((prev) => {
-      const next = { ...prev }
-      results.forEach((res, i) => {
-        if (res.status === 'fulfilled') next[runIds[i]] = res.value
-      })
-      return next
-    })
-  }, [])
+  const { stats, setStats, refreshStats, watch } = useScrapeStatsPolling(anyPlatformRunning, 3000)
 
   const refreshCampaigns = useCallback(async () => {
     const r = await listCampaigns()
@@ -51,25 +38,8 @@ export default function CampaignsPage() {
       .finally(() => setLoading(false))
   }, [refreshCampaigns])
 
-  // Poll scrape stats for any campaign with an in-flight scrape until it settles.
-  const pollRef = useRef<Set<string>>(new Set())
-  useEffect(() => {
-    const id = setInterval(() => {
-      const active = Object.values(stats)
-        .filter((s) => s.running.length > 0)
-        .map((s) => s.run_id)
-      const toPoll = new Set(active.concat(Array.from(pollRef.current)))
-      if (toPoll.size === 0) return
-      refreshStats(Array.from(toPoll))
-      pollRef.current.forEach((rid) => {
-        if (stats[rid] && stats[rid].running.length === 0) pollRef.current.delete(rid)
-      })
-    }, 3000)
-    return () => clearInterval(id)
-  }, [stats, refreshStats])
-
   async function onScrape(runId: string, platform: ScrapePlatform, targetCount: number, estimatedCost: number) {
-    pollRef.current.add(runId)
+    watch(runId)
     // optimistic: show the spinner immediately
     setStats((prev) => ({
       ...prev,
@@ -120,79 +90,6 @@ export default function CampaignsPage() {
       )}
     </div>
   )
-}
-
-/** Compact relative time, e.g. "just now", "5m ago", "3h ago", "2d ago". */
-function timeAgo(iso: string | null | undefined): string | null {
-  if (!iso) return null
-  const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return null
-  const secs = Math.max(0, Math.round((Date.now() - then) / 1000))
-  if (secs < 45) return 'just now'
-  const mins = Math.round(secs / 60)
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.round(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.round(hours / 24)
-  return `${days}d ago`
-}
-
-/** Zeroed stats for optimistic UI before the first poll returns. */
-function emptyStats(runId: string): ScrapeStats {
-  return {
-    run_id: runId,
-    facebook_ads: 0,
-    instagram_reels: 0,
-    tiktoks: 0,
-    facebook_searchable: 0,
-    facebook_expired: 0,
-    facebook_failed: 0,
-    facebook_processing: 0,
-    facebook_total: 0,
-    facebook_scraped: 0,
-    facebook_no_video: 0,
-    facebook_last_scraped: null,
-    instagram_searchable: 0,
-    instagram_expired: 0,
-    instagram_failed: 0,
-    instagram_processing: 0,
-    instagram_total: 0,
-    instagram_scraped: 0,
-    instagram_no_video: 0,
-    instagram_last_scraped: null,
-    tiktok_searchable: 0,
-    tiktok_expired: 0,
-    tiktok_failed: 0,
-    tiktok_processing: 0,
-    tiktok_total: 0,
-    tiktok_scraped: 0,
-    tiktok_no_video: 0,
-    tiktok_last_scraped: null,
-    facebook_scrape_failed: false,
-    instagram_scrape_failed: false,
-    tiktok_scrape_failed: false,
-    facebook_scrape_error: null,
-    instagram_scrape_error: null,
-    tiktok_scrape_error: null,
-    running: [],
-  }
-}
-
-type PlatformPrefix = 'facebook' | 'instagram' | 'tiktok'
-
-/** Pull one platform's enrichment breakdown out of the flat ScrapeStats. */
-function pbreak(stats: ScrapeStats | undefined, prefix: PlatformPrefix) {
-  const g = (k: string) =>
-    stats ? (stats as unknown as Record<string, number>)[`${prefix}_${k}`] ?? 0 : 0
-  return {
-    searchable: g('searchable'),
-    expired: g('expired'),
-    failed: g('failed'),
-    processing: g('processing'),
-    total: g('total'),
-    scraped: g('scraped'),
-    no_video: g('no_video'),
-  }
 }
 
 type NumericStatKey = 'facebook_ads' | 'instagram_reels' | 'tiktoks'
@@ -264,10 +161,14 @@ function CampaignCard({
           <ScrapeHistory runId={c.run_id} stats={stats} />
           <EnrichmentBreakdown stats={stats} />
           {editing ? (
-            <CampaignEditor
-              campaign={c}
+            // Inline editor — the shared form, pre-filled; saves via PATCH /campaigns/{run_id},
+            // then the parent refetches the list.
+            <CampaignForm
+              variant="edit"
+              initial={c}
               onCancel={() => setEditing(false)}
-              onSaved={() => {
+              onSubmit={async (values) => {
+                await updateCampaign(c.run_id, values)
                 setEditing(false)
                 onSaved()
               }}
@@ -308,8 +209,8 @@ function CampaignCard({
             runId={c.run_id}
             platform={p}
             count={stats?.[p.statKey] ?? 0}
-            total={pbreak(stats, p.key).total}
-            processing={pbreak(stats, p.key).processing}
+            total={platformBreakdown(stats, p.key).total}
+            processing={platformBreakdown(stats, p.key).processing}
             lastScraped={stats?.[p.lastKey] ?? null}
             running={stats?.running.includes(p.key) ?? false}
             failed={stats?.[p.failedKey] ?? false}
@@ -478,20 +379,11 @@ const PLATFORM_LABEL: Record<string, string> = {
   tiktok: 'TikToks',
 }
 
-/** Scrape date/time, e.g. "Jun 23, 6:31 AM". */
-function dateTime(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-}
-
 /** Per-scrape cost history: one row per platform scrape, newest-first, each with its date/time and
  * total cost (Apify + enrichment + embeddings, summed). UI scrapes are exact (estimate while
  * running → actual once done); spend from before tracking is reconstructed per-platform. Refetches
  * whenever the campaign's scrape state changes so a just-finished scrape's real cost lands. */
 function ScrapeHistory({ runId, stats }: { runId: string; stats: ScrapeStats | undefined }) {
-  const [data, setData] = useState<ScrapeEventsResponse | null>(null)
   // Re-fetch on a scrape state change: a platform mid-scrape, or a new last-scraped timestamp.
   const refreshKey = [
     stats?.running.join(','),
@@ -499,11 +391,7 @@ function ScrapeHistory({ runId, stats }: { runId: string; stats: ScrapeStats | u
     stats?.instagram_last_scraped,
     stats?.tiktok_last_scraped,
   ].join('|')
-  useEffect(() => {
-    getScrapeEvents(runId)
-      .then(setData)
-      .catch(() => {})
-  }, [runId, refreshKey])
+  const data = useScrapeEvents(runId, refreshKey)
 
   if (!data || data.events.length === 0) {
     return (
@@ -553,7 +441,7 @@ function ScrapeHistory({ runId, stats }: { runId: string; stats: ScrapeStats | u
  * Shown inside View inputs so you can see how many collected videos are actually usable (videos
  * whose Apify URL expired before enrichment can never become ready). */
 function EnrichmentBreakdown({ stats }: { stats: ScrapeStats | undefined }) {
-  const rows = PLATFORMS.map((p) => ({ p, b: pbreak(stats, p.key) })).filter((r) => r.b.total > 0)
+  const rows = PLATFORMS.map((p) => ({ p, b: platformBreakdown(stats, p.key) })).filter((r) => r.b.total > 0)
   if (rows.length === 0) {
     return (
       <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
@@ -573,14 +461,10 @@ function EnrichmentBreakdown({ stats }: { stats: ScrapeStats | undefined }) {
 
 /** One platform's plain-English summary: how many videos we collected vs how many are ready to
  * search, with a one-line reason for anything in between. Compact so three platforms stack
- * cleanly; wording matches the Discover summary (no jargon, no internal denominators). */
-function SearchableRow({ label, b }: { label: string; b: ReturnType<typeof pbreak> }) {
-  const reasons = [
-    { label: 'loading', n: b.processing, text: `${b.processing} still loading`, cls: 'text-muted-foreground' },
-    { label: 'expired', n: b.expired, text: `${b.expired} couldn't be loaded (removed)`, cls: 'text-amber-600 dark:text-amber-500' },
-    { label: 'failed', n: b.failed, text: `${b.failed} couldn't be processed`, cls: 'text-red-600 dark:text-red-500' },
-    { label: 'novideo', n: b.no_video, text: `${b.no_video} weren't videos`, cls: 'text-muted-foreground' },
-  ].filter((r) => r.n > 0)
+ * cleanly; the reasons come from the shared enrichmentReasons, so the wording matches the
+ * Discover summary exactly (no jargon, no internal denominators). */
+function SearchableRow({ label, b }: { label: string; b: PlatformCounts }) {
+  const reasons = enrichmentReasons(b)
   const pct = b.scraped > 0 ? (b.searchable / b.scraped) * 100 : 0
   return (
     <div className="flex flex-col gap-1">
@@ -612,144 +496,5 @@ function InputRow({ label, value }: { label: string; value: string | null | unde
       <dt className="font-medium text-muted-foreground">{label}</dt>
       <dd className="text-foreground">{value || <span className="text-muted-foreground/60">—</span>}</dd>
     </>
-  )
-}
-
-const MARKETING_GOALS = ['Awareness', 'Traffic', 'Engagement', 'Leads', 'App promotion', 'Sales']
-const NAME_MAX = 120
-const OBJECTIVE_MAX = 800
-
-/** Inline editor for a campaign's details — same fields as the New Campaign form, pre-filled.
- * Saves via PATCH /campaigns/{run_id}; on success the parent refetches the list. */
-function CampaignEditor({
-  campaign: c,
-  onCancel,
-  onSaved,
-}: {
-  campaign: Campaign
-  onCancel: () => void
-  onSaved: () => void
-}) {
-  const [productName, setProductName] = useState(c.product_name ?? '')
-  const [category, setCategory] = useState(c.category ?? '')
-  const [targetMarket, setTargetMarket] = useState(c.target_market ?? '')
-  const [notes, setNotes] = useState(c.description ?? '')
-  const [campaignName, setCampaignName] = useState(c.campaign_name ?? '')
-  const [goals, setGoals] = useState<Set<string>>(new Set(c.marketing_goals))
-  const [objective, setObjective] = useState(c.campaign_objective ?? '')
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  function toggleGoal(g: string) {
-    setGoals((s) => {
-      const next = new Set(s)
-      if (next.has(g)) next.delete(g)
-      else next.add(g)
-      return next
-    })
-  }
-
-  async function save() {
-    setSaving(true)
-    setError(null)
-    try {
-      await updateCampaign(c.run_id, {
-        product_name: productName.trim(),
-        category: category.trim() || null,
-        target_market: targetMarket.trim() || null,
-        notes: notes.trim() || null,
-        campaign_name: campaignName.trim(),
-        marketing_goals: Array.from(goals),
-        campaign_objective: objective.trim() || null,
-      })
-      onSaved()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save')
-      setSaving(false)
-    }
-  }
-
-  const canSave = productName.trim().length > 0 && campaignName.trim().length > 0 && !saving
-
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault()
-        if (canSave) save()
-      }}
-      className="flex flex-col gap-3 rounded-md bg-muted/50 p-3 text-xs"
-    >
-      <div className="grid gap-2 sm:grid-cols-2">
-        <EditField label="Product name *">
-          <Input value={productName} onChange={(e) => setProductName(e.target.value)} className="h-8 text-sm" />
-        </EditField>
-        <EditField label="Category">
-          <Input value={category} onChange={(e) => setCategory(e.target.value)} className="h-8 text-sm" />
-        </EditField>
-        <EditField label="Target market">
-          <Input value={targetMarket} onChange={(e) => setTargetMarket(e.target.value)} className="h-8 text-sm" />
-        </EditField>
-        <EditField label="Description">
-          <Input value={notes} onChange={(e) => setNotes(e.target.value)} className="h-8 text-sm" />
-        </EditField>
-        <EditField label="Campaign name *">
-          <Input
-            value={campaignName}
-            onChange={(e) => setCampaignName(e.target.value.slice(0, NAME_MAX))}
-            className="h-8 text-sm"
-          />
-        </EditField>
-      </div>
-      <EditField label="Marketing goals">
-        <div className="flex flex-wrap gap-1.5">
-          {MARKETING_GOALS.map((g) => {
-            const active = goals.has(g)
-            return (
-              <button
-                key={g}
-                type="button"
-                onClick={() => toggleGoal(g)}
-                className={cn(
-                  'rounded-md border px-2.5 py-1 text-xs transition-colors',
-                  active
-                    ? 'border-primary bg-primary/10 text-foreground'
-                    : 'border-border text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {g}
-              </button>
-            )
-          })}
-        </div>
-      </EditField>
-      <EditField label="Objective">
-        <Textarea
-          value={objective}
-          onChange={(e) => setObjective(e.target.value.slice(0, OBJECTIVE_MAX))}
-          className="min-h-20 text-sm"
-        />
-      </EditField>
-      {error && (
-        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-destructive">{error}</div>
-      )}
-      <div className="flex items-center gap-2">
-        <Button type="submit" size="sm" disabled={!canSave} className="h-7 gap-1 px-3 text-xs">
-          {saving ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
-          {saving ? 'Saving…' : 'Save'}
-        </Button>
-        <Button type="button" size="sm" variant="ghost" onClick={onCancel} className="h-7 px-3 text-xs">
-          Cancel
-        </Button>
-      </div>
-    </form>
-  )
-}
-
-function EditField({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
-      {children}
-    </label>
   )
 }

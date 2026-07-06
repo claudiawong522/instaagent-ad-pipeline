@@ -55,15 +55,6 @@ export interface SearchFilters {
   limit?: number
 }
 
-export interface Product {
-  id: string
-  name: string
-  category: string | null
-  target_market: string | null
-  notes: string | null
-  created_at: string | null
-}
-
 export interface Campaign {
   run_id: string
   status: string | null
@@ -126,6 +117,9 @@ export interface DiscoverResult {
   run_id: string // the singleton discovery run; poll scrape-stats with it
   reason?: string
 }
+
+// The platforms a campaign scrape can target (and the prefixes of ScrapeStats' flat fields).
+export type ScrapePlatform = 'facebook' | 'instagram' | 'tiktok'
 
 // Per-platform enrichment breakdown. searchable = scraped video became searchable;
 // expired = provider URL no longer served video; failed = analysis produced nothing;
