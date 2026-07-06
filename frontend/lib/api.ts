@@ -13,6 +13,7 @@ import type {
   Product,
   ScrapeStats,
   ScrapeEventsResponse,
+  TrendFormatsResponse,
 } from './types'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -85,6 +86,19 @@ export async function triggerDiscovery(
     method: 'POST',
     body: JSON.stringify({ ...input, estimated_cost_usd: estimatedCostUsd ?? null }),
   })
+}
+
+export async function listTrendFormats(opts?: {
+  sourceName?: string | null
+  q?: string | null
+  minViews?: number | null
+}): Promise<TrendFormatsResponse> {
+  const params = new URLSearchParams()
+  if (opts?.sourceName) params.set('source_name', opts.sourceName)
+  if (opts?.q) params.set('q', opts.q)
+  if (opts?.minViews) params.set('min_views', String(opts.minViews))
+  const qs = params.toString()
+  return request(`/trends/formats${qs ? `?${qs}` : ''}`)
 }
 
 export async function getScrapeStats(runId: string): Promise<ScrapeStats> {
