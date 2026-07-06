@@ -6,11 +6,13 @@ intended — either loudly (fetch/parse raises, zero video links found) or silen
 LLM). This module turns those signals from an ingest run into one reminder email to
 the owner so the parser gets fixed by hand.
 
-Sending is free: plain Gmail SMTP with an app password (no paid email service).
-Env vars: ALERT_SMTP_USER + ALERT_SMTP_PASSWORD (Gmail address + app password from
-https://myaccount.google.com/apppasswords), optional ALERT_EMAIL_TO (defaults to
-instaagenttool@gmail.com). With no creds set, the alert is logged instead of sent —
-an ingest run never fails because of the alert.
+Sending is free: plain SMTP, no paid email service. Default relay is Gmail
+(ALERT_SMTP_USER = Gmail address, ALERT_SMTP_PASSWORD = app password from
+https://myaccount.google.com/apppasswords); accounts without app passwords can point
+ALERT_SMTP_HOST/ALERT_SMTP_PORT at any free relay (e.g. Brevo) and set
+ALERT_EMAIL_FROM to the verified sender. Optional ALERT_EMAIL_TO overrides the
+recipient (defaults to instaagenttool@gmail.com). With no creds set, the alert is
+logged instead of sent — an ingest run never fails because of the alert.
 
 Preview the email without sending:  python -m instaagent_pipeline.drift_alert
 Send a real test email:             python -m instaagent_pipeline.drift_alert --send
@@ -26,9 +28,6 @@ from typing import Any
 from .config import Config
 
 logger = logging.getLogger(__name__)
-
-_SMTP_HOST = "smtp.gmail.com"
-_SMTP_PORT = 465  # SSL
 
 
 def drift_signals(
@@ -128,10 +127,17 @@ def maybe_send_drift_alert(
     try:
         msg = EmailMessage()
         msg["Subject"] = subject
-        msg["From"] = config.alert_smtp_user
+        # Relay logins (e.g. Brevo's 8xxx@smtp-brevo.com) aren't valid senders; Gmail's are.
+        msg["From"] = config.alert_email_from or config.alert_smtp_user
         msg["To"] = config.alert_email_to
         msg.set_content(body)
-        with smtplib.SMTP_SSL(_SMTP_HOST, _SMTP_PORT, timeout=30) as smtp:
+        host, port = config.alert_smtp_host, config.alert_smtp_port
+        if port == 465:  # implicit SSL (Gmail); other ports (587/2525) upgrade via STARTTLS
+            smtp: smtplib.SMTP = smtplib.SMTP_SSL(host, port, timeout=30)
+        else:
+            smtp = smtplib.SMTP(host, port, timeout=30)
+            smtp.starttls()
+        with smtp:
             smtp.login(config.alert_smtp_user, config.alert_smtp_password)
             smtp.send_message(msg)
         logger.info("Drift alert emailed to %s (%d source(s)).", config.alert_email_to, len(signals))

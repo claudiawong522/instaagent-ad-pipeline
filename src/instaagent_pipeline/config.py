@@ -43,12 +43,17 @@ class Config:
     rerank_candidate_pool: int = 100
     # Browser origins allowed to call the API (CORS), comma-separated via CORS_ORIGINS.
     cors_origins: str = "http://localhost:3000"
-    # Parser-drift reminder emails (drift_alert.py), sent free over Gmail SMTP. The SMTP user
-    # is a Gmail address and the password a Gmail *app password* (myaccount.google.com/apppasswords
-    # — not the account password). Unset creds disable sending (the alert is logged instead).
+    # Parser-drift reminder emails (drift_alert.py), sent free over SMTP. Default is Gmail
+    # (user = Gmail address, password = app password from myaccount.google.com/apppasswords);
+    # any free relay works via ALERT_SMTP_HOST/PORT (e.g. Brevo's smtp-relay.brevo.com:587,
+    # where the login isn't the sender — set ALERT_EMAIL_FROM to the verified sender address).
+    # Port 465 speaks SSL, anything else STARTTLS. Unset creds disable sending (logged instead).
     alert_email_to: str = "instaagenttool@gmail.com"
+    alert_smtp_host: str = "smtp.gmail.com"
+    alert_smtp_port: int = 465
     alert_smtp_user: str | None = None
     alert_smtp_password: str | None = None
+    alert_email_from: str | None = None  # defaults to alert_smtp_user when unset
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -73,8 +78,12 @@ class Config:
             rerank_candidate_pool=int(os.getenv("RERANK_CANDIDATE_POOL", "100")),
             cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000"),
             alert_email_to=os.getenv("ALERT_EMAIL_TO", "instaagenttool@gmail.com"),
+            # `or` fallbacks (not getenv defaults): CI passes unset secrets as empty strings.
+            alert_smtp_host=os.getenv("ALERT_SMTP_HOST") or "smtp.gmail.com",
+            alert_smtp_port=int(os.getenv("ALERT_SMTP_PORT") or "465"),
             alert_smtp_user=os.getenv("ALERT_SMTP_USER"),
             alert_smtp_password=os.getenv("ALERT_SMTP_PASSWORD"),
+            alert_email_from=os.getenv("ALERT_EMAIL_FROM"),
         )
 
 
