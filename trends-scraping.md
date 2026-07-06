@@ -8,7 +8,7 @@ Instead of guessing what's viral, it lets marketing blogs do the trend-spotting,
 
 1. **Read the blogs.** It grabs a handful of marketing blogs that list trending TikToks. Some pages hide their videos behind JavaScript, so for those it uses a real browser (Apify) to load them fully.
 
-2. **Let AI take notes.** An AI reads each messy article and writes tidy notes: *this format, this description, these example videos.* No fragile "find the 3rd link on the page" code — the AI just reads it like a person.
+2. **Take notes — structurally when possible, AI otherwise.** The output is always tidy notes per format: *this format, this description, these example videos.* Pages with reliable structure are split without any AI (`trend_sources.py`): numbered pages (`Trend #1…#N`, newengen) split on the numbering; heading-delimited pages (ramdam, socialbee) split on whichever heading level the video embeds sit under — auto-detected per page, since ramdam's 2025 redesign moved it from h3 to h4. Deterministic parses can't merge adjacent trends or truncate titles, the failure modes the LLM had. The AI reads the page only when neither structure is recognized — and always for SGE, whose headings are app/brand names that must be rewritten into technique names (`SGE_PARSE_PROMPT`).
 
 3. **Fact-check the views.** For each example TikTok, it re-scrapes the real video to get the current view count and the actual clip. The blog says "this is hot" — this step proves it.
 
