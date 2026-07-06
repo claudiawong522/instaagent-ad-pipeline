@@ -6,14 +6,14 @@ description: Reliably scrape JS-rendered trend-roundup pages into viral_formats 
 # Scraping JS trend pages so every trend maps to its right video
 
 The pipeline reads marketing "TikTok trends this month" pages, LLM-parses each into viral
-*formats*, and re-scrapes each format's example video for live metrics. Two families of bugs
+*formats*, and re-scrapes each format's example video for live metrics. Several families of bugs
 kept the /trends board wrong; this skill is the hard-won method for avoiding them.
 
 **Golden rule (this repo's CLAUDE.md #7): never speculate — check the real data.** Every claim
 below was proven by fetching the live page and querying Supabase, not reasoned from the code.
 When something looks wrong, `Config.from_env()` + `SupabaseClient` and a `--dry-run` first.
 
-## The two failure families (what "wrong" looked like)
+## The failure families (what "wrong" looked like)
 
 1. **Mismatched / irrelevant videos.** A TikTok embed injects a "you might also like" carousel
    next to the real video. Those links are `tiktok.com/share/video/<other-id>?...&referer_video_id=<the real one>`.
@@ -24,6 +24,15 @@ When something looks wrong, `Config.from_env()` + `SupabaseClient` and a `--dry-
    ("strong options include Everything Hallelujah, Show You Off, FB Mom Photos…") and made a
    card per name with no video; (b) the headless render was **partial** — TikTok embeds hadn't
    loaded yet — so a render saw only text and produced name-only formats.
+3. **Fewer cards than the page actually has trends (under-count).** July 2026 newengen listed six
+   numbered trends (`Trend #1…#6`) but only four cards landed. Two distinct causes: (a)
+   **under-segmentation** — the LLM folded two numbered trends into one format, so "I Treated You
+   Bad" (#6) got no card and its video was absorbed under "You Look Like the 4th of July" (#5),
+   which then hoarded a second, wrong video; (b) **dead featured video** — "You Never Take Me to
+   Bangladesh" (#1)'s own TikTok was removed, so its embed rendered "Video currently unavailable",
+   no canonical URL was harvested, and the zero-link filter (§4) dropped the whole trend. The tell
+   for both: the page *numbers its own trends*, so `max(Trend #N) > formats in DB` proves something
+   merged or dropped. See §8.
 
 ## The method (each step maps to code that's already in place)
 
@@ -78,7 +87,27 @@ example. Confirm each format got a *distinct* id (no collisions). This is how a 
 video gets caught — e.g. an LLM run once put jaydenbanks' video under "Wow, Ok" instead of
 "Summer Anthem"; a good render corrects it.
 
-### 8. Right page, right month
+### 8. Trust the page's own trend numbering (count · boundaries · names)
+newengen's monthly report labels every trend `Trend #1`, `Trend #2`, … `Trend #N` in the rendered
+text. That numbering is ground truth the free-form LLM parse currently ignores — which is how six
+July trends became four cards (failure family 3):
+- **Count check.** `grep -c "Trend #"` the rendered text = the authoritative trend count. If the DB
+  has fewer formats for that `issue_date`, one merged (under-segmentation) or dropped (dead video).
+  Loop ingest and re-check; if it never reaches N, inspect *which* number is missing.
+- **Boundaries + names.** Each `Trend #N:` heading owns exactly ONE featured example (the handle in
+  its own section); everything under that trend's "Related videos" is carousel. A format that ends
+  up with videos from two different `Trend #N` sections is under-segmented — split it by heading.
+  Use the full heading text ("You Look Like the 4th of July (Makes Me Want a Hot Dog Real Bad)"),
+  not an LLM-shortened invention ("You Look Like 4th July").
+- **Dead-video trends aren't name-drops.** A numbered trend whose featured TikTok was removed shows
+  "Video currently unavailable" and yields no URL, so §4 drops it — but it's a *real* current trend,
+  not FAQ prose. Worth a card + `ingest_note` rather than silent disappearance.
+
+Not yet enforced in code — `TREND_PARSE_PROMPT` doesn't pin to the numbering, so this is a manual
+check today. The durable fix is to have the parse segment strictly on `Trend #N` headings and emit
+exactly one format per number.
+
+### 9. Right page, right month
 - Use newengen's **monthly `/insights/<month>-tiktok-trends/`** report (one embed per trend, ~9),
   NOT the weekly `/tiktok-trends/` hub (3 trends + FAQ name-drops). `_newengen_insights_url()`
   derives the current month; `default_trend_sources()` builds it fresh per call. Month names are
@@ -95,6 +124,10 @@ video gets caught — e.g. an LLM run once put jaydenbanks' video under "Wow, Ok
 4. For mismatches, check the stored `external_id`s against the page's carousel ids (overlap = junk).
 5. For empties, grep the page text for the name — if it only appears in an FAQ answer, it was a
    name-drop, not a trend.
+6. For under-counts, `grep -c "Trend #"` the rendered text = the real trend count; compare to
+   formats-per-`issue_date` in the DB. A gap = a merged (under-segmented) or dropped (dead-video)
+   trend — inspect *which* `Trend #N` is absent (method §8). July 2026: 6 numbered trends → 4 cards
+   because #6 folded into #5 and #1's featured TikTok was unavailable.
 
 ## Key files
 - `src/instaagent_pipeline/trend_sources.py` — fetch/render, `html_to_text`, carousel filter,
