@@ -45,12 +45,42 @@ def _newengen_insights_url(today: date | None = None) -> str:
     return f"https://newengen.com/insights/{_MONTH_SLUGS[(today or date.today()).month - 1]}-tiktok-trends/"
 
 
+def _newengen_url_candidates(today: date | None = None) -> list[str]:
+    """The slug forms newengen has used for its monthly report, in probe order: the current bare
+    `<month>-tiktok-trends` and the older `<month>-<year>-tiktok-trends` (used Jan–Apr 2026)."""
+    d = today or date.today()
+    return [
+        _newengen_insights_url(d),
+        f"https://newengen.com/insights/{_MONTH_SLUGS[d.month - 1]}-{d.year}-tiktok-trends/",
+    ]
+
+
+def resolve_newengen_url(today: date | None = None, timeout: int = 10) -> str:
+    """First newengen monthly-report URL that actually exists (HTTP < 400), so a change in the
+    month slug (year vs no-year) can't silently 404 the whole source. Falls back to the bare form
+    when nothing is reachable (offline / both down), preserving the prior behavior."""
+    candidates = _newengen_url_candidates(today)
+    for url in candidates:
+        try:
+            resp = requests.get(
+                url, headers=_FETCH_HEADERS, timeout=timeout, allow_redirects=True, stream=True
+            )
+            status = resp.status_code
+            resp.close()
+            if status < 400:
+                return url
+        except requests.RequestException:
+            continue
+    return candidates[0]
+
+
 def issue_date_from_url(url: str, today: date | None = None) -> str | None:
     """The report month of a monthly trend URL (…/<month>-tiktok-trends/…) as an ISO date (the
     1st of that month), used to stamp viral_formats.issue_date so the dashboard can tell June's
-    trends from July's. Returns None for weekly/undated sources (no month in the URL). The year
-    isn't in the slug; use the current one — safe because the slug tracks the current month."""
-    m = re.search(r"/([a-z]+)-tiktok-trends", url, re.I)
+    trends from July's. Returns None for weekly/undated sources (no month in the URL). Handles both
+    slug forms (`<month>-tiktok-trends` and the older `<month>-<year>-tiktok-trends`); the current
+    year is used — safe because the slug tracks the current month."""
+    m = re.search(r"/([a-z]+)(?:-\d{4})?-tiktok-trends", url, re.I)
     if not m or m.group(1).lower() not in _MONTH_SLUGS:
         return None
     month = _MONTH_SLUGS.index(m.group(1).lower()) + 1
@@ -64,7 +94,7 @@ def issue_date_from_url(url: str, today: date | None = None) -> str | None:
 def default_trend_sources() -> list[dict[str, str]]:
     return [
         {"name": "ramdam", "url": "https://www.ramd.am/blog/trends-tiktok"},
-        {"name": "newengen", "url": _newengen_insights_url(), "render": "js"},
+        {"name": "newengen", "url": resolve_newengen_url(), "render": "js"},
         {"name": "socialbee", "url": "https://socialbee.com/blog/tiktok-trends/"},
     ]
 
@@ -213,10 +243,12 @@ def _fetch_rendered_html(url: str, apify_api_key: str | None) -> str:
             # The monthly report lazy-loads a TikTok embed per trend as it scrolls into view;
             # each embed's script then injects the canonical link we harvest. Too little scroll
             # or wait and the lower trends never render (a partial render silently drops them).
-            # Scroll the full page and give the embeds time to initialize before capturing HTML.
-            "waitForSelectorOnLoadTimeoutSecs": 30,
-            "maxScrollHeightPixels": 120000,
-            "dynamicContentWaitSecs": 20,
+            # Scroll the full page and give the embeds generous time to initialize before capturing
+            # HTML — a single render was observed to capture only ~half the embeds, so the waits are
+            # deliberately long to raise per-pass coverage (the windowed cron then fills any gaps).
+            "waitForSelectorOnLoadTimeoutSecs": 45,
+            "maxScrollHeightPixels": 250000,
+            "dynamicContentWaitSecs": 45,
         },
         target_count=1,
     )
