@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
 import { searchAds, listRuns } from '@/lib/api'
 import type { ItemType, RunSummary, VideoResult } from '@/lib/types'
 import { formatNum } from '@/lib/format'
-import { HelpPopover } from '@/components/HelpPopover'
+import { ViralityHelp } from '@/components/ViralityHelp'
 import { VideoTile } from '@/components/VideoTile'
 
 const TYPE_OPTIONS: { label: string; value: ItemType | null }[] = [
@@ -104,18 +104,31 @@ export default function SearchPage() {
       .catch(() => setRuns([]))
   }, [])
 
+  // Deep-link support: /search?q=... (e.g. the example chips on the home page) pre-fills the
+  // box and runs the search immediately. Read once on mount; runs with the param value directly
+  // since `query` state isn't updated until the next render.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get('q')
+    if (q) {
+      setQuery(q)
+      runSearch(q)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // The keyword-free Viral Discovery run, if any. The "Viral discovery" toggle scopes results
   // to it (takes precedence over the campaign dropdown).
   const discoveryRun = runs.find((r) => r.discovery)
   const effectiveRunId = viralOnly && discoveryRun ? discoveryRun.run_id : runId
 
-  async function runSearch() {
+  async function runSearch(overrideQuery?: string) {
+    const q = (overrideQuery ?? query).trim()
     setLoading(true)
     setError(null)
     setSearched(true)
     try {
       const res = await searchAds({
-        query: query.trim(),
+        query: q,
         // Viral discovery is a single TikTok organic run — force organic and drop platform.
         item_type: viralOnly ? 'organic_item' : itemType,
         platform: viralOnly ? null : platform || null,
@@ -431,33 +444,6 @@ function ChipFilter({
         )
       })}
     </div>
-  )
-}
-
-// Click-to-toggle explainer for the organic virality score.
-function ViralityHelp() {
-  return (
-    <HelpPopover
-      ariaLabel="How is the virality score computed?"
-      wrapperClassName="inline-flex items-center"
-      triggerClassName="ml-0.5 text-muted-foreground/70"
-      iconClassName="h-3 w-3"
-      panelClassName="bottom-full left-1/2 mb-1 w-64 -translate-x-1/2 leading-relaxed"
-    >
-      <p className="font-medium">Virality score (0–1)</p>
-      <p className="mt-1 text-muted-foreground">
-        Blends how far a post escaped its own follower base with how engaging it was:
-      </p>
-      <p className="mt-1 font-mono text-[11px]">0.6 × reach + 0.4 × engagement</p>
-      <ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted-foreground">
-        <li><span className="font-medium text-popover-foreground">reach</span> = views ÷ followers</li>
-        <li><span className="font-medium text-popover-foreground">engagement</span> = (likes + comments + shares) ÷ views</li>
-      </ul>
-      <p className="mt-1 text-muted-foreground">
-        Each is put on a 0–1 log curve (going viral has diminishing returns), then blended.
-        Higher = reached well beyond its audience with strong engagement.
-      </p>
-    </HelpPopover>
   )
 }
 

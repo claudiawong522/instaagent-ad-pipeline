@@ -9,6 +9,7 @@ import { listTrendFormats, listTrendScrapeDates, matchProduct } from '@/lib/api'
 import type { MatchedFormat, ViralFormat, TrendVideo } from '@/lib/types'
 import { fmtDate, formatNum } from '@/lib/format'
 import { HelpPopover } from '@/components/HelpPopover'
+import { ViralityHelp } from '@/components/ViralityHelp'
 import { VideoTile } from '@/components/VideoTile'
 
 // Newsletter/trend-roundup sources, kept in sync with default_trend_sources() in
@@ -140,7 +141,8 @@ export default function TrendsPage() {
       </div>
       <p className="mb-4 text-sm text-muted-foreground">
         Trending TikTok/Reel formats scraped from web trend pages. Describe a product to rank them
-        by how well you could reuse each one — or browse all, ranked by live views.
+        by how well you could reuse each one — or browse all, ranked by virality
+        <ViralityHelp panelClassName="left-1/2 top-full mt-1 w-72 -translate-x-1/2 leading-relaxed" />.
       </p>
 
       <form onSubmit={onMatch} className="mb-3 flex items-center gap-2">

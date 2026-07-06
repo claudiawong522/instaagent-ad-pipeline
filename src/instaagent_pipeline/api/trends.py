@@ -168,7 +168,7 @@ def list_trend_formats(
         video_params: dict[str, Any] = {
             "select": _VIDEO_COLUMNS,
             "format_id": f"in.({','.join(format_ids)})",
-            "order": "views.desc.nullslast",
+            "order": "virality_score.desc.nullslast",
             "limit": "2000",
         }
         if posted_after:
@@ -187,6 +187,7 @@ def list_trend_formats(
         agg_views = sum(v["views"] or 0 for v in videos)
         if agg_views < min_views:
             continue
+        peak_virality = max((v["virality"] or 0 for v in videos), default=0)
         out.append(
             {
                 "id": fmt["id"],
@@ -199,12 +200,13 @@ def list_trend_formats(
                 "ingest_note": fmt.get("ingest_note"),
                 "video_count": len(videos),
                 "total_views": agg_views,
+                "peak_virality": peak_virality,
                 "videos": videos,
             }
         )
 
-    # Rank formats by aggregate live views (most viral first).
-    out.sort(key=lambda f: f["total_views"], reverse=True)
+    # Rank formats by their most-viral example (velocity-aware virality, most viral first).
+    out.sort(key=lambda f: f["peak_virality"], reverse=True)
     return out
 
 
@@ -391,7 +393,7 @@ def _hydrate_videos(supabase: SupabaseClient, format_ids: list[str]) -> dict[str
         {
             "select": _VIDEO_COLUMNS,
             "format_id": f"in.({','.join(format_ids)})",
-            "order": "views.desc.nullslast",
+            "order": "virality_score.desc.nullslast",
             "limit": "2000",
         },
     )

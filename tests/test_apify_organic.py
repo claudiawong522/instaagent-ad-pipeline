@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import instaagent_pipeline.apify_client as apify_client
 import instaagent_pipeline.apify_organic as apify_organic
@@ -56,10 +57,12 @@ def test_normalize_tiktok_item() -> None:
     assert row["hashtags"] == ["skincare", "cleanser"]
     assert row["cover"] == "https://cover.jpg"
     assert row["music"] == {"title": "original sound"}
-    # log-normalized: reach 6.41 (cap 100)→0.434, eng rate 0.1 (cap 0.30)→0.363;
-    # 0.6*0.434 + 0.4*0.363 = 0.406
-    assert row["virality_score"] == 0.406
-    assert row["virality_tier"] == "medium"
+    # virality now folds in a velocity term based on age-at-ingest (wall-clock `now`), so
+    # the exact score is time-dependent — the deterministic math is pinned in
+    # test_recompute_virality. Here just assert the date flowed through and a score came out.
+    assert row["date_created"] is not None
+    assert isinstance(row["virality_score"], float) and 0 < row["virality_score"] <= 1
+    assert row["virality_tier"] in {"low", "medium", "high"}
     assert row["source_metrics"]["page_url"] == "https://www.tiktok.com/@creator/video/7611"
     # analysis fields are left for the vision enrichment
     assert "hook" not in row
@@ -84,12 +87,20 @@ def test_recompute_virality() -> None:
     # No follower count → engagement-only fallback, log-normalized rate (cap 0.30).
     # er=0.2 → log1p(0.2)/log1p(0.30) = 0.695
     assert recompute_virality(views=1000, likes=200, comments=0, shares=0) == (0.695, "high")
-    # Reach path: views 10x followers, blended 0.6/0.4 with engagement, both log-normalized.
+    # Reach path, no posted date → age-unadjusted fallback (original 0.6/0.4 blend).
     # reach=10 (cap 100)→0.520; er=0.1 (cap 0.30)→0.363; 0.6*0.520 + 0.4*0.363 = 0.457
     score, tier = recompute_virality(
         views=10000, likes=1000, comments=0, shares=0, followers=1000
     )
     assert score == 0.457 and tier == "medium"
+    # Velocity path: same post, 5 days old → reach/age=2 (cap 30)→0.320 velocity term.
+    # 0.3*0.520 (reach) + 0.3*0.320 (velocity) + 0.4*0.363 (engagement) = 0.397.
+    score, tier = recompute_virality(
+        views=10000, likes=1000, comments=0, shares=0, followers=1000,
+        date_created="2026-01-01T00:00:00+00:00",
+        now=datetime(2026, 1, 6, tzinfo=UTC),
+    )
+    assert score == 0.397 and tier == "medium"
 
 
 # Condensed real novi/tiktok-trend-api item (raw TikTok aweme shape).

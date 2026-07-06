@@ -369,8 +369,10 @@ def normalize_tiktok_item(item: dict[str, Any], run_id: str, raw_payload_id: str
     comments = as_int(item.get("commentCount"))
     shares = as_int(item.get("shareCount"))
     followers = as_int(author.get("fans"))
+    date_created = as_timestamp(first_present(item, "createTimeISO", "createTime"))
     score, tier = recompute_virality(
-        views=views, likes=likes, comments=comments, shares=shares, followers=followers
+        views=views, likes=likes, comments=comments, shares=shares,
+        followers=followers, date_created=date_created,
     )
     music_name = music_meta.get("musicName") or music_meta.get("musicAuthor")
     return {
@@ -394,7 +396,7 @@ def normalize_tiktok_item(item: dict[str, Any], run_id: str, raw_payload_id: str
         "comments": comments,
         "shares": shares,
         "music": {"title": music_name} if music_name else None,
-        "date_created": as_timestamp(first_present(item, "createTimeISO", "createTime")),
+        "date_created": date_created,
         "virality_score": score,
         "virality_tier": tier,
         "source_metrics": source_metrics_from_unmapped(
@@ -440,8 +442,10 @@ def normalize_tiktok_trend_item(item: dict[str, Any], run_id: str, raw_payload_i
     likes = as_int(stats.get("digg_count"))
     comments = as_int(stats.get("comment_count"))
     shares = as_int(stats.get("share_count"))
+    date_created = as_timestamp(item.get("create_time"))
     score, tier = recompute_virality(
-        views=views, likes=likes, comments=comments, shares=shares, followers=None
+        views=views, likes=likes, comments=comments, shares=shares,
+        followers=None, date_created=date_created,
     )
     handle = author.get("unique_id")
     aweme_id = stringify_if_needed(item.get("aweme_id"))
@@ -473,7 +477,7 @@ def normalize_tiktok_trend_item(item: dict[str, Any], run_id: str, raw_payload_i
         "comments": comments,
         "shares": shares,
         "music": {"title": music_title, "author": music.get("author")} if music_title else None,
-        "date_created": as_timestamp(item.get("create_time")),
+        "date_created": date_created,
         "virality_score": score,
         "virality_tier": tier,
         "source_metrics": {
@@ -510,8 +514,10 @@ def normalize_instagram_reel(item: dict[str, Any], run_id: str, raw_payload_id: 
     comments = as_int(item.get("comment_count"))
     shares = as_int(item.get("share_count"))
     followers = as_int(user.get("follower_count"))
+    date_created = as_timestamp(item.get("taken_at"))
     score, tier = recompute_virality(
-        views=views, likes=likes, comments=comments, shares=shares, followers=followers
+        views=views, likes=likes, comments=comments, shares=shares,
+        followers=followers, date_created=date_created,
     )
     page_url = f"https://www.instagram.com/reel/{code}/" if code else None
     return {
@@ -533,7 +539,7 @@ def normalize_instagram_reel(item: dict[str, Any], run_id: str, raw_payload_id: 
         "likes": likes,
         "comments": comments,
         "shares": shares,
-        "date_created": as_timestamp(item.get("taken_at")),
+        "date_created": date_created,
         "virality_score": score,
         "virality_tier": tier,
         "source_metrics": source_metrics_from_unmapped(
@@ -553,8 +559,10 @@ def normalize_instagram_post(item: dict[str, Any], run_id: str, raw_payload_id: 
     likes = as_int(first_present(item, "likesCount", "like_count"))
     comments = as_int(first_present(item, "commentsCount", "comment_count"))
     followers = as_int(first_present(item, "followersCount", "ownerFollowersCount"))
+    date_created = as_timestamp(first_present(item, "timestamp", "taken_at"))
     score, tier = recompute_virality(
-        views=views, likes=likes, comments=comments, shares=None, followers=followers
+        views=views, likes=likes, comments=comments, shares=None,
+        followers=followers, date_created=date_created,
     )
     caption = item.get("caption")
     description = caption if isinstance(caption, str) else instagram_caption_text(item)
@@ -577,7 +585,7 @@ def normalize_instagram_post(item: dict[str, Any], run_id: str, raw_payload_id: 
         "views": views,
         "likes": likes,
         "comments": comments,
-        "date_created": as_timestamp(first_present(item, "timestamp", "taken_at")),
+        "date_created": date_created,
         "virality_score": score,
         "virality_tier": tier,
         "source_metrics": source_metrics_from_unmapped(

@@ -340,13 +340,14 @@ def recompute_tiktok_virality(
     """Re-score a run's TikTok items now that follower counts are known. Trend-API items are
     first scored engagement-only (no followers in the payload), which under-scores mega-viral
     hits whose reach dwarfs their follower base. Once backfill_tiktok_followers fills `followers`,
-    this switches them onto the reach-blended score. Re-runnable; only writes rows that change."""
+    this switches them onto the full reach + velocity + engagement blend (velocity needs
+    date_created, also selected here). Re-runnable; only writes rows that change."""
     if supabase is None:
         raise RuntimeError("Supabase credentials are required to recompute virality.")
     rows = supabase.select(
         "organic_items",
         {
-            "select": "id,views,likes,comments,shares,followers,virality_score,virality_tier",
+            "select": "id,views,likes,comments,shares,followers,date_created,virality_score,virality_tier",
             "run_id": f"eq.{run_id}",
             "source": "eq.tiktok",
             "limit": str(limit),
@@ -360,6 +361,7 @@ def recompute_tiktok_virality(
             comments=row.get("comments"),
             shares=row.get("shares"),
             followers=row.get("followers"),
+            date_created=row.get("date_created"),
         )
         if score == row.get("virality_score") and tier == row.get("virality_tier"):
             continue

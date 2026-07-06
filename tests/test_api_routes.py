@@ -102,26 +102,30 @@ def test_runs_and_campaigns_share_run_listing_but_shape_differently() -> None:
     assert campaigns[0]["target_organic_count"] == 20
 
 
-def test_trends_formats_groups_videos_and_ranks_by_views() -> None:
+def test_trends_formats_groups_videos_and_ranks_by_virality() -> None:
+    # f1's example has more views but lower virality; f2's has fewer views but higher
+    # virality. Ranking by peak virality must put f2 first (proving it's not views-ranked).
     rows = {
         "viral_formats": [
             {"id": "f1", "format_name": "Quiet fmt", "created_at": "2026-07-01"},
             {"id": "f2", "format_name": "Loud fmt", "created_at": "2026-07-02"},
         ],
         "organic_items": [
-            {"id": "v1", "format_id": "f1", "views": 100, "video_url": "u1", "source_metrics": {}},
-            {"id": "v2", "format_id": "f2", "views": 900, "video_url": "u2", "source_metrics": {}},
+            {"id": "v1", "format_id": "f1", "views": 900, "virality_score": 0.2, "video_url": "u1", "source_metrics": {}},
+            {"id": "v2", "format_id": "f2", "views": 100, "virality_score": 0.8, "video_url": "u2", "source_metrics": {}},
         ],
     }
     client = make_client(StubSupabase(rows))
     formats = client.get("/trends/formats").json()["formats"]
-    assert [f["id"] for f in formats] == ["f2", "f1"]  # aggregate views, descending
+    assert [f["id"] for f in formats] == ["f2", "f1"]  # peak virality, descending
     assert formats[0]["video_count"] == 1
     assert formats[0]["videos"][0]["video_url"] == "u2"
+    assert formats[0]["peak_virality"] == 0.8
 
-    # min_views drops formats whose example videos don't clear the bar.
+    # min_views still gates on aggregate views (independent of virality ranking), so the
+    # high-view/low-virality format is the one that clears a 500-view bar.
     filtered = client.get("/trends/formats", params={"min_views": 500}).json()["formats"]
-    assert [f["id"] for f in filtered] == ["f2"]
+    assert [f["id"] for f in filtered] == ["f1"]
 
 
 def test_trends_match_empty_product_short_circuits() -> None:
