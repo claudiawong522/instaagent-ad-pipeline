@@ -355,7 +355,11 @@ def _judge(
         prompt=prompt,
         schema=MATCH_SCHEMA,
         schema_name="product_matches",
-        max_tokens=min(4000, 200 + 80 * len(candidates)),
+        # ~140 tokens/candidate (a match object is a 36-char UUID + fit/score + a full
+        # "idea" sentence). The old 80/candidate cap truncated the JSON mid-string on
+        # verbose runs — the response hit finish_reason=length and came back unterminated,
+        # which parse_json_response then rejected as "invalid JSON".
+        max_tokens=min(8000, 400 + 140 * len(candidates)),
         timeout=timeout,
         empty_error="OpenRouter returned no matches array.",
     )
