@@ -6,11 +6,11 @@ import instaagent_pipeline.apify_client as apify_client
 import instaagent_pipeline.apify_organic as apify_organic
 from instaagent_pipeline.apify_organic import ingest_tiktok, ingest_tiktok_trends
 from instaagent_pipeline.config import Config
+from instaagent_pipeline.virality import recompute_virality
 from instaagent_pipeline.normalizers import (
     normalize_instagram_reel,
     normalize_tiktok_item,
     normalize_tiktok_trend_item,
-    recompute_virality,
     tiktok_trend_video_url,
 )
 

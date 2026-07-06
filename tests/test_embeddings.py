@@ -6,7 +6,7 @@ from typing import Any
 
 from instaagent_pipeline.embeddings import (
     ALL_SPACES,
-    EMBEDDING_SPACES,
+    ALL_SPACES,
     EmbedResult,
     EmbeddingCandidate,
     batched,
@@ -59,7 +59,7 @@ def test_build_icp_text_includes_quality_and_drivers() -> None:
 
 
 def test_embedding_spaces_are_icp_and_search_only() -> None:
-    assert EMBEDDING_SPACES == ("icp", "search")
+    assert ALL_SPACES == ("icp", "search")
     assert ALL_SPACES == ("icp", "search")
 
 

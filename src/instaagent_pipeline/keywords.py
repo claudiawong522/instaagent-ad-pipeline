@@ -6,7 +6,7 @@ from typing import Any
 
 from .config import Config
 from .http_client import HttpClientError, request_json
-from .ingestion import complete_query, log_api_usage, log_failed_query, start_query, usage_headers
+from .ingestion import complete_query, log_api_usage, log_failed_query, start_query
 from .supabase_client import SupabaseClient
 
 
@@ -184,12 +184,12 @@ def generate_keyword_allocations(
 
 
 def claude_provider(model: str) -> str:
+    """Provider string for bookkeeping rows, in the same "<provider>:<model>" shape every
+    other provider uses (openrouter:…, voyage:…, gemini:…)."""
     cleaned = model.strip()
     if not cleaned:
         return "claude"
-    if cleaned.startswith("claude"):
-        return cleaned
-    return f"claude-{cleaned}"
+    return f"claude:{cleaned}"
 
 
 def keyword_prompt(
@@ -412,34 +412,6 @@ def insert_keyword_allocations(
             )
         )
     return rows
-
-
-def log_claude_keyword_usage(
-    *,
-    supabase: SupabaseClient | None,
-    dry_run: bool,
-    run_id: str,
-    result: KeywordGenerationResult,
-) -> None:
-    if dry_run or supabase is None:
-        return
-    supabase.insert(
-        "api_usage",
-        {
-            "run_id": run_id,
-            "provider": claude_provider(result.model),
-            "endpoint": CLAUDE_MESSAGES_PATH,
-            "credits_used": None,
-            "rate_limit": {
-                "http_status": result.status,
-                "response_count": 1,
-                "keyword_count": len(result.allocations),
-                "model": result.model,
-                "usage": result.usage,
-                "headers": usage_headers(result.headers),
-            },
-        },
-    )
 
 
 def active_keyword_allocations(supabase: SupabaseClient, run_id: str) -> list[dict[str, Any]]:

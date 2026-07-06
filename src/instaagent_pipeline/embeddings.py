@@ -18,8 +18,6 @@ VOYAGE_RERANK_ENDPOINT = "/v1/rerank"
 # Voyage accepts up to 1000 inputs per request; 128 keeps request bodies small.
 EMBEDDING_BATCH_SIZE = 128
 
-EMBEDDING_SPACES = ("icp", "search")
-SEARCH_SPACE = "search"
 ALL_SPACES = ("icp", "search")
 
 # Columns the space builders read, selected from item_enrichments. The icp builder
@@ -79,7 +77,7 @@ def embed_items(
         raise ValueError("--limit must be greater than 0.")
     if source not in {"paid", "ugc", "all"}:
         raise ValueError("--source must be one of paid, ugc, all.")
-    target_spaces = spaces or EMBEDDING_SPACES
+    target_spaces = spaces or ALL_SPACES
     unknown = [space for space in target_spaces if space not in SPACE_TEXT_BUILDERS]
     if unknown:
         raise ValueError(f"Unknown embedding space(s): {', '.join(unknown)}.")

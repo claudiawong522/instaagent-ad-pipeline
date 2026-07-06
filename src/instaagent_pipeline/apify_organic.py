@@ -21,12 +21,12 @@ from .normalizers import (
     normalize_instagram_reel,
     normalize_tiktok_item,
     normalize_tiktok_trend_item,
-    recompute_virality,
     result_items,
     tiktok_download_url,
     tiktok_trend_video_url,
     tiktok_trend_views,
 )
+from .virality import recompute_virality
 from .supabase_client import SupabaseClient
 
 TIKTOK_ACTOR_ID = "clockworks~tiktok-scraper"
