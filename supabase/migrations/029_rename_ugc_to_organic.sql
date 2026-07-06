@@ -7,26 +7,51 @@
 -- parameter, not a literal), so it needs no change. The 'ugc' CONTENT FORMAT tag value in
 -- item_enrichments.content_formats is untouched — there "ugc" genuinely means the
 -- user-generated-content production style, not this table.
+--
+-- Constraint/index names are DISCOVERED from the catalog, not hard-coded: a live DB built
+-- through the incremental migrations carries different auto-generated names than a fresh
+-- schema.sql install. Every step is idempotent, so the script is safe to re-run.
 
 begin;
 
--- 1) The organic table itself. Indexes/constraints keep their old names on a table rename,
---    so rename the known ones too (if-exists: older DBs may predate some of them).
-alter table ugc_items rename to organic_items;
+-- 1) The organic table itself (skipped if a previous run already renamed it).
+do $$ begin
+  if to_regclass('public.ugc_items') is not null then
+    alter table ugc_items rename to organic_items;
+  end if;
+end $$;
 
-alter table organic_items rename constraint ugc_items_pkey to organic_items_pkey;
-alter table organic_items rename constraint ugc_items_run_id_external_id_key to organic_items_run_id_external_id_key;
-alter table organic_items rename constraint ugc_items_run_id_fkey to organic_items_run_id_fkey;
-alter table organic_items rename constraint ugc_items_raw_payload_id_fkey to organic_items_raw_payload_id_fkey;
-alter table organic_items rename constraint ugc_items_format_id_fkey to organic_items_format_id_fkey;
+-- 1a) Constraints keep their old names on a table rename; rename whatever ugc_items-prefixed
+--     constraints this database actually has (pkey, unique keys, FKs — names vary by history).
+do $$
+declare r record;
+begin
+  for r in
+    select conname from pg_constraint
+    where conrelid = 'public.organic_items'::regclass and conname like 'ugc_items%'
+  loop
+    execute format(
+      'alter table organic_items rename constraint %I to %I',
+      r.conname, replace(r.conname, 'ugc_items', 'organic_items')
+    );
+  end loop;
+end $$;
 
-alter index if exists ugc_items_run_id_idx rename to organic_items_run_id_idx;
-alter index if exists ugc_items_external_idx rename to organic_items_external_idx;
-alter index if exists ugc_items_video_id_idx rename to organic_items_video_id_idx;
-alter index if exists ugc_items_virality_idx rename to organic_items_virality_idx;
-alter index if exists ugc_items_saved_to_supabase_at_idx rename to organic_items_saved_to_supabase_at_idx;
-alter index if exists ugc_items_enrichment_status_idx rename to organic_items_enrichment_status_idx;
-alter index if exists ugc_items_format_idx rename to organic_items_format_idx;
+-- 1b) Same for plain indexes (constraint-backed indexes were already renamed with their
+--     constraints above, so they no longer match here).
+do $$
+declare r record;
+begin
+  for r in
+    select indexname from pg_indexes
+    where schemaname = 'public' and tablename = 'organic_items' and indexname like 'ugc_items%'
+  loop
+    execute format(
+      'alter index %I rename to %I',
+      r.indexname, replace(r.indexname, 'ugc_items', 'organic_items')
+    );
+  end loop;
+end $$;
 
 -- 2) The polymorphic item_type value on every table that stores it. Drop each check first
 --    so the UPDATE can pass, then re-add it with the new vocabulary.
@@ -50,8 +75,20 @@ update clusters set item_type = 'organic_item' where item_type = 'ugc_item';
 alter table clusters add constraint clusters_item_type_check
   check (item_type in ('paid_ad', 'organic_item'));
 
--- 3) The per-run and per-keyword organic target counts.
-alter table pipeline_runs rename column target_ugc_count to target_organic_count;
-alter table keywords rename column target_ugc_count to target_organic_count;
+-- 3) The per-run and per-keyword organic target counts (skipped if already renamed).
+do $$ begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'pipeline_runs' and column_name = 'target_ugc_count'
+  ) then
+    alter table pipeline_runs rename column target_ugc_count to target_organic_count;
+  end if;
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'keywords' and column_name = 'target_ugc_count'
+  ) then
+    alter table keywords rename column target_ugc_count to target_organic_count;
+  end if;
+end $$;
 
 commit;
