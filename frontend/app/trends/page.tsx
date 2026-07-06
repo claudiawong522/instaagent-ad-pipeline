@@ -28,6 +28,13 @@ const TREND_SOURCE_URLS: { name: string; url: string; cadence: string }[] = [
   { name: 'socialbee', url: 'https://socialbee.com/blog/tiktok-trends/', cadence: 'Updated weekly' },
 ]
 
+// The DB keys sources by their one-word slug; give multi-word names their spacing back for
+// display (the `capitalize` class then title-cases each word).
+const SOURCE_LABELS: Record<string, string> = {
+  socialgrowthengineers: 'social growth engineers',
+}
+const sourceLabel = (name: string) => SOURCE_LABELS[name] ?? name
+
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 // Label a scrape date "2026-06-19" → "Jun 19" by splitting the string directly (never via
 // new Date(), which would shift the day across the local timezone boundary).
@@ -176,7 +183,7 @@ export default function TrendsPage() {
               <span className="text-xs font-medium text-muted-foreground">Source</span>
               <SourceChip label="all" active={source === null} onClick={() => selectSource(null)} />
               {sources.map((s) => (
-                <SourceChip key={s} label={s} active={source === s} onClick={() => selectSource(s)} />
+                <SourceChip key={s} label={sourceLabel(s)} active={source === s} onClick={() => selectSource(s)} />
               ))}
             </div>
           )}
@@ -254,7 +261,7 @@ function SourcesHelp() {
               className="block min-w-0 hover:underline"
             >
               <span className="block text-xs font-medium capitalize text-primary">
-                {s.name} <span className="font-normal text-muted-foreground">· {s.cadence}</span>
+                {sourceLabel(s.name)} <span className="font-normal text-muted-foreground">· {s.cadence}</span>
               </span>
               <span className="block truncate text-[11px] text-muted-foreground">{s.url}</span>
             </a>
@@ -304,7 +311,7 @@ function FormatCard({ format: f }: { format: ViralFormat & Partial<MatchedFormat
               <Badge className={cn('capitalize', VERSATILITY_STYLES[f.versatility])}>{f.versatility}</Badge>
             )}
             {f.source_name && (
-              <Badge variant="secondary" className="capitalize">{f.source_name}</Badge>
+              <Badge variant="secondary" className="capitalize">{sourceLabel(f.source_name)}</Badge>
             )}
           </div>
           {f.format_description && (
