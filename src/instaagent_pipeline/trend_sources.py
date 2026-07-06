@@ -100,7 +100,7 @@ class TrendIssue:
     candidate_urls: list[str] = field(default_factory=list)
 
 
-def resolve_trend_sources(config: Config) -> list[dict[str, str]]:
+def resolve_trend_sources(config: Config) -> list[dict[str, Any]]:
     """The configured trend pages, falling back to the built-in defaults."""
     if not config.trend_sources_json:
         return default_trend_sources()
@@ -108,15 +108,23 @@ def resolve_trend_sources(config: Config) -> list[dict[str, str]]:
         parsed = json.loads(config.trend_sources_json)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"TREND_SOURCES is not valid JSON: {exc}") from exc
-    sources = [
-        {
-            "name": str(s["name"]).strip(),
-            "url": str(s["url"]).strip(),
-            **({"render": str(s["render"]).strip()} if s.get("render") else {}),
-        }
-        for s in parsed
-        if isinstance(s, dict) and s.get("name") and s.get("url")
-    ]
+    sources: list[dict[str, Any]] = []
+    for s in parsed:
+        if not (isinstance(s, dict) and s.get("name") and s.get("url")):
+            continue
+        entry: dict[str, Any] = {"name": str(s["name"]).strip(), "url": str(s["url"]).strip()}
+        if s.get("render"):
+            entry["render"] = str(s["render"]).strip()
+        # Structured-JSON source knobs (kind="sge_formats"); carried through untouched.
+        if s.get("kind"):
+            entry["kind"] = str(s["kind"]).strip()
+        if s.get("limit") is not None:
+            entry["limit"] = int(s["limit"])
+        if s.get("since"):
+            entry["since"] = str(s["since"]).strip()
+        if s.get("categories"):
+            entry["categories"] = [str(c).strip() for c in s["categories"]]
+        sources.append(entry)
     if not sources:
         raise RuntimeError("TREND_SOURCES parsed to an empty source list.")
     return sources
@@ -246,6 +254,72 @@ def fetch_trend_page(
         text=text,
         candidate_urls=candidates,
     )
+
+
+# ── Social Growth Engineers: structured JSON API (no HTML/LLM) ─────────────────────
+
+# Social Growth Engineers publishes its viral-format library as structured JSON at /api/formats/
+# (public, no auth), so we skip the HTML→LLM path entirely and map the API's fields straight to the
+# pipeline's format shape. Each format's `latest_video` is its single public example (the fuller
+# per-format video sets sit behind their Pro gate). Optional filters cap volume / Apify re-scrape
+# cost. A source opts into this path with {"kind": "sge_formats"} in its config.
+SGE_FORMATS_URL = "https://www.socialgrowthengineers.com/api/formats/"
+
+
+def fetch_sge_formats(
+    source_name: str,
+    url: str,
+    *,
+    limit: int | None = None,
+    since: str | None = None,
+    categories: list[str] | None = None,
+    timeout: int = 30,
+) -> tuple[TrendIssue, list[dict[str, Any]]]:
+    """Fetch SGE's viral-format library and return (issue, formats) ready for ingest_trends —
+    the same {format_name, format_description, video_urls} shape parse_trend_formats produces.
+
+    Filters (all optional): `limit` keeps the N most recent formats; `since` (ISO YYYY-MM-DD)
+    keeps only formats created on/after that date; `categories` keeps only formats tagged with one
+    of the given niche names (case-insensitive)."""
+    try:
+        resp = requests.get(url, headers=_FETCH_HEADERS, timeout=timeout)
+    except requests.RequestException as exc:
+        raise HttpClientError(f"Network error fetching SGE formats {url}: {exc}") from exc
+    if resp.status_code >= 400:
+        raise HttpClientError(f"HTTP {resp.status_code} fetching SGE formats {url}", status=resp.status_code)
+    raw = resp.json().get("formats", [])
+    raw.sort(key=lambda f: f.get("created_at") or "", reverse=True)  # newest first, so `limit` keeps recent
+    wanted = {c.lower() for c in categories} if categories else None
+
+    formats: list[dict[str, Any]] = []
+    for f in raw:
+        if since and (f.get("created_at") or "")[:10] < since:
+            continue
+        if wanted and not any((c.get("name") or "").lower() in wanted for c in f.get("categories") or []):
+            continue
+        link = (f.get("latest_video") or {}).get("video_link")
+        name = (f.get("title") or "").strip()
+        if not link or not name:
+            continue
+        formats.append({
+            "format_name": name,
+            "format_description": (f.get("description") or "").strip(),
+            "video_urls": [link],
+        })
+        if limit and len(formats) >= limit:
+            break
+
+    # Hash the (name, video) identity of what we selected so an unchanged library is skipped like
+    # any other source; adding/removing a format or swapping its example flips the hash.
+    digest = json.dumps([(f["format_name"], f["video_urls"][0]) for f in formats], sort_keys=True)
+    issue = TrendIssue(
+        source_name=source_name,
+        source_url=url,
+        content_hash=hashlib.sha256(digest.encode("utf-8")).hexdigest(),
+        text=digest,
+        candidate_urls=[f["video_urls"][0] for f in formats],
+    )
+    return issue, formats
 
 
 # ── LLM parse: page text → viral formats ──────────────────────────────────────────

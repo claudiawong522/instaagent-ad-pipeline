@@ -1,4 +1,6 @@
 ## Dataflow Handwritten
+
+## How does database get populated?
 - user inputs campaign detials + intended ad count + organic count
 - llm takes this info and generates keywords + target count pairs
 - apify scraping for all
@@ -82,28 +84,48 @@
   └───────────────────────────┴─────────────────┴──────────────┴──────────────────────────────┘
 
 
-## inputs and outputs to all apis
+## Inputs and outputs to all apis
  1. Keyword Gen - Claude API
      Input: campaign details + intended ad count + organic count
      Output: generates keywords + target count pairs
-  2. Apify Meta Ads
+2. Apify Meta Ads
      Input: keyword (searched unordered in Meta Ad Library, video only)
      Output: ad items — video URL (expires), thumbnail, headline, description, page name (who's page owns the ad), call to action, adArchiveID
-  3. Apify Organic (TikTok + Instagram)
+3. Apify Organic (TikTok + Instagram)
      Input: keyword
      Output: video URL (expires), cover, handle, view/like counts, follower count, hashtags
-  4. Video Enrichment - OpenRouter → Gemini (gemini-3-flash-preview)
+4. Video Enrichment - OpenRouter → Gemini (gemini-3-flash-preview)
      Input: video (base64) + ad copy context
-     Output: transcript + segments, ai_description, hook, content_format, emotion, product_category,
-  niches, has_product, etc.
-  5. Embeddings - Voyage (voyage-4-lite)
+     Output: transcript + segments, ai_description, hook, content_format, emotion, product_category, niches, has_product, etc.
+5. Embeddings - Voyage (voyage-4-lite)
      Input: check table
      Output: embedding vector
 
-## search flow
+## How does search work?
 1. user inputs search query
 2. search in the search embedding + icp embedding with HNSW, producing about 100 shorlisted videos each
 3. combine videos + dedupe same results across both embeddings
 4. then we rerank the 200ish videos
 5. get actual data(we only have scores now), apply filters, dedupe same video different entry
 6. return the rest
+
+## Trend Scraping
+
+## How do trends get populated?
+- we track 4 webpages- ramdam, newengen, socialbee, socialgrowthengineers
+- either, plain http request, or for js rendered websites, use a apify headless browser with actor website-content-crawler, waits till page rendered
+   - SGE is special: it has a structured json api (/api/formats/), so skip fetch+LLM entirely, just read the api and copy fields across
+- then it strips to only text and keeps video links; 'you might also like' links are filtered out
+- compares content's hash to source, if no difference, skip scrape
+- an openrouter call to google/gemini-3-flash with page inputs returns [{format_name, format_description, video_urls[]}]
+- dedupe formats: sometimes the llm returns the same trend under multiple names, they're now collapsed into one
+- 2 guards
+   - if 0 formats got a video, incomplete render, retry
+   - if a format has no video, it's a name-drop, drop the trend
+- rescrape video url with apify for live metrics
+- log cost
+- enrichment
+
+
+
+- saves each search into a dedicated row in *product* so identical searches persists

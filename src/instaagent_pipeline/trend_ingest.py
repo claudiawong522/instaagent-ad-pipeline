@@ -34,6 +34,7 @@ from .normalizers import normalize_instagram_post, normalize_tiktok_item
 from .organic_enrichment import enrich_organic_items
 from .supabase_client import SupabaseClient
 from .trend_sources import (
+    fetch_sge_formats,
     fetch_trend_page,
     issue_date_from_url,
     parse_trend_formats,
@@ -298,16 +299,32 @@ def ingest_trends(
         name, url = src["name"], src["url"]
         sr = TrendSourceResult(source_name=name, status="parsed")
         try:
-            issue = fetch_trend_page(
-                name, url, render=src.get("render"), apify_api_key=config.apify_api_key
-            )
+            # Structured-JSON sources (Social Growth Engineers' /api/formats/) already hand us the
+            # formats + their example links, so we skip the HTML fetch + LLM parse and map directly.
+            # Everything downstream (video mapping, re-scrape, upsert) is shared with page sources.
+            if src.get("kind") == "sge_formats":
+                issue, parsed = fetch_sge_formats(
+                    name, url,
+                    limit=src.get("limit"),
+                    since=src.get("since"),
+                    categories=src.get("categories"),
+                )
+            else:
+                issue = fetch_trend_page(
+                    name, url, render=src.get("render"), apify_api_key=config.apify_api_key
+                )
+                parsed = None
+
             if not dry_run and not force:
                 if _latest_content_hash(supabase, name) == issue.content_hash:
                     sr.status = "unchanged"
                     result.sources.append(sr.__dict__)
                     continue
 
-            formats = _dedupe_formats(parse_trend_formats(config, issue, timeout=min(timeout, 180)))
+            formats = _dedupe_formats(
+                parsed if parsed is not None
+                else parse_trend_formats(config, issue, timeout=min(timeout, 180))
+            )
             sr.formats = len(formats)
             sr.videos_found = sum(len(f["video_urls"]) for f in formats)
 
