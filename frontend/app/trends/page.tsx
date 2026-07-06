@@ -159,13 +159,15 @@ function FormatCard({ format: f }: { format: ViralFormat }) {
         </p>
       )}
 
-      {f.videos.length > 0 && (
+      {f.videos.length > 0 ? (
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
           {f.videos.map((v) => (
             <TrendVideoCard key={v.id} video={v} />
           ))}
         </div>
-      )}
+      ) : f.ingest_note ? (
+        <p className="mt-3 text-xs italic text-muted-foreground">No example video — {f.ingest_note}</p>
+      ) : null}
     </div>
   )
 }

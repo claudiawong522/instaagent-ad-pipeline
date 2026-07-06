@@ -48,11 +48,10 @@ These are good ideas intentionally deferred to keep the first version lean.
 
 ## Trend pipeline: email sources, Instagram videos, per-video tags
 
-The viral-format trend pipeline (`ingest-trends` → `viral_formats` + `ugc_items`, `/trends` dashboard) currently only ingests **web** trend pages and re-scrapes **TikTok** example videos. Deferred:
+The viral-format trend pipeline (`ingest-trends` → `viral_formats` + `ugc_items`, `/trends` dashboard) ingests **web** trend pages and re-scrapes **TikTok + Instagram** example videos. Deferred:
 
 - **Email newsletter source.** Add an IMAP + Gmail app-password fetcher (e.g. Social Growth Engineers' Trend Radar) that emits the same `{source_name, source_url, content_hash, text, candidate_urls}` "issue" shape into the existing `TREND_PARSE_PROMPT` path. Needs a `source_type` column (`email`|`web`) and a per-source idempotency key (email `message_id`). Parked at user request — web-first.
-- **Instagram / YouTube example videos.** `_rescrape_and_write` (`trend_ingest.py`) only re-scrapes TikTok URLs (via `clockworks/tiktok-scraper` `postURLs`); IG Reels / Shorts links are counted in `videos_skipped` but not fetched. To support IG, wire a directUrl-capable Apify actor (verify `apify/instagram-scraper` `directUrls`) and a normalizer mapping back to `format_id`. TikTok dominates these pages, so this was deferred.
-- **Short links.** `vm.tiktok.com/…` links carry no `/video/<id>`, so they can't be pre-mapped to a format and are skipped. Resolve them (follow the redirect) before mapping, or match returned items by `webVideoUrl`.
+- **YouTube Shorts example videos.** `_rescrape_instagram` (`trend_ingest.py`) now fetches IG reels via `apify/instagram-scraper` `directUrls` → `normalize_instagram_post`, mapping back by reel shortcode; TikTok short links (`vm./vt.tiktok.com`, `/t/`) are redirect-resolved to `/video/<id>` in `_resolve_tiktok_short`. YouTube Shorts are still only counted (surfaced in `ingest_note` as "not scraped yet") — to support them, add a YT actor + `normalize_youtube_item` + a YouTube branch in `organic_enrichment` for the MP4 download.
 - **Video-level constraint tagging.** The free-form `niche_constraint` is per-format. If format-level proves too coarse, add per-video niche tags + a video filter on the dashboard (the user's stated fallback).
 - **Scheduling.** `ingest-trends` is manual; a cron/routine could auto-pull weekly. JS-rendered pages (none of the current sources) would need an Apify `website-content-crawler` fallback in `trend_sources.fetch_trend_page`.
 

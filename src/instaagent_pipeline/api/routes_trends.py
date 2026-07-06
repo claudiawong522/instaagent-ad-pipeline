@@ -37,7 +37,7 @@ def list_trend_formats(
     supabase = _supabase(request)
 
     params: dict[str, Any] = {
-        "select": "id,source_name,source_url,issue_date,format_name,format_description,niche_constraint,created_at",
+        "select": "id,source_name,source_url,issue_date,format_name,format_description,niche_constraint,ingest_note,created_at",
         "order": "created_at.desc",
         "limit": str(max(1, min(limit, 1000))),
     }
@@ -79,6 +79,7 @@ def list_trend_formats(
                 "format_name": fmt.get("format_name"),
                 "format_description": fmt.get("format_description"),
                 "niche_constraint": fmt.get("niche_constraint"),
+                "ingest_note": fmt.get("ingest_note"),
                 "video_count": len(videos),
                 "total_views": agg_views,
                 "videos": videos,

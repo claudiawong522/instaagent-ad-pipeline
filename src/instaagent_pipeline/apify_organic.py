@@ -38,6 +38,8 @@ INSTAGRAM_ACTOR_ID = "data-slayer~instagram-search-reels"
 INSTAGRAM_PROVIDER = "apify:data-slayer/instagram-search-reels"
 IG_PROFILE_ACTOR_ID = "apify~instagram-profile-scraper"
 IG_PROFILE_PROVIDER = "apify:apify/instagram-profile-scraper"
+IG_URL_ACTOR_ID = "apify~instagram-scraper"  # by-URL (directUrls) scrape, for trend example reels
+IG_URL_PROVIDER = "apify:apify/instagram-scraper"
 INSTAGRAM_PAGE_SIZE = 50  # data-slayer returns ~50-100 reels per page
 
 

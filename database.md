@@ -247,6 +247,7 @@ Trend pipeline (migration `025`). One row per viral format scraped from a web tr
 | `format_name` | `text` | Not null | Short name of the format. |
 | `format_description` | `text` | Nullable | The trend description as written on the page. |
 | `niche_constraint` | `text` | Nullable | Free-form marketing constraint (which niches the format suits); written by `classify-formats`. |
+| `ingest_note` | `text` | Nullable (migration `026`) | Why the format has no playable example video (e.g. IG/YT link not scraped, short link unresolved, source listed no link); `NULL` when it has one. Written by `ingest-trends`, shown on the empty card. |
 | `niche_constraint_model` | `text` | Nullable | OpenRouter model that wrote the constraint. |
 | `classified_at` | `timestamptz` | Nullable | When the constraint was written. |
 | `created_at` | `timestamptz` | Not null, default `now()` | Row creation timestamp. |

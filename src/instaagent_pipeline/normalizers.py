@@ -609,3 +609,47 @@ def normalize_instagram_reel(item: dict[str, Any], run_id: str, raw_payload_id: 
             extra={"endpoint_kind": "apify_instagram", "page_url": page_url},
         ),
     }
+
+
+def normalize_instagram_post(item: dict[str, Any], run_id: str, raw_payload_id: str | None) -> dict[str, Any]:
+    """Normalize a reel/post scraped by-URL via apify/instagram-scraper. That actor's shape
+    differs from the search actor (camelCase: shortCode/videoUrl/videoPlayCount/ownerUsername),
+    so this is a separate normalizer from normalize_instagram_reel."""
+    code = first_present(item, "shortCode", "shortcode", "code")
+    views = as_int(first_present(item, "videoPlayCount", "videoViewCount", "play_count"))
+    likes = as_int(first_present(item, "likesCount", "like_count"))
+    comments = as_int(first_present(item, "commentsCount", "comment_count"))
+    followers = as_int(first_present(item, "followersCount", "ownerFollowersCount"))
+    score, tier = recompute_virality(
+        views=views, likes=likes, comments=comments, shares=None, followers=followers
+    )
+    caption = item.get("caption")
+    description = caption if isinstance(caption, str) else instagram_caption_text(item)
+    handle = first_present(item, "ownerUsername", "username")
+    page_url = f"https://www.instagram.com/reel/{code}/" if code else item.get("url")
+    return {
+        "run_id": run_id,
+        "raw_payload_id": raw_payload_id,
+        "external_id": str(first_present(item, "id", "shortCode", "pk") or ""),
+        "source": "instagram",
+        "video_id": stringify_if_needed(code),
+        "video_url": first_present(item, "videoUrl", "video_url"),
+        "cover": first_present(item, "displayUrl", "thumbnail_url"),
+        "description": description,
+        "handle": handle,
+        "user_handle": handle,
+        "user_id": stringify_if_needed(first_present(item, "ownerId", "owner_id")),
+        "nickname": first_present(item, "ownerFullName", "full_name"),
+        "followers": followers,
+        "views": views,
+        "likes": likes,
+        "comments": comments,
+        "date_created": as_timestamp(first_present(item, "timestamp", "taken_at")),
+        "virality_score": score,
+        "virality_tier": tier,
+        "source_metrics": source_metrics_from_unmapped(
+            item,
+            INSTAGRAM_FIRST_CLASS_KEYS,
+            extra={"endpoint_kind": "apify_instagram_url", "page_url": page_url},
+        ),
+    }

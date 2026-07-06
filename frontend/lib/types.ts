@@ -226,6 +226,7 @@ export interface ViralFormat {
   format_name: string | null
   format_description: string | null
   niche_constraint: string | null // free-form, LLM-written marketing constraint
+  ingest_note: string | null // why the format has no playable video (null when it has one)
   video_count: number
   total_views: number // aggregate live views across example videos (ranking key)
   videos: TrendVideo[]
