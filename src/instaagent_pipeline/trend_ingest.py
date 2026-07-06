@@ -33,7 +33,12 @@ from .ingestion import utc_now_iso
 from .normalizers import normalize_instagram_post, normalize_tiktok_item
 from .organic_enrichment import enrich_organic_items
 from .supabase_client import SupabaseClient
-from .trend_sources import fetch_trend_page, parse_trend_formats, resolve_trend_sources
+from .trend_sources import (
+    fetch_trend_page,
+    issue_date_from_url,
+    parse_trend_formats,
+    resolve_trend_sources,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -347,6 +352,10 @@ def ingest_trends(
             ig_urls: list[str] = []
             fmt_counts: dict[str, dict[str, int]] = {}
             short_cache: dict[str, str] = {}
+            # The report month (from a monthly URL like …/july-tiktok-trends/), stamped on each
+            # row so the dashboard can separate this month's trends from last month's; None for
+            # weekly/undated sources.
+            issue_date = issue_date_from_url(url)
             for fmt in formats:
                 row = supabase.upsert(
                     "viral_formats",
@@ -355,6 +364,7 @@ def ingest_trends(
                         "source_name": name,
                         "source_url": url,
                         "content_hash": issue.content_hash,
+                        "issue_date": issue_date,
                         "format_name": fmt["format_name"],
                         "format_description": fmt["format_description"],
                     },

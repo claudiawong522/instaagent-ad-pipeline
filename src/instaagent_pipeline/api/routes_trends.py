@@ -36,6 +36,24 @@ def _supabase(request: Request):
     return supabase
 
 
+def _latest_month_per_source(formats: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep, per source, only the formats from its most recent issue_date (the current monthly
+    report), plus every undated format (weekly sources have no issue_date). Uses the latest month
+    actually present — never today's calendar month — so the board is never empty at a month
+    boundary before the new report is scraped."""
+    latest: dict[str, str] = {}
+    for f in formats:
+        d = f.get("issue_date")
+        if d:
+            src = str(f.get("source_name"))
+            if src not in latest or d > latest[src]:
+                latest[src] = d
+    return [
+        f for f in formats
+        if not f.get("issue_date") or f.get("issue_date") == latest.get(str(f.get("source_name")))
+    ]
+
+
 @router.get("/trends/formats")
 def list_trend_formats(
     request: Request,
@@ -43,6 +61,7 @@ def list_trend_formats(
     q: str | None = None,
     min_views: int = 0,
     posted_after: str | None = None,
+    all_months: bool = False,
     limit: int = 200,
 ) -> dict[str, Any]:
     supabase = _supabase(request)
@@ -59,6 +78,13 @@ def list_trend_formats(
     formats = supabase.select("viral_formats", params)
     if not formats:
         return {"formats": []}
+
+    # Default to this month's trends only: per dated source, keep its most recent issue_date
+    # (the current monthly report) so last month's trends drop off the board once the new report
+    # is ingested — without deleting them (all_months=true still returns every month). Undated
+    # (weekly) sources have no issue_date and are always kept.
+    if not all_months:
+        formats = _latest_month_per_source(formats)
 
     format_ids = [str(f["id"]) for f in formats if f.get("id")]
     videos_by_format: dict[str, list[dict[str, Any]]] = {}

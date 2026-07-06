@@ -8,11 +8,20 @@ import { cn } from '@/lib/utils'
 import { listTrendFormats, matchProduct } from '@/lib/api'
 import type { MatchedFormat, ViralFormat, TrendVideo } from '@/lib/types'
 
-// Newsletter/trend-roundup sources, kept in sync with DEFAULT_TREND_SOURCES in
+// Newsletter/trend-roundup sources, kept in sync with default_trend_sources() in
 // src/instaagent_pipeline/trend_sources.py — the pages these formats are scraped from.
+// newengen scrapes its monthly deep-dive report, whose URL slug rolls over each month, so we
+// derive the current month here the same way the backend does (_newengen_insights_url).
+const NEWENGEN_MONTHS = [
+  'january', 'february', 'march', 'april', 'may', 'june',
+  'july', 'august', 'september', 'october', 'november', 'december',
+] as const
+const newengenInsightsUrl = () =>
+  `https://newengen.com/insights/${NEWENGEN_MONTHS[new Date().getMonth()]}-tiktok-trends/`
+
 const TREND_SOURCE_URLS: { name: string; url: string; cadence: string }[] = [
   { name: 'ramdam', url: 'https://www.ramd.am/blog/trends-tiktok', cadence: 'Updated weekly' },
-  { name: 'newengen', url: 'https://newengen.com/tiktok-trends/', cadence: 'Updated monthly' },
+  { name: 'newengen', url: newengenInsightsUrl(), cadence: 'Updated monthly' },
   { name: 'socialbee', url: 'https://socialbee.com/blog/tiktok-trends/', cadence: 'Updated weekly' },
 ]
 

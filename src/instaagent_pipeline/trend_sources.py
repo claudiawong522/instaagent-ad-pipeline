@@ -45,6 +45,18 @@ def _newengen_insights_url(today: date | None = None) -> str:
     return f"https://newengen.com/insights/{_MONTH_SLUGS[(today or date.today()).month - 1]}-tiktok-trends/"
 
 
+def issue_date_from_url(url: str, today: date | None = None) -> str | None:
+    """The report month of a monthly trend URL (…/<month>-tiktok-trends/…) as an ISO date (the
+    1st of that month), used to stamp viral_formats.issue_date so the dashboard can tell June's
+    trends from July's. Returns None for weekly/undated sources (no month in the URL). The year
+    isn't in the slug; use the current one — safe because the slug tracks the current month."""
+    m = re.search(r"/([a-z]+)-tiktok-trends", url, re.I)
+    if not m or m.group(1).lower() not in _MONTH_SLUGS:
+        return None
+    month = _MONTH_SLUGS.index(m.group(1).lower()) + 1
+    return date((today or date.today()).year, month, 1).isoformat()
+
+
 # Public web trend pages, no auth. Override via the TREND_SOURCES env var (JSON list of
 # {"name", "url", optional "render"}). render:"js" pages inject their example-video links
 # client-side (no <a> in the static HTML), so they must be fetched through a headless browser
