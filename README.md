@@ -6,8 +6,7 @@ Lean ingestion and transcript-backfill foundation for InstaAgent's ad selection 
 
 ## What Exists Now
 
-- `PLAN.md`: full future plan.
-- `api-endpoints.md`: endpoint inputs, outputs, and storage mappings.
+- `docs/archive/`: superseded plans and one-off notes (kept for historical context).
 - `future-add-ons.md`: good ideas deferred for later.
 - `supabase/schema.sql`: canonical fresh-project Supabase schema for the implemented pipeline.
 - `supabase/migrations/`: incremental migrations for existing Supabase projects. Verify a live database against these before adding search/clustering on top of old data.

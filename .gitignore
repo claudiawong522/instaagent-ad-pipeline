@@ -223,7 +223,8 @@ __marimo__/
 # Local database backups
 supabase/products_backup.json
 
-# Generated visualization artifacts (regenerate via web/embed_viz.py / paid_cluster_experiment.py)
-web/embeddings.html
-web/embeddings.png
-web/paid_experiment.png
+# Generated visualization artifacts (regenerate via experiments/ scripts)
+experiments/embeddings.html
+experiments/embeddings.png
+experiments/paid_experiment.png
+experiments/strategy_data.js

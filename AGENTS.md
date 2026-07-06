@@ -12,8 +12,8 @@ Primary areas:
 - `supabase/schema.sql`: canonical Supabase schema for a clean project.
 - `supabase/migrations/`: incremental database migrations for existing Supabase projects. Verify a live database against these before building search/clustering on top of old data.
 - `database.md`: human-readable database/table documentation.
-- `api-endpoints.md`: provider endpoint and mapping notes.
-- `PLAN.md`: broader future plan; do not treat every item there as implemented.
+- `docs/archive/`: superseded plans and one-off notes (`PLAN.md`, `api-endpoints.md`, …); historical context only — do not treat items there as implemented.
+- `experiments/`: standalone analysis/visualization scripts; not part of the package.
 
 Runtime dependencies are listed in `pyproject.toml`; `numpy` and `scikit-learn` are required for clustering.
 
