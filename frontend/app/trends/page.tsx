@@ -13,7 +13,6 @@ import type { MatchedFormat, ViralFormat, TrendVideo } from '@/lib/types'
 const TREND_SOURCE_URLS: { name: string; url: string }[] = [
   { name: 'ramdam', url: 'https://www.ramd.am/blog/trends-tiktok' },
   { name: 'newengen', url: 'https://newengen.com/tiktok-trends/' },
-  { name: 'later', url: 'https://later.com/blog/tiktok-trends/' },
   { name: 'socialbee', url: 'https://socialbee.com/blog/tiktok-trends/' },
 ]
 
