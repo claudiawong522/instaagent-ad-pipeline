@@ -14,6 +14,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -92,6 +93,20 @@ def _is_video_url(url: str) -> bool:
     return any(pat.search(url) for pat in VIDEO_URL_PATTERNS)
 
 
+def _is_carousel_recommendation(url: str) -> bool:
+    """True when a TikTok share/video link is an embed's auto-injected "you might also like"
+    recommendation rather than the article's chosen example. A TikTok embed injects a carousel
+    of unrelated videos next to the real one; each carousel link is a share/video/<other-id>
+    URL stamped with referer_video_id=<the actually-embedded video>. When the link's own path
+    id differs from that referer, it belongs to the recommendation strip — harvesting it dumps
+    random high-view videos onto the wrong format (see newengen's "Wow, Ok")."""
+    m = re.search(r"tiktok\.com/share/video/(\d+)", url, re.I)
+    if not m:
+        return False
+    ref = parse_qs(urlparse(url).query).get("referer_video_id", [None])[0]
+    return bool(ref) and ref != m.group(1)
+
+
 def html_to_text(html: str) -> tuple[str, list[str]]:
     """Strip a page to readable text and harvest candidate video URLs.
 
@@ -106,7 +121,7 @@ def html_to_text(html: str) -> tuple[str, list[str]]:
     candidates: list[str] = []
 
     def _add(url: str | None) -> None:
-        if url and _is_video_url(url) and url not in candidates:
+        if url and _is_video_url(url) and not _is_carousel_recommendation(url) and url not in candidates:
             candidates.append(url)
 
     # Inline anchor hrefs next to their text so the model sees which link belongs where.

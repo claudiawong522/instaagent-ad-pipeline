@@ -43,7 +43,7 @@ TREND_PRODUCT_PREFIX = "Trend: "
 @dataclass
 class TrendSourceResult:
     source_name: str
-    status: str  # parsed | unchanged | skipped | failed
+    status: str  # parsed | unchanged | skipped | incomplete_render | failed
     formats: int = 0
     videos_found: int = 0
     videos_ingested: int = 0
@@ -305,6 +305,17 @@ def ingest_trends(
                 result.sources.append(
                     {**sr.__dict__, "preview": [{"format_name": f["format_name"], "video_urls": f["video_urls"]} for f in formats]}
                 )
+                continue
+
+            # A JS-rendered page whose TikTok embeds didn't finish loading parses to formats
+            # with no example videos at all. Persisting that would spawn empty cards and, worse,
+            # let _prune_stale_formats delete the good rows from a healthy render. Treat a
+            # zero-video JS render as incomplete: skip it without writing (existing data stays
+            # intact; the next scheduled run retries). Static sources can legitimately list a
+            # format with no example link, so this guard is JS-only.
+            if src.get("render") == "js" and formats and sr.videos_found == 0:
+                sr.status = "incomplete_render"
+                result.sources.append(sr.__dict__)
                 continue
 
             run_id = get_or_create_trend_run(supabase, name)
