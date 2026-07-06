@@ -5,24 +5,37 @@ import { Loader2, Search, Sparkles, TrendingUp, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
-import { listTrendFormats, matchProduct } from '@/lib/api'
+import { listTrendFormats, listTrendScrapeDates, matchProduct } from '@/lib/api'
 import type { MatchedFormat, ViralFormat, TrendVideo } from '@/lib/types'
 import { fmtDate, formatNum } from '@/lib/format'
 import { HelpPopover } from '@/components/HelpPopover'
 import { VideoTile } from '@/components/VideoTile'
 
-// Newsletter/trend-roundup sources, kept in sync with DEFAULT_TREND_SOURCES in
+// Newsletter/trend-roundup sources, kept in sync with default_trend_sources() in
 // src/instaagent_pipeline/trend_sources.py — the pages these formats are scraped from.
+// newengen scrapes its monthly deep-dive report, whose URL slug rolls over each month, so we
+// derive the current month here the same way the backend does (_newengen_insights_url).
+const NEWENGEN_MONTHS = [
+  'january', 'february', 'march', 'april', 'may', 'june',
+  'july', 'august', 'september', 'october', 'november', 'december',
+] as const
+const newengenInsightsUrl = () =>
+  `https://newengen.com/insights/${NEWENGEN_MONTHS[new Date().getMonth()]}-tiktok-trends/`
+
 const TREND_SOURCE_URLS: { name: string; url: string; cadence: string }[] = [
   { name: 'ramdam', url: 'https://www.ramd.am/blog/trends-tiktok', cadence: 'Updated weekly' },
-  { name: 'newengen', url: 'https://newengen.com/tiktok-trends/', cadence: 'Updated monthly' },
+  { name: 'newengen', url: newengenInsightsUrl(), cadence: 'Updated monthly' },
   { name: 'socialbee', url: 'https://socialbee.com/blog/tiktok-trends/', cadence: 'Updated weekly' },
 ]
 
-// Posted-date presets → an ISO cutoff sent to the API (filters example videos by date_created).
-const RANGE_DAYS: Record<string, number> = { '7d': 7, '30d': 30, '90d': 90 }
-const cutoffFor = (r: string | null): string | null =>
-  r && RANGE_DAYS[r] ? new Date(Date.now() - RANGE_DAYS[r] * 86400000).toISOString() : null
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+// Label a scrape date "2026-06-19" → "Jun 19" by splitting the string directly (never via
+// new Date(), which would shift the day across the local timezone boundary).
+function fmtScrapeChip(ymd: string): string {
+  const [, m, d] = ymd.split('-')
+  const month = MONTHS_SHORT[Number(m) - 1]
+  return month ? `${month} ${Number(d)}` : ymd
+}
 
 export default function TrendsPage() {
   const [formats, setFormats] = useState<ViralFormat[]>([])
@@ -33,8 +46,10 @@ export default function TrendsPage() {
   // (the initial unfiltered load seeds the full set) instead of deriving from
   // the currently filtered `formats`.
   const [sources, setSources] = useState<string[]>([])
-  // Posted-date filter: keep formats with an example video posted within the window.
-  const [dateRange, setDateRange] = useState<string | null>(null)
+  // Scrape-date filter: the distinct dates the selected source was scraped, plus the picked date.
+  // Fetched separately (per source) so the chip list doesn't collapse when a date is applied.
+  const [scrapeDates, setScrapeDates] = useState<string[]>([])
+  const [scrapedOn, setScrapedOn] = useState<string | null>(null)
 
   // Product-match mode: when `matched` is set, the list is ranked by fit to a product
   // (POST /trends/match) instead of browsed. Empty box / clear returns to browse.
@@ -43,9 +58,9 @@ export default function TrendsPage() {
   const [matching, setMatching] = useState(false)
   const [matchedFor, setMatchedFor] = useState('')
 
-  const load = (opts?: { sourceName?: string | null; postedAfter?: string | null }) => {
+  const load = (opts?: { sourceName?: string | null; scrapedOn?: string | null }) => {
     setLoading(true)
-    listTrendFormats({ sourceName: opts?.sourceName ?? null, postedAfter: opts?.postedAfter ?? null })
+    listTrendFormats({ sourceName: opts?.sourceName ?? null, scrapedOn: opts?.scrapedOn ?? null })
       .then((res) => {
         setFormats(res.formats)
         setSources((prev) => {
@@ -59,18 +74,28 @@ export default function TrendsPage() {
       .finally(() => setLoading(false))
   }
 
+  // Refresh the "Scraped" chips for a source and clear any active date pick.
+  const loadScrapeDates = (s: string | null) => {
+    setScrapedOn(null)
+    listTrendScrapeDates(s)
+      .then((res) => setScrapeDates(res.dates))
+      .catch(() => setScrapeDates([]))
+  }
+
   useEffect(() => {
     load()
+    loadScrapeDates(null)
   }, [])
 
   const selectSource = (s: string | null) => {
     setSource(s)
-    load({ sourceName: s, postedAfter: cutoffFor(dateRange) })
+    loadScrapeDates(s)
+    load({ sourceName: s, scrapedOn: null })
   }
 
-  const selectDateRange = (r: string | null) => {
-    setDateRange(r)
-    load({ sourceName: source, postedAfter: cutoffFor(r) })
+  const selectScrapedOn = (d: string | null) => {
+    setScrapedOn(d)
+    load({ sourceName: source, scrapedOn: d })
   }
 
   const onMatch = (e: React.FormEvent) => {
@@ -155,13 +180,20 @@ export default function TrendsPage() {
               ))}
             </div>
           )}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Posted</span>
-            <SourceChip label="any" active={dateRange === null} onClick={() => selectDateRange(null)} />
-            {['7d', '30d', '90d'].map((r) => (
-              <SourceChip key={r} label={r} active={dateRange === r} onClick={() => selectDateRange(r)} />
-            ))}
-          </div>
+          {scrapeDates.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Scraped</span>
+              <SourceChip label="any" active={scrapedOn === null} onClick={() => selectScrapedOn(null)} />
+              {scrapeDates.map((d) => (
+                <SourceChip
+                  key={d}
+                  label={fmtScrapeChip(d)}
+                  active={scrapedOn === d}
+                  onClick={() => selectScrapedOn(d)}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -186,7 +218,7 @@ export default function TrendsPage() {
           </div>
         )
       ) : formats.length === 0 ? (
-        source !== null || dateRange !== null ? (
+        source !== null || scrapedOn !== null ? (
           <p className="py-16 text-sm text-muted-foreground">No formats match this filter.</p>
         ) : (
           <p className="py-16 text-sm text-muted-foreground">

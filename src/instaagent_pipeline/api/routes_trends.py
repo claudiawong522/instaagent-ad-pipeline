@@ -2,6 +2,7 @@
 
 GET /trends/formats returns each viral_formats row with its example videos (re-scraped
 organic_items, source='trend') grouped under it, ranked by the videos' aggregate live views.
+GET /trends/scrape-dates lists the distinct scrape-batch dates for the date filter.
 POST /trends/match ranks those formats by how well a given product could reuse each one.
 """
 
@@ -24,6 +25,14 @@ class MatchRequest(BaseModel):
     limit: int | None = None
 
 
+@router.get("/trends/scrape-dates")
+def list_trend_scrape_dates(request: Request, source_name: str | None = None) -> dict[str, Any]:
+    """Distinct dates (UTC, YYYY-MM-DD) on which formats were scraped, newest-first — one chip per
+    scrape batch for the given source (or all sources). Powers the /trends "Scraped" date filter."""
+    dates = trends_module.list_trend_scrape_dates(require_supabase(request), source_name=source_name)
+    return {"dates": dates}
+
+
 @router.get("/trends/formats")
 def list_trend_formats(
     request: Request,
@@ -31,6 +40,8 @@ def list_trend_formats(
     q: str | None = None,
     min_views: int = 0,
     posted_after: str | None = None,
+    scraped_on: str | None = None,
+    all_months: bool = False,
     limit: int = 200,
 ) -> dict[str, Any]:
     formats = trends_module.list_trend_formats(
@@ -39,6 +50,8 @@ def list_trend_formats(
         q=q,
         min_views=min_views,
         posted_after=posted_after,
+        scraped_on=scraped_on,
+        all_months=all_months,
         limit=limit,
     )
     return {"formats": formats}

@@ -83,15 +83,22 @@ export async function listTrendFormats(opts?: {
   sourceName?: string | null
   q?: string | null
   minViews?: number | null
-  postedAfter?: string | null
+  scrapedOn?: string | null
 }): Promise<TrendFormatsResponse> {
   const params = new URLSearchParams()
   if (opts?.sourceName) params.set('source_name', opts.sourceName)
   if (opts?.q) params.set('q', opts.q)
   if (opts?.minViews) params.set('min_views', String(opts.minViews))
-  if (opts?.postedAfter) params.set('posted_after', opts.postedAfter)
+  if (opts?.scrapedOn) params.set('scraped_on', opts.scrapedOn)
   const qs = params.toString()
   return request(`/trends/formats${qs ? `?${qs}` : ''}`)
+}
+
+export async function listTrendScrapeDates(
+  sourceName?: string | null,
+): Promise<{ dates: string[] }> {
+  const qs = sourceName ? `?source_name=${encodeURIComponent(sourceName)}` : ''
+  return request(`/trends/scrape-dates${qs}`)
 }
 
 export async function matchProduct(opts: {

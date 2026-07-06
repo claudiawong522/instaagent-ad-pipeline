@@ -1,6 +1,23 @@
 from __future__ import annotations
 
-from instaagent_pipeline.trend_sources import _is_carousel_recommendation, html_to_text
+from datetime import date
+
+from instaagent_pipeline.trend_sources import (
+    _is_carousel_recommendation,
+    _newengen_insights_url,
+    html_to_text,
+    issue_date_from_url,
+)
+
+
+def test_newengen_url_and_issue_date_track_the_month():
+    for m, slug in ((1, "january"), (6, "june"), (7, "july"), (12, "december")):
+        url = _newengen_insights_url(date(2026, m, 15))
+        assert url == f"https://newengen.com/insights/{slug}-tiktok-trends/"
+        assert issue_date_from_url(url, date(2026, m, 15)) == f"2026-{m:02d}-01"
+    # weekly/undated sources carry no month → no issue_date
+    assert issue_date_from_url("https://newengen.com/tiktok-trends/") is None
+    assert issue_date_from_url("https://www.ramd.am/blog/trends-tiktok") is None
 
 # The real (embedded) video for both the canonical link and its own share link.
 EMBEDDED = "7637619596123557142"

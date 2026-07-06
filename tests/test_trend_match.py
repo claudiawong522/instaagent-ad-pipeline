@@ -156,3 +156,16 @@ def test_candidates_blend_reserves_universals_but_recall_fills_majority(monkeypa
     # Universals are present too, but capped near the reserve + backfill, not the whole pool.
     universal_picked = sum(1 for p in picks if p.startswith("u"))
     assert universal_picked == match_module.JUDGE_POOL - 5
+
+
+def test_latest_month_per_source_filters_stale_months():
+    from instaagent_pipeline.api.trends import _latest_month_per_source
+
+    formats = [
+        {"id": "a", "source_name": "newengen", "issue_date": "2026-07-01"},
+        {"id": "b", "source_name": "newengen", "issue_date": "2026-06-01"},
+        {"id": "c", "source_name": "ramdam", "issue_date": None},  # weekly, undated → always kept
+        {"id": "d", "source_name": "socialbee", "issue_date": "2026-05-01"},  # its own latest
+    ]
+    kept = {f["id"] for f in _latest_month_per_source(formats)}
+    assert kept == {"a", "c", "d"}  # newengen June dropped; each source keeps its latest + undated
