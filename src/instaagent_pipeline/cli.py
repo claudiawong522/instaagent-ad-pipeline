@@ -15,7 +15,7 @@ from .apify_organic import (
     ingest_tiktok_trends,
 )
 from .config import Config
-from .ad_enrichment import enrich_paid_ads
+from .paid_enrichment import enrich_paid_ads
 from .audience_enrichment import enrich_audience
 from .organic_enrichment import enrich_organic_items
 from .clustering import cluster_items

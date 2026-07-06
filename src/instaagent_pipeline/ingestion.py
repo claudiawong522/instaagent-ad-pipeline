@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
+from .http_client import HttpClientError
 from .supabase_client import SupabaseClient
 
 
@@ -191,6 +193,124 @@ def write_items(
         written += 1
 
     return IngestResult(fetched=len(items), written=written)
+
+
+@dataclass
+class QueryLog:
+    """Mutable record of one provider call, managed by `logged_query`.
+
+    The caller fills in what it learns as the call proceeds (status, headers,
+    response_count, metadata, and — when the provider is resolved late — provider/
+    endpoint); the context manager writes the bookkeeping rows on exit. Set
+    `live=False` when replaying a --input-json fixture so an error is not logged
+    as live-API usage."""
+
+    supabase: SupabaseClient | None
+    dry_run: bool
+    run_id: str | None
+    provider: str
+    endpoint: str
+    method: str
+    request_params: dict[str, Any]
+    source_query_id: str | None = None
+    status: int | None = None
+    headers: dict[str, str] = field(default_factory=dict)
+    response_count: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    live: bool = True
+
+    def log_usage(self) -> None:
+        """Write the api_usage row now (e.g. before further Supabase writes that could
+        fail); the context manager then skips its own usage write on exit."""
+        log_api_usage(
+            supabase=self.supabase,
+            dry_run=self.dry_run,
+            run_id=self.run_id,
+            provider=self.provider,
+            endpoint=self.endpoint,
+            status=self.status,
+            response_count=self.response_count,
+            headers=self.headers,
+            metadata=self.metadata or None,
+        )
+        self._usage_logged = True
+
+    _usage_logged: bool = False
+
+
+@contextmanager
+def logged_query(
+    *,
+    supabase: SupabaseClient | None,
+    dry_run: bool = False,
+    run_id: str | None,
+    provider: str,
+    endpoint: str,
+    method: str = "POST",
+    request_params: dict[str, Any],
+) -> Iterator[QueryLog]:
+    """Bookkeep one provider call in source_queries/api_usage.
+
+    Opens a source_queries row, yields a QueryLog for the caller to fill in, and on
+    exit logs api_usage + completes the query — or, on HttpClientError/RuntimeError,
+    marks it failed (logging the error status as usage when the call never got a
+    response). This is the shared try/except that every provider call used to
+    hand-roll."""
+    log = QueryLog(
+        supabase=supabase,
+        dry_run=dry_run,
+        run_id=run_id,
+        provider=provider,
+        endpoint=endpoint,
+        method=method,
+        request_params=request_params,
+        source_query_id=start_query(
+            supabase=supabase,
+            dry_run=dry_run,
+            run_id=run_id,
+            provider=provider,
+            endpoint=endpoint,
+            method=method,
+            request_params=request_params,
+        ),
+    )
+    try:
+        yield log
+    except (HttpClientError, RuntimeError) as exc:
+        if isinstance(exc, HttpClientError) and log.status is None and log.live:
+            log_api_usage(
+                supabase=supabase,
+                dry_run=dry_run,
+                run_id=run_id,
+                provider=log.provider,
+                endpoint=log.endpoint,
+                status=exc.status,
+                response_count=None,
+                headers={},
+                metadata=log.metadata or None,
+            )
+        log_failed_query(
+            supabase=supabase,
+            dry_run=dry_run,
+            run_id=run_id or "",
+            provider=log.provider,
+            endpoint=log.endpoint,
+            method=method,
+            request_params=request_params,
+            source_query_id=log.source_query_id,
+            http_status=getattr(exc, "status", None),
+            error_message=str(exc),
+        )
+        raise
+    if not log._usage_logged:
+        log.log_usage()
+    complete_query(
+        supabase=supabase,
+        dry_run=dry_run,
+        source_query_id=log.source_query_id,
+        response_count=log.response_count,
+        http_status=log.status,
+    )
 
 
 def log_failed_query(

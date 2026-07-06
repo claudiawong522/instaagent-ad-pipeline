@@ -12,7 +12,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from ..ad_enrichment import enrich_paid_ads
+from ..paid_enrichment import enrich_paid_ads
 from ..apify_ads import ingest_apify_ads
 from ..apify_organic import ingest_instagram, ingest_tiktok
 from ..audience_enrichment import enrich_audience

@@ -15,14 +15,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..ad_enrichment import (
-    OPENROUTER_BASE_URL,
-    OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
-    parse_enrichment_response,
-)
 from ..config import Config
 from ..embeddings import embed_query, vector_literal
-from ..http_client import HttpClientError, request_json
+from ..http_client import HttpClientError
+from ..openrouter import openrouter_json_call
 from ..supabase_client import SupabaseClient
 from ..trend_classify import TREND_EMBEDDING_SPACE, VIRAL_FORMAT_ITEM_TYPE
 
@@ -218,23 +214,16 @@ def _judge(
             f"  about: {(f.get('format_description') or '').strip() or '(none)'}"
         )
     prompt = MATCH_PROMPT.format(product=product, formats="\n".join(blocks))
-    response = request_json(
-        "POST",
-        f"{OPENROUTER_BASE_URL}{OPENROUTER_CHAT_COMPLETIONS_ENDPOINT}",
-        headers={"Authorization": f"Bearer {config.openrouter_api_key}"},
-        body={
-            "model": config.openrouter_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": "product_matches", "strict": True, "schema": MATCH_SCHEMA},
-            },
-            "max_tokens": min(4000, 200 + 80 * len(candidates)),
-        },
+    analysis = openrouter_json_call(
+        config,
+        prompt=prompt,
+        schema=MATCH_SCHEMA,
+        schema_name="product_matches",
+        max_tokens=min(4000, 200 + 80 * len(candidates)),
         timeout=timeout,
+        empty_error="OpenRouter returned no matches array.",
     )
-    analysis = parse_enrichment_response(response.body)
-    matches = analysis.get("matches") if isinstance(analysis, dict) else None
+    matches = analysis.get("matches")
     if not isinstance(matches, list):
         raise RuntimeError("OpenRouter returned no matches array.")
     verdicts: dict[str, dict[str, Any]] = {}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from instaagent_pipeline import openrouter as openrouter_module
 from instaagent_pipeline.api import match as match_module
 from instaagent_pipeline.config import Config
 
@@ -83,7 +84,7 @@ def test_match_product_ranks_by_score_and_hydrates(monkeypatch):
             {"format_id": "f2", "fit": "no", "score": 10, "idea": ""},
         ])})()
 
-    monkeypatch.setattr(match_module, "request_json", fake_request_json)
+    monkeypatch.setattr(openrouter_module, "request_json", fake_request_json)
     supabase = FakeSupabase(FORMATS)
 
     out = match_module.match_product(make_config(), supabase, product="magnesium sleep gummy")
@@ -109,7 +110,7 @@ def test_match_product_defaults_missing_verdict_to_no(monkeypatch):
             {"format_id": "f1", "fit": "workable", "score": 55, "idea": "Show the texture."},
         ])})()
 
-    monkeypatch.setattr(match_module, "request_json", fake_request_json)
+    monkeypatch.setattr(openrouter_module, "request_json", fake_request_json)
     out = match_module.match_product(make_config(), FakeSupabase(FORMATS), product="a phone case")
 
     by_id = {f["id"]: f for f in out}

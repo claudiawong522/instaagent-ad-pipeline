@@ -20,13 +20,10 @@ from urllib.parse import parse_qs, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from .ad_enrichment import (
-    OPENROUTER_BASE_URL,
-    OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
-    parse_enrichment_response,
-)
+from .apify_client import run_apify_actor_items
 from .config import Config
-from .http_client import HttpClientError, request_json
+from .http_client import HttpClientError
+from .openrouter import openrouter_json_call
 
 _MONTH_SLUGS = (
     "january", "february", "march", "april", "may", "june",
@@ -180,9 +177,6 @@ def _fetch_rendered_html(url: str, apify_api_key: str | None) -> str:
     """Render a JS-only page in Apify's headless browser and return its raw rendered HTML."""
     if not apify_api_key:
         raise RuntimeError(f"APIFY_API_KEY is required to render JS trend page {url}.")
-    # Imported here (not at module top) to avoid a heavier import chain for static sources.
-    from .apify_organic import run_apify_actor_items
-
     items, _, _, _ = run_apify_actor_items(
         api_key=apify_api_key,
         actor_id=_RENDER_ACTOR_ID,
@@ -297,23 +291,14 @@ def parse_trend_formats(config: Config, issue: TrendIssue, *, timeout: int = 120
         page_text=issue.text[:_MAX_PAGE_CHARS],
         candidate_urls="\n".join(issue.candidate_urls) or "(none found)",
     )
-    response = request_json(
-        "POST",
-        f"{OPENROUTER_BASE_URL}{OPENROUTER_CHAT_COMPLETIONS_ENDPOINT}",
-        headers={"Authorization": f"Bearer {config.openrouter_api_key}"},
-        body={
-            "model": config.openrouter_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": "trend_formats", "strict": True, "schema": TREND_PARSE_SCHEMA},
-            },
-        },
+    analysis = openrouter_json_call(
+        config,
+        prompt=prompt,
+        schema=TREND_PARSE_SCHEMA,
+        schema_name="trend_formats",
         timeout=timeout,
+        empty_error="OpenRouter returned no trend-format analysis.",
     )
-    analysis = parse_enrichment_response(response.body)
-    if not isinstance(analysis, dict):
-        raise RuntimeError("OpenRouter returned no trend-format analysis.")
     formats = analysis.get("formats")
     if not isinstance(formats, list):
         return []

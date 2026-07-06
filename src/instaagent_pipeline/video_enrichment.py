@@ -1,3 +1,13 @@
+"""Shared multimodal video enrichment: one flow for paid ads and organic items.
+
+One vision call (Gemini directly, or Gemini via OpenRouter) per video: transcript +
+ai_description + the trimmed analysis fields, plus persisting the video/thumbnail to
+Supabase Storage. Paid and organic differ only in where candidates come from and which
+table/columns identify an item — captured by `ItemKind` — so both reach column parity
+and share one embedding space by construction. The per-kind candidate loaders live in
+`paid_enrichment.py` / `organic_enrichment.py`.
+"""
+
 from __future__ import annotations
 
 import base64
@@ -6,24 +16,24 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from typing import Any, Callable
 
 from .config import Config
-from .http_client import HttpClientError, request_json, ssl_context
-from .ingestion import complete_query, log_api_usage, log_failed_query, start_query, utc_now_iso
+from .http_client import HttpClientError, request_json
+from .ingestion import logged_query, utc_now_iso
+from .media import fetch_video_bytes, persist_media
+from .openrouter import (
+    OPENROUTER_BASE_URL,
+    OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
+    OPENROUTER_PROVIDER,
+    openrouter_json_body,
+    openrouter_usage,
+    parse_json_response,
+)
 from .supabase_client import SupabaseClient
 
 
 logger = logging.getLogger(__name__)
-
-STORAGE_BUCKET = "ad-videos"
-
-OPENROUTER_PROVIDER = "openrouter"
-OPENROUTER_BASE_URL = "https://openrouter.ai"
-OPENROUTER_CHAT_COMPLETIONS_ENDPOINT = "/api/v1/chat/completions"
 
 GEMINI_PROVIDER = "gemini"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
@@ -31,11 +41,8 @@ GEMINI_ENDPOINT = "/v1beta/models/{model}:generateContent"
 # Vision providers rate-limit aggressively (HTTP 429) under parallel enrichment; retry
 # with backoff (honoring Retry-After) so concurrent workers ride out the throttle.
 ENRICHMENT_HTTP_RETRIES = 6
-# OpenRouter forwards arbitrary video to Gemini only as base64 data URLs, so the
-# video bytes are fetched in memory per ad; nothing is written to disk.
-INLINE_VIDEO_MAX_BYTES = 100 * 1024 * 1024
 
-# paid_ads columns written by the enrichment response, in addition to
+# item_enrichments columns written by the enrichment response, in addition to
 # analysis_model/analyzed_at bookkeeping. Keys absent from the model JSON
 # stay untouched; explicit nulls are written as null.
 # Trimmed analysis set (see plan): the vision-generated ai_description (the search
@@ -45,7 +52,7 @@ INLINE_VIDEO_MAX_BYTES = 100 * 1024 * 1024
 # is_trending_format, time_product_was_mentioned. Their columns remain in the DB but
 # go unpopulated. Note: production format now comes from the multi-value content_formats
 # tag (audience_enrichment.py), superseding the single-value content_format here.
-PAID_AD_ANALYSIS_COLUMNS = (
+ANALYSIS_COLUMNS = (
     "ai_description",
     "hook",
     "main_category",
@@ -107,7 +114,7 @@ ENRICHMENT_SCHEMA: dict[str, Any] = {
         "product_category": NULLABLE_STRING,
         "niches": NULLABLE_STRING_ARRAY,
     },
-    "required": ["transcript_text", "transcript_segments", *PAID_AD_ANALYSIS_COLUMNS],
+    "required": ["transcript_text", "transcript_segments", *ANALYSIS_COLUMNS],
 }
 
 ENRICHMENT_PROMPT = """
@@ -150,13 +157,29 @@ Copy context:
 """.strip()
 
 
+@dataclass(frozen=True)
+class ItemKind:
+    """Where one kind of enrichable item lives and how it is identified."""
+
+    label: str  # human label for error messages, e.g. "paid ad"
+    table: str  # source table the item row lives in
+    id_column: str  # that table's id column
+    item_type: str  # polymorphic item_type used in item_enrichments etc.
+    storage_subdir: str  # Storage folder under <run_id>/ for the persisted media
+    detail_id_key: str  # key naming the item id in result details / request params
+
+
 @dataclass
-class PaidAdEnrichmentCandidate:
-    paid_ad_row_id: str
-    ad_archive_id: str
+class EnrichmentCandidate:
+    item_id: str
     video_url: str
     thumbnail_url: str | None = None
+    # raw_payloads external id; falls back to item_id when the provider has no own id.
+    external_id: str = ""
+    # Copy/context JSON given to the LLM prompt ({} when there is none).
     ad_copy: dict[str, Any] = field(default_factory=dict)
+    # Extra identifying keys echoed into details/request params (e.g. ad_archive_id).
+    extra_ids: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -169,41 +192,35 @@ class EnrichmentResult:
     details: list[dict[str, Any]] = field(default_factory=list)
 
 
-def enrich_paid_ads(
+def _detail_ids(kind: ItemKind, candidate: EnrichmentCandidate) -> dict[str, str]:
+    return {kind.detail_id_key: candidate.item_id, **candidate.extra_ids}
+
+
+def enrich_items(
     *,
     config: Config,
     supabase: SupabaseClient | None,
     run_id: str,
     limit: int,
     dry_run: bool,
+    kind: ItemKind,
+    load_candidates: Callable[..., tuple[list[EnrichmentCandidate], int]],
     input_json: Path | None = None,
     timeout: int = 300,
     concurrency: int = 32,
 ) -> EnrichmentResult:
     if supabase is None:
-        raise RuntimeError("Supabase credentials are required to load paid ad enrichment candidates.")
+        raise RuntimeError(f"Supabase credentials are required to load {kind.label} enrichment candidates.")
     if limit < 1:
         raise ValueError("--limit must be greater than 0.")
 
-    candidates, skipped_unsupported = paid_ad_enrichment_candidates(
-        supabase,
-        run_id=run_id,
-        limit=limit,
-    )
-    result = EnrichmentResult(
-        candidates=len(candidates),
-        skipped_unsupported=skipped_unsupported,
-    )
+    candidates, skipped_unsupported = load_candidates(supabase, run_id=run_id, limit=limit)
+    result = EnrichmentResult(candidates=len(candidates), skipped_unsupported=skipped_unsupported)
 
     if dry_run:
         result.details = [
-            {
-                "paid_ad_row_id": candidate.paid_ad_row_id,
-                "ad_archive_id": candidate.ad_archive_id,
-                "video_url": candidate.video_url,
-                "action": "would_enrich",
-            }
-            for candidate in candidates
+            {**_detail_ids(kind, c), "video_url": c.video_url, "action": "would_enrich"}
+            for c in candidates
         ]
         return result
 
@@ -214,11 +231,12 @@ def enrich_paid_ads(
         elif not config.openrouter_api_key:
             raise RuntimeError("OPENROUTER_API_KEY is required unless --input-json is used.")
 
-    def _enrich_one(candidate: PaidAdEnrichmentCandidate) -> bool:
-        return enrich_paid_ad(
+    def _enrich_one(candidate: EnrichmentCandidate) -> bool:
+        return enrich_item(
             config=config,
             supabase=supabase,
             run_id=run_id,
+            kind=kind,
             candidate=candidate,
             input_json=input_json,
             timeout=timeout,
@@ -238,12 +256,7 @@ def enrich_paid_ads(
             except (HttpClientError, RuntimeError) as exc:
                 result.failed += 1
                 result.details.append(
-                    {
-                        "paid_ad_row_id": candidate.paid_ad_row_id,
-                        "ad_archive_id": candidate.ad_archive_id,
-                        "status": "failed",
-                        "error": str(exc),
-                    }
+                    {**_detail_ids(kind, candidate), "status": "failed", "error": str(exc)}
                 )
                 continue
 
@@ -253,13 +266,7 @@ def enrich_paid_ads(
             else:
                 result.failed += 1
                 status = "no_analysis"
-            result.details.append(
-                {
-                    "paid_ad_row_id": candidate.paid_ad_row_id,
-                    "ad_archive_id": candidate.ad_archive_id,
-                    "status": status,
-                }
-            )
+            result.details.append({**_detail_ids(kind, candidate), "status": status})
 
     return result
 
@@ -278,73 +285,13 @@ def existing_enriched_ids(supabase: SupabaseClient, run_id: str, item_type: str)
     return {str(row.get("item_id")) for row in rows if row.get("item_id")}
 
 
-def paid_ad_enrichment_candidates(
-    supabase: SupabaseClient,
-    *,
-    run_id: str,
-    limit: int,
-) -> tuple[list[PaidAdEnrichmentCandidate], int]:
-    rows = supabase.select(
-        "paid_ads",
-        {
-            "select": (
-                "paid_ad_row_id,id,video,thumbnail,image,headline,description,cta_title,cta_type,"
-                "name,link_url,display_format"
-            ),
-            "run_id": f"eq.{run_id}",
-            "video": "not.is.null",
-            "order": "saved_to_supabase_at.asc",
-            "limit": str(max(limit * 5, limit)),
-        },
-    )
-
-    already_enriched = existing_enriched_ids(supabase, run_id, "paid_ad")
-    candidates: list[PaidAdEnrichmentCandidate] = []
-    skipped_unsupported = 0
-    for row in rows:
-        paid_ad_row_id = str(row.get("paid_ad_row_id") or "")
-        video_url = str(row.get("video") or "")
-        if not paid_ad_row_id:
-            continue
-        if paid_ad_row_id in already_enriched:
-            continue
-        if not is_probable_video_url(video_url):
-            skipped_unsupported += 1
-            record_item_status(
-                supabase,
-                table="paid_ads",
-                id_column="paid_ad_row_id",
-                item_id=paid_ad_row_id,
-                status="failed",
-                error="unsupported video URL",
-            )
-            continue
-
-        candidates.append(
-            PaidAdEnrichmentCandidate(
-                paid_ad_row_id=paid_ad_row_id,
-                ad_archive_id=str(row.get("id") or ""),
-                video_url=video_url,
-                thumbnail_url=str(row.get("thumbnail") or row.get("image") or "") or None,
-                ad_copy={
-                    key: row.get(key)
-                    for key in ("headline", "description", "cta_title", "cta_type", "name", "link_url", "display_format")
-                    if row.get(key) not in (None, "")
-                },
-            )
-        )
-        if len(candidates) >= limit:
-            break
-
-    return candidates, skipped_unsupported
-
-
-def enrich_paid_ad(
+def enrich_item(
     *,
     config: Config,
     supabase: SupabaseClient,
     run_id: str,
-    candidate: PaidAdEnrichmentCandidate,
+    kind: ItemKind,
+    candidate: EnrichmentCandidate,
     input_json: Path | None,
     timeout: int,
 ) -> bool:
@@ -352,153 +299,102 @@ def enrich_paid_ad(
     model = config.gemini_model if is_gemini else config.openrouter_model
     raw_provider = GEMINI_PROVIDER if is_gemini else OPENROUTER_PROVIDER
     endpoint = GEMINI_ENDPOINT.format(model=model) if is_gemini else OPENROUTER_CHAT_COMPLETIONS_ENDPOINT
-    provider = f"{raw_provider}:{model}"
-    request_params = {
-        "model": model,
-        "paid_ad_row_id": candidate.paid_ad_row_id,
-        "ad_archive_id": candidate.ad_archive_id,
-        "video_url": candidate.video_url,
-    }
-    source_query_id = start_query(
-        supabase=supabase,
-        dry_run=False,
-        run_id=run_id,
-        provider=provider,
-        endpoint=endpoint,
-        method="POST",
-        request_params=request_params,
-    )
-    response_headers: dict[str, str] = {}
-    response_status: int | None = None
-    usage: dict[str, Any] = {}
     # Which step we're in, so a failure is classified as 'expired' (URL didn't yield
     # video bytes) vs 'failed' (download ok, but the vision/analysis step failed).
     stage = "download"
     try:
-        if input_json:
-            stage = "analysis"
-            body = json.loads(input_json.read_text())
-            analysis = parse_gemini_response(body) if is_gemini else parse_enrichment_response(body)
-            usage = gemini_usage(body) if is_gemini else openrouter_usage(body)
-        else:
-            video_bytes = fetch_video_bytes(candidate.video_url, timeout=timeout)
-            stage = "analysis"
-            media = persist_media(
-                supabase,
-                run_id=run_id,
-                item_table="paid_ads",
-                id_column="paid_ad_row_id",
-                item_id=candidate.paid_ad_row_id,
-                video_bytes=video_bytes,
-                thumbnail_url=candidate.thumbnail_url,
-                subdir="paid",
-                timeout=timeout,
-            )
-            # OpenRouter fetches the video from its public Storage URL server-side, so
-            # we can drop our copy of the bytes before the (slow) LLM call — keeping
-            # peak memory low and letting concurrency scale. Gemini still needs bytes.
-            storage_video_url = media.get("storage_video_url")
-            if not is_gemini and storage_video_url:
-                video_bytes = None
-            (
-                body,
-                analysis,
-                provider,
-                endpoint,
-                response_headers,
-                response_status,
-                usage,
-                model,
-            ) = request_enrichment(
-                config=config,
-                video_bytes=video_bytes,
-                video_url=None if is_gemini else storage_video_url,
-                ad_copy=candidate.ad_copy,
-                timeout=timeout,
-            )
-
-        log_api_usage(
+        with logged_query(
             supabase=supabase,
-            dry_run=False,
             run_id=run_id,
-            provider=provider,
+            provider=f"{raw_provider}:{model}",
             endpoint=endpoint,
-            status=response_status,
-            response_count=1 if analysis is not None else 0,
-            headers=response_headers,
-            metadata={"model": model, "usage": usage},
-        )
-        complete_query(
-            supabase=supabase,
-            dry_run=False,
-            source_query_id=source_query_id,
-            response_count=1 if analysis is not None else 0,
-            http_status=response_status,
-        )
+            request_params={"model": model, **_detail_ids(kind, candidate), "video_url": candidate.video_url},
+        ) as log:
+            log.metadata = {"model": model}
+            if input_json:
+                stage = "analysis"
+                body = json.loads(input_json.read_text())
+                analysis = parse_gemini_response(body) if is_gemini else parse_json_response(body)
+                usage = gemini_usage(body) if is_gemini else openrouter_usage(body)
+            else:
+                video_bytes = fetch_video_bytes(candidate.video_url, timeout=timeout)
+                stage = "analysis"
+                media = persist_media(
+                    supabase,
+                    run_id=run_id,
+                    item_table=kind.table,
+                    id_column=kind.id_column,
+                    item_id=candidate.item_id,
+                    video_bytes=video_bytes,
+                    thumbnail_url=candidate.thumbnail_url,
+                    subdir=kind.storage_subdir,
+                    timeout=timeout,
+                )
+                # OpenRouter fetches the video from its public Storage URL server-side, so
+                # we can drop our copy of the bytes before the (slow) LLM call — keeping
+                # peak memory low and letting concurrency scale. Gemini still needs bytes.
+                storage_video_url = media.get("storage_video_url")
+                if not is_gemini and storage_video_url:
+                    video_bytes = None
+                (
+                    body,
+                    analysis,
+                    log.provider,
+                    endpoint,
+                    log.headers,
+                    log.status,
+                    usage,
+                    model,
+                ) = request_enrichment(
+                    config=config,
+                    video_bytes=video_bytes,
+                    video_url=None if is_gemini else storage_video_url,
+                    ad_copy=candidate.ad_copy,
+                    timeout=timeout,
+                )
+                log.endpoint = endpoint
+                log.metadata["model"] = model
+            log.response_count = 1 if analysis is not None else 0
+            log.metadata["usage"] = usage
     except (HttpClientError, RuntimeError) as exc:
-        if isinstance(exc, HttpClientError) and response_status is None:
-            log_api_usage(
-                supabase=supabase,
-                dry_run=False,
-                run_id=run_id,
-                provider=provider,
-                endpoint=endpoint,
-                status=exc.status,
-                response_count=None,
-                headers={},
-                metadata={"model": model},
-            )
-        log_failed_query(
-            supabase=supabase,
-            dry_run=False,
-            run_id=run_id,
-            provider=provider,
-            endpoint=endpoint,
-            method="POST",
-            request_params=request_params,
-            source_query_id=source_query_id,
-            http_status=getattr(exc, "status", None),
-            error_message=str(exc),
-        )
         record_item_status(
             supabase,
-            table="paid_ads",
-            id_column="paid_ad_row_id",
-            item_id=candidate.paid_ad_row_id,
+            table=kind.table,
+            id_column=kind.id_column,
+            item_id=candidate.item_id,
             status="expired" if stage == "download" else "failed",
             error=str(exc),
         )
         raise
 
-    if analysis is not None:
-        supabase.insert(
-            "raw_payloads",
-            {
-                "run_id": run_id,
-                "source_query_id": source_query_id,
-                "provider": raw_provider,
-                "endpoint": endpoint,
-                "external_id": candidate.ad_archive_id or candidate.paid_ad_row_id,
-                "payload_json": body,
-            },
-        )
     if analysis is None:
         record_item_status(
             supabase,
-            table="paid_ads",
-            id_column="paid_ad_row_id",
-            item_id=candidate.paid_ad_row_id,
+            table=kind.table,
+            id_column=kind.id_column,
+            item_id=candidate.item_id,
             status="failed",
             error="vision returned no analysis",
         )
         return False
 
-    payload = {key: analysis.get(key) for key in PAID_AD_ANALYSIS_COLUMNS if key in analysis}
+    supabase.insert(
+        "raw_payloads",
+        {
+            "run_id": run_id,
+            "source_query_id": log.source_query_id,
+            "provider": raw_provider,
+            "endpoint": endpoint,
+            "external_id": candidate.external_id or candidate.item_id,
+            "payload_json": body,
+        },
+    )
+    payload = {key: analysis.get(key) for key in ANALYSIS_COLUMNS if key in analysis}
     payload.update(
         {
             "run_id": run_id,
-            "item_type": "paid_ad",
-            "item_id": candidate.paid_ad_row_id,
+            "item_type": kind.item_type,
+            "item_id": candidate.item_id,
             "transcript_text": clean_optional_text(analysis.get("transcript_text")),
             "transcript_segments": analysis.get("transcript_segments") or None,
             "analysis_model": model,
@@ -508,9 +404,9 @@ def enrich_paid_ad(
     supabase.upsert("item_enrichments", payload, "item_type,item_id")
     record_item_status(
         supabase,
-        table="paid_ads",
-        id_column="paid_ad_row_id",
-        item_id=candidate.paid_ad_row_id,
+        table=kind.table,
+        id_column=kind.id_column,
+        item_id=candidate.item_id,
         status="enriched",
     )
     return True
@@ -533,9 +429,9 @@ def openrouter_request_body(
     else:
         raise ValueError("openrouter_request_body requires video_url or video_bytes")
     prompt = ENRICHMENT_PROMPT.format(ad_copy=json.dumps(ad_copy, indent=2, sort_keys=True))
-    return {
-        "model": model,
-        "messages": [
+    return openrouter_json_body(
+        model=model,
+        messages=[
             {
                 "role": "user",
                 "content": [
@@ -544,46 +440,9 @@ def openrouter_request_body(
                 ],
             }
         ],
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "paid_ad_enrichment",
-                "strict": True,
-                "schema": ENRICHMENT_SCHEMA,
-            },
-        },
-    }
-
-
-def parse_enrichment_response(body: Any) -> dict[str, Any] | None:
-    if not isinstance(body, dict):
-        return None
-    choices = body.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return None
-    message = choices[0].get("message") if isinstance(choices[0], dict) else None
-    content = message.get("content") if isinstance(message, dict) else None
-    if isinstance(content, list):
-        content = "".join(
-            str(part.get("text", ""))
-            for part in content
-            if isinstance(part, dict) and isinstance(part.get("text"), str)
-        )
-    if not isinstance(content, str) or not content.strip():
-        return None
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"OpenRouter returned invalid JSON: {exc}") from exc
-    if not isinstance(parsed, dict):
-        return None
-    return parsed
-
-
-def openrouter_usage(body: Any) -> dict[str, Any]:
-    if isinstance(body, dict) and isinstance(body.get("usage"), dict):
-        return body["usage"]
-    return {}
+        schema=ENRICHMENT_SCHEMA,
+        schema_name="video_enrichment",
+    )
 
 
 def gemini_request_body(
@@ -690,15 +549,10 @@ def request_enrichment(
             retries=ENRICHMENT_HTTP_RETRIES,
         )
         body = response.body
-        analysis = parse_enrichment_response(body)
+        analysis = parse_json_response(body)
         usage = openrouter_usage(body)
         provider = f"{OPENROUTER_PROVIDER}:{model}"
     return body, analysis, provider, endpoint, response.headers, response.status, usage, model
-
-
-def is_probable_video_url(url: str) -> bool:
-    parsed = urlparse(url)
-    return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
 
 
 def record_item_status(
@@ -713,117 +567,13 @@ def record_item_status(
     """Persist a per-video enrichment outcome on the source row so the UI can show how
     many scraped videos became searchable vs expired/failed. Status is one of
     'enriched' | 'expired' | 'failed'. Best-effort: a status write must never break
-    enrichment, so failures are logged, not raised. Shared by paid + organic enrichment."""
+    enrichment, so failures are logged, not raised."""
     try:
         supabase.update_by_column(
             table, id_column, item_id, {"enrichment_status": status, "enrichment_error": error}
         )
     except (HttpClientError, RuntimeError) as exc:
         logger.warning("Status write failed for %s %s: %s", table, item_id, exc)
-
-
-# Provider cover images aren't always browser-renderable: TikTok in particular serves some
-# covers as HEIC (an ISO-BMFF container that shares MP4's `ftyp` signature, so it slips past the
-# video-bytes check and lands in Storage as a `.jpg` that Chrome/Firefox draw as a black frame).
-# We transcode every cover through Pillow to a real JPEG so the stored poster always displays.
-try:
-    from PIL import Image as _PILImage
-    import pillow_heif as _pillow_heif
-
-    _pillow_heif.register_heif_opener()  # lets Pillow decode HEIC/HEIF
-    _IMAGE_DECODE_OK = True
-except Exception:  # pragma: no cover - optional image deps absent
-    _IMAGE_DECODE_OK = False
-
-
-def thumbnail_to_web_jpeg(data: bytes) -> bytes | None:
-    """Transcode arbitrary cover bytes (HEIC/WebP/PNG/JPEG) to a browser-safe JPEG. Returns None
-    if the bytes can't be decoded, so the caller skips the thumbnail instead of storing a broken
-    one. Falls back to the original bytes if the optional image deps are unavailable."""
-    if not _IMAGE_DECODE_OK:
-        return data
-    from io import BytesIO
-
-    try:
-        with _PILImage.open(BytesIO(data)) as img:
-            out = BytesIO()
-            img.convert("RGB").save(out, "JPEG", quality=85)
-            return out.getvalue()
-    except Exception as exc:  # unreadable/corrupt cover
-        logger.warning("Thumbnail transcode failed (%s); skipping poster", exc)
-        return None
-
-
-def persist_media(
-    supabase: SupabaseClient,
-    *,
-    run_id: str,
-    item_table: str,
-    id_column: str,
-    item_id: str,
-    video_bytes: bytes,
-    thumbnail_url: str | None,
-    subdir: str,
-    timeout: int,
-) -> dict[str, str]:
-    """Persist the video (and provider thumbnail) to Supabase Storage and record the
-    public URLs on the item row. Resilient: upload failures are logged, not raised, so
-    enrichment still proceeds. Shared by paid + organic enrichment."""
-    updates: dict[str, str] = {}
-    try:
-        updates["storage_video_url"] = supabase.upload_object(
-            STORAGE_BUCKET, f"{run_id}/{subdir}/{item_id}.mp4", video_bytes, "video/mp4", timeout=timeout
-        )
-    except (HttpClientError, RuntimeError) as exc:
-        logger.warning("Video persist failed for %s %s: %s", item_table, item_id, exc)
-    if thumbnail_url:
-        try:
-            thumb_bytes = fetch_video_bytes(thumbnail_url, timeout=timeout)
-            jpeg_bytes = thumbnail_to_web_jpeg(thumb_bytes)
-            if jpeg_bytes:
-                updates["storage_thumb_url"] = supabase.upload_object(
-                    STORAGE_BUCKET, f"{run_id}/{subdir}/{item_id}.jpg", jpeg_bytes, "image/jpeg", timeout=timeout
-                )
-        except (HttpClientError, RuntimeError) as exc:
-            logger.warning("Thumbnail persist failed for %s %s: %s", item_table, item_id, exc)
-    if updates:
-        try:
-            supabase.update_by_column(item_table, id_column, item_id, updates)
-        except (HttpClientError, RuntimeError) as exc:
-            logger.warning("Storage URL update failed for %s %s: %s", item_table, item_id, exc)
-    return updates
-
-
-def fetch_video_bytes(url: str, *, timeout: int) -> bytes:
-    request = Request(url, headers={"User-Agent": "instaagent-ad-pipeline/0.1"})
-    try:
-        with urlopen(request, timeout=timeout, context=ssl_context()) as response:
-            content_type = (response.headers.get("Content-Type") or "").lower()
-            data = response.read(INLINE_VIDEO_MAX_BYTES + 1)
-    except HTTPError as exc:
-        raise HttpClientError(f"HTTP {exc.code} fetching video {url}", status=exc.code) from exc
-    except (URLError, OSError) as exc:
-        raise HttpClientError(f"Network error fetching video {url}: {getattr(exc, 'reason', exc)}") from exc
-    if len(data) > INLINE_VIDEO_MAX_BYTES:
-        raise RuntimeError(f"Video at {url} exceeds the {INLINE_VIDEO_MAX_BYTES} byte inline limit.")
-    # Expiring provider URLs often return an HTML error/login page with HTTP 200.
-    # Reject non-video payloads loudly so they are skipped, not base64-encoded and
-    # sent to the LLM as bogus "video/mp4" (which the model rejects as INVALID_ARGUMENT).
-    if not is_probable_video_bytes(data, content_type):
-        raise HttpClientError(
-            f"URL {url} did not return video bytes (content-type {content_type or 'unknown'!r}); "
-            "the link is likely expired."
-        )
-    return data
-
-
-def is_probable_video_bytes(data: bytes, content_type: str) -> bool:
-    if content_type.startswith(("text/", "application/json")) or "html" in content_type:
-        return False
-    head = data[:64].lstrip()[:16].lower()
-    if head.startswith((b"<!doctype", b"<html", b"<?xml", b"{", b"[")):
-        return False
-    return True
 
 
 def clean_optional_text(value: Any) -> str | None:
