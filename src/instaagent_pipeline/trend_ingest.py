@@ -34,6 +34,7 @@ from .ingestion import utc_now_iso
 from .normalizers import normalize_instagram_post, normalize_tiktok_item
 from .organic_enrichment import enrich_organic_items
 from .supabase_client import SupabaseClient
+from .trend_classify import classify_formats
 from .trend_sources import (
     SGE_PARSE_PROMPT,
     TREND_PARSE_PROMPT,
@@ -67,6 +68,7 @@ class TrendSourceResult:
 class TrendIngestResult:
     sources: list[dict[str, Any]] = field(default_factory=list)
     enrichment: Any = None
+    classification: Any = None  # classify_formats summary (tags + trend embeddings), chained after enrichment
     drift_alert: Any = None  # maybe_send_drift_alert summary, when a parser looks broken
 
 
@@ -286,6 +288,7 @@ def ingest_trends(
     timeout: int = 300,
     concurrency: int = 32,
     skip_enrichment: bool = False,
+    skip_classify: bool = False,
     force: bool = False,
     dry_run: bool = False,
 ) -> TrendIngestResult:
@@ -508,6 +511,24 @@ def ingest_trends(
                 }
             )
         result.enrichment = enrichments
+
+    # Tag each format (versatility/fit_niches/product_requirements) and embed it into the
+    # 'trend' space, so ingestion delivers query-ready formats without a manual classify-formats
+    # pass. Runs every ingest (not just when a page changed) so an unchanged/skipped source still
+    # reconciles any lingering unclassified backlog; overwrite=False → classified rows are skipped
+    # with no LLM call (idempotent, ~free when nothing is pending). Best-effort: a classify
+    # failure records the error but does not fail the ingest.
+    if not dry_run and not skip_classify:
+        try:
+            result.classification = classify_formats(
+                config=config,
+                supabase=supabase,
+                source_name=only_source,
+                overwrite=False,
+                timeout=timeout,
+            ).__dict__
+        except RuntimeError as exc:
+            result.classification = {"error": str(exc)[:200]}
 
     return result
 

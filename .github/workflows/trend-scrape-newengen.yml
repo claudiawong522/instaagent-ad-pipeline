@@ -52,6 +52,9 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           APIFY_API_KEY: ${{ secrets.APIFY_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Voyage key for the trend embeddings classify-formats writes (chained after ingest).
+          # If unset, formats are still tagged but not embedded — not recallable until re-embedded.
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
           # SMTP creds for the parser-drift reminder email (drift_alert.py) — free relay
           # (Gmail app password by default; Brevo etc. via the HOST/PORT/FROM overrides).
           # If unset, drift is only logged in the run output.

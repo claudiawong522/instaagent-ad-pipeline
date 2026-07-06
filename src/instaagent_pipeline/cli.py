@@ -132,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.timeout,
             concurrency=args.concurrency,
             skip_enrichment=args.skip_enrichment,
+            skip_classify=args.skip_classify,
             force=args.force,
             dry_run=args.dry_run,
         )
@@ -295,7 +296,8 @@ def build_parser() -> argparse.ArgumentParser:
         "ingest-trends",
         help="Scrape viral formats from configured web trend pages (TREND_SOURCES) into "
         "viral_formats + organic_items, re-scraping each example TikTok video for live metrics. "
-        "Chains organic enrichment (MP4 download + analysis) unless --skip-enrichment.",
+        "Chains organic enrichment (MP4 download + analysis) unless --skip-enrichment, then "
+        "classify-formats (niche tags + trend embeddings) unless --skip-classify.",
     )
     trends.add_argument("--source-name", help="Only ingest this configured source (e.g. ramdam). Omit for all.")
     trends.add_argument("--force", action="store_true", help="Re-parse even if the page is unchanged since last run.")
@@ -308,6 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
     trends.add_argument("--timeout", type=int, default=300, help="Per-video enrichment timeout in seconds (covers the MP4 download).")
     trends.add_argument("--concurrency", type=int, default=32, help="Parallel video enrichments (I/O-bound).")
     trends.add_argument("--skip-enrichment", action="store_true", help="Ingest formats + videos only; do not download MP4s / run vision analysis.")
+    trends.add_argument("--skip-classify", action="store_true", help="Do not chain classify-formats (niche tags + trend embeddings) after ingest.")
     trends.add_argument("--dry-run", action="store_true", help="Fetch + LLM-parse pages and print formats without writing or re-scraping.")
 
     classify = subparsers.add_parser(
