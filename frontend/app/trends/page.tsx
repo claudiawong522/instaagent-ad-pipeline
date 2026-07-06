@@ -10,10 +10,10 @@ import type { MatchedFormat, ViralFormat, TrendVideo } from '@/lib/types'
 
 // Newsletter/trend-roundup sources, kept in sync with DEFAULT_TREND_SOURCES in
 // src/instaagent_pipeline/trend_sources.py — the pages these formats are scraped from.
-const TREND_SOURCE_URLS: { name: string; url: string }[] = [
-  { name: 'ramdam', url: 'https://www.ramd.am/blog/trends-tiktok' },
-  { name: 'newengen', url: 'https://newengen.com/tiktok-trends/' },
-  { name: 'socialbee', url: 'https://socialbee.com/blog/tiktok-trends/' },
+const TREND_SOURCE_URLS: { name: string; url: string; cadence: string }[] = [
+  { name: 'ramdam', url: 'https://www.ramd.am/blog/trends-tiktok', cadence: 'Updated weekly' },
+  { name: 'newengen', url: 'https://newengen.com/tiktok-trends/', cadence: 'Updated monthly' },
+  { name: 'socialbee', url: 'https://socialbee.com/blog/tiktok-trends/', cadence: 'Updated weekly' },
 ]
 
 function formatNum(n: number | null | undefined): string {
@@ -252,7 +252,9 @@ function SourcesHelp() {
                   rel="noreferrer"
                   className="block min-w-0 hover:underline"
                 >
-                  <span className="block text-xs font-medium capitalize text-primary">{s.name}</span>
+                  <span className="block text-xs font-medium capitalize text-primary">
+                    {s.name} <span className="font-normal text-muted-foreground">· {s.cadence}</span>
+                  </span>
                   <span className="block truncate text-[11px] text-muted-foreground">{s.url}</span>
                 </a>
               </li>
