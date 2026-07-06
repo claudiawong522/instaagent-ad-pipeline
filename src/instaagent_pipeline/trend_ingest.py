@@ -49,6 +49,7 @@ class TrendSourceResult:
     videos_ingested: int = 0
     videos_skipped: int = 0  # YouTube, unresolvable short links, or non-video links — not re-scraped
     videos_already_ingested: int = 0  # in ugc_items from a prior run — not re-scraped (metrics not refreshed)
+    formats_removed: int = 0  # stale rows from an earlier page version, pruned after re-link
     error: str | None = None
 
 
@@ -115,6 +116,47 @@ def _existing_video_ids(
         },
     )
     return {str(row["external_id"]) for row in rows}
+
+
+def _relink_existing_videos(
+    supabase: SupabaseClient,
+    run_id: str,
+    video_ids: set[str],
+    vid_to_format: dict[str, str],
+) -> None:
+    """Point already-scraped ugc_items at the format the current parse assigns them to,
+    without re-scraping. A page that renames/re-splits a trend would otherwise leave the
+    video stranded on its old-name row and the new row empty."""
+    if not video_ids:
+        return
+    rows = supabase.select(
+        "ugc_items",
+        {
+            "select": "id,external_id,format_id",
+            "run_id": f"eq.{run_id}",
+            "external_id": f"in.({','.join(video_ids)})",
+        },
+    )
+    for row in rows:
+        target = vid_to_format.get(str(row.get("external_id")))
+        if target and str(row.get("format_id")) != target:
+            supabase.update_by_id("ugc_items", str(row["id"]), {"format_id": target})
+
+
+def _prune_stale_formats(
+    supabase: SupabaseClient, source_name: str, current_hash: str
+) -> int:
+    """Delete this source's viral_formats rows left over from an earlier page version
+    (content_hash != current). Their videos were just re-linked onto the current rows, so
+    what remains are empty renamed/removed trends. content_hash is the stable per-page-version
+    identity — format_name is not (the LLM renames trends between fetches)."""
+    stale = supabase.select(
+        "viral_formats",
+        {"select": "id", "source_name": f"eq.{source_name}", "content_hash": f"neq.{current_hash}"},
+    )
+    for row in stale:
+        supabase.delete("viral_formats", {"id": f"eq.{row['id']}"})
+    return len(stale)
 
 
 # ── URL helpers ───────────────────────────────────────────────────────────────────
@@ -321,6 +363,11 @@ def ingest_trends(
             already = _existing_video_ids(supabase, run_id, list(vid_to_format))
             if already:
                 sr.videos_already_ingested = len(already)
+                # Re-link videos we've already scraped to the format THIS parse assigns them
+                # to, then skip re-scraping (the expensive part). Without the re-link, a page
+                # that renames a trend would orphan its video on the old-name row and leave the
+                # new row empty. vid_to_format is the current parse's mapping.
+                _relink_existing_videos(supabase, run_id, already, vid_to_format)
                 tiktok_urls = [u for u in tiktok_urls if _tiktok_video_id(u) not in already]
                 vid_to_format = {v: f for v, f in vid_to_format.items() if v not in already}
 
@@ -340,6 +387,9 @@ def ingest_trends(
             )
             sr.videos_ingested = tt_written + ig_written
             _annotate_formats(supabase, fmt_counts)
+            # The DB should mirror the current page: drop rows left behind by earlier page
+            # versions (renamed/removed trends), whose videos have just been re-linked away.
+            sr.formats_removed = _prune_stale_formats(supabase, name, issue.content_hash)
             _record_scrape_event(
                 supabase, run_id, len(tiktok_urls) + len(ig_urls), sr.videos_ingested
             )
