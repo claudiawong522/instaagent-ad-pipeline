@@ -1,12 +1,21 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { Loader2, Search, TrendingUp } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { HelpCircle, Loader2, Search, TrendingUp } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { listTrendFormats } from '@/lib/api'
 import type { ViralFormat, TrendVideo } from '@/lib/types'
+
+// Newsletter/trend-roundup sources, kept in sync with DEFAULT_TREND_SOURCES in
+// src/instaagent_pipeline/trend_sources.py — the pages these formats are scraped from.
+const TREND_SOURCE_URLS: { name: string; url: string }[] = [
+  { name: 'ramdam', url: 'https://www.ramd.am/blog/trends-tiktok' },
+  { name: 'newengen', url: 'https://newengen.com/tiktok-trends/' },
+  { name: 'later', url: 'https://later.com/blog/tiktok-trends/' },
+  { name: 'socialbee', url: 'https://socialbee.com/blog/tiktok-trends/' },
+]
 
 function formatNum(n: number | null | undefined): string {
   if (n == null) return '—'
@@ -62,6 +71,7 @@ export default function TrendsPage() {
       <div className="mb-1 flex items-center gap-2">
         <TrendingUp className="h-5 w-5 text-[#9d1555]" />
         <h1 className="text-lg font-semibold">Viral Formats</h1>
+        <SourcesHelp />
       </div>
       <p className="mb-4 text-sm text-muted-foreground">
         Trending TikTok/Reel formats scraped from web trend pages, ranked by their example
@@ -106,6 +116,53 @@ export default function TrendsPage() {
           {formats.map((f) => (
             <FormatCard key={f.id} format={f} />
           ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SourcesHelp() {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-label="Trend sources"
+        className="text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <HelpCircle className="h-4 w-4" />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-10 mt-1.5 w-64 rounded-md border border-border bg-popover p-3 text-popover-foreground shadow-md">
+          <p className="mb-2 text-xs font-medium">Formats are scraped from these trend newsletters:</p>
+          <ul className="flex flex-col gap-2">
+            {TREND_SOURCE_URLS.map((s) => (
+              <li key={s.name} className="min-w-0">
+                <a
+                  href={s.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block min-w-0 hover:underline"
+                >
+                  <span className="block text-xs font-medium capitalize text-primary">{s.name}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{s.url}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>
