@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from . import campaigns as campaigns_module
+from .deps import require_supabase
 
 router = APIRouter()
 
@@ -43,28 +44,21 @@ class ScrapeRequest(BaseModel):
     estimated_cost_usd: float | None = Field(default=None, ge=0)  # pre-scrape estimate from the UI
 
 
-def _supabase(request: Request):
-    supabase = request.app.state.supabase
-    if supabase is None:
-        raise HTTPException(503, "Supabase is not configured (set SUPABASE_URL and a key).")
-    return supabase
-
-
 @router.post("/campaigns")
 def create_campaign(req: CreateCampaignRequest, request: Request) -> dict[str, Any]:
-    supabase = _supabase(request)
+    supabase = require_supabase(request)
     config = request.app.state.config
     return campaigns_module.create_campaign(config, supabase, **req.model_dump())
 
 
 @router.get("/campaigns")
 def list_campaigns(request: Request) -> dict[str, Any]:
-    return {"campaigns": campaigns_module.list_campaigns(_supabase(request))}
+    return {"campaigns": campaigns_module.list_campaigns(require_supabase(request))}
 
 
 @router.patch("/campaigns/{run_id}")
 def update_campaign(run_id: str, req: UpdateCampaignRequest, request: Request) -> dict[str, Any]:
-    supabase = _supabase(request)
+    supabase = require_supabase(request)
     try:
         return campaigns_module.update_campaign(supabase, run_id, **req.model_dump())
     except ValueError as exc:
@@ -73,17 +67,17 @@ def update_campaign(run_id: str, req: UpdateCampaignRequest, request: Request) -
 
 @router.get("/campaigns/{run_id}/scrape-stats")
 def scrape_stats(run_id: str, request: Request) -> dict[str, Any]:
-    return campaigns_module.scrape_stats(_supabase(request), run_id)
+    return campaigns_module.scrape_stats(require_supabase(request), run_id)
 
 
 @router.get("/campaigns/{run_id}/scrape-events")
 def scrape_events(run_id: str, request: Request) -> dict[str, Any]:
-    return campaigns_module.list_scrape_events(_supabase(request), run_id)
+    return campaigns_module.list_scrape_events(require_supabase(request), run_id)
 
 
 @router.post("/campaigns/{run_id}/scrape")
 def scrape(run_id: str, req: ScrapeRequest, request: Request) -> dict[str, Any]:
-    _supabase(request)  # ensure configured before launching the thread
+    require_supabase(request)  # ensure configured before launching the thread
     config = request.app.state.config
     try:
         return campaigns_module.trigger_scrape(
@@ -91,12 +85,3 @@ def scrape(run_id: str, req: ScrapeRequest, request: Request) -> dict[str, Any]:
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-
-
-@router.get("/products")
-def list_products(request: Request) -> dict[str, Any]:
-    rows = _supabase(request).select(
-        "products",
-        {"select": "id,name,category,target_market,notes,created_at", "order": "created_at.desc"},
-    )
-    return {"products": rows}

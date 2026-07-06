@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from . import discover as discover_module
+from .deps import require_supabase
 
 router = APIRouter()
 
@@ -17,18 +18,11 @@ class DiscoverRequest(BaseModel):
     estimated_cost_usd: float | None = Field(default=None, ge=0)
 
 
-def _supabase(request: Request):
-    supabase = request.app.state.supabase
-    if supabase is None:
-        raise HTTPException(503, "Supabase is not configured (set SUPABASE_URL and a key).")
-    return supabase
-
-
 @router.post("/discover/scrape")
 def discover_scrape(req: DiscoverRequest, request: Request) -> dict[str, Any]:
     """Trigger a keyword-free TikTok viral-format pull. Returns the discovery run_id; poll
     /campaigns/{run_id}/scrape-stats for live progress (it's a normal pipeline_run)."""
-    supabase = _supabase(request)
+    supabase = require_supabase(request)
     config = request.app.state.config
     return discover_module.trigger_discovery(
         config,

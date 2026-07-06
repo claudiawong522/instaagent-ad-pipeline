@@ -41,16 +41,8 @@ class Config:
     # queries — at ~93 items, 50/space silently capped "skincare" recall. 100 covers the
     # current corpus fully and is a sane ceiling as it grows (rerank-2.5 is cheap).
     rerank_candidate_pool: int = 100
-    # Model used to expand a short query into a multi-concept query before embedding
-    # (fixes short-query cosine dilution). Reuses the OpenRouter stack.
-    query_expansion_model: str = "google/gemini-3-flash-preview"
-    # Whether to run query expansion at all. OFF by default: an A/B over the niche query
-    # set (genz/comedy/before-and-after/skincare/oily skin) showed expansion changed zero
-    # results — the enriched icp space + reranker already surface the right candidates, and
-    # the candidate pool (100/space) covers the whole corpus — while adding ~2.6s/search.
-    # Re-enable (QUERY_EXPANSION_ENABLED=1) once the corpus outgrows the candidate pool,
-    # where expansion's recall benefit returns.
-    query_expansion_enabled: bool = False
+    # Browser origins allowed to call the API (CORS), comma-separated via CORS_ORIGINS.
+    cors_origins: str = "http://localhost:3000"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -73,8 +65,7 @@ class Config:
             rerank_model=os.getenv("RERANK_MODEL", "rerank-2.5"),
             rerank_min_score=float(os.getenv("RERANK_MIN_SCORE", "0.5")),
             rerank_candidate_pool=int(os.getenv("RERANK_CANDIDATE_POOL", "100")),
-            query_expansion_model=os.getenv("QUERY_EXPANSION_MODEL", "google/gemini-3-flash-preview"),
-            query_expansion_enabled=os.getenv("QUERY_EXPANSION_ENABLED", "0").strip().lower() in ("1", "true", "yes"),
+            cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000"),
         )
 
 

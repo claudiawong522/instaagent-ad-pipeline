@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from instaagent_pipeline import openrouter as openrouter_module
-from instaagent_pipeline.api import match as match_module
+from instaagent_pipeline.api import trends as match_module
 from instaagent_pipeline.config import Config
 
 
@@ -28,6 +28,13 @@ class FakeSupabase:
     def rpc(self, fn: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         self.rpc_calls.append((fn, params))
         return []
+
+
+    def select_by_ids(self, table, id_column, ids, columns):
+        if not ids:
+            return {}
+        rows = self.select(table, {"select": columns, id_column: f"in.({','.join(ids)})", "limit": str(len(ids))})
+        return {str(row.get(id_column)): row for row in rows if row.get(id_column)}
 
     def select(self, table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         if table == "viral_formats":

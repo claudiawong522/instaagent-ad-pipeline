@@ -1,6 +1,10 @@
-"""Product → viral-trend matching, independent of the web framework so it can be unit-tested.
+"""Trends service: viral-format listing + product → trend matching, framework-independent.
 
-A three-stage funnel that keeps the LLM judge's payload flat as the trend library grows:
+Listing (GET /trends/formats) returns each viral_formats row with its example videos
+(re-scraped ugc_items, source='trend') grouped under it, ranked by aggregate live views.
+
+Matching (POST /trends/match) is a three-stage funnel that keeps the LLM judge's payload
+flat as the trend library grows:
   1. Candidate set — all formats when few; else vector recall (embed the product, KNN over the
      'trend' space) UNIONed with every `universal` format. Universals are force-included because
      a "works for anything" format embeds poorly against a specific product, so cosine alone
@@ -30,7 +34,7 @@ _FORMAT_COLUMNS = (
     "id,source_name,source_url,issue_date,format_name,format_description,niche_constraint,"
     "versatility,fit_niches,product_requirements,created_at"
 )
-# ugc_items fields the cards need (mirrors routes_trends).
+# ugc_items fields the trend cards need (storage_* are filled by enrichment's MP4 persist).
 _VIDEO_COLUMNS = (
     "id,format_id,storage_video_url,storage_thumb_url,video_url,cover,views,likes,"
     "virality_score,handle,description,enrichment_status,source_metrics,date_created"
@@ -70,6 +74,93 @@ MATCH_PROMPT = (
     "PRODUCT: {product}\n\n"
     "FORMATS:\n{formats}"
 )
+
+
+def _video_out(row: dict[str, Any]) -> dict[str, Any]:
+    """One example-video card, shared by the listing and match endpoints."""
+    metrics = row.get("source_metrics") if isinstance(row.get("source_metrics"), dict) else {}
+    return {
+        "id": row.get("id"),
+        "video_url": row.get("storage_video_url") or row.get("video_url"),
+        "thumb_url": row.get("storage_thumb_url") or row.get("cover"),
+        "original_url": metrics.get("page_url"),
+        "views": row.get("views"),
+        "likes": row.get("likes"),
+        "virality": row.get("virality_score"),
+        "handle": row.get("handle"),
+        "description": row.get("description"),
+        "enrichment_status": row.get("enrichment_status"),
+        "date_created": row.get("date_created"),
+    }
+
+
+def list_trend_formats(
+    supabase: SupabaseClient,
+    *,
+    source_name: str | None = None,
+    q: str | None = None,
+    min_views: int = 0,
+    posted_after: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Each viral format with its example videos grouped under it, most-viewed first."""
+    params: dict[str, Any] = {
+        "select": "id,source_name,source_url,issue_date,format_name,format_description,niche_constraint,ingest_note,created_at",
+        "order": "created_at.desc",
+        "limit": str(max(1, min(limit, 1000))),
+    }
+    if source_name:
+        params["source_name"] = f"eq.{source_name}"
+    if q:
+        params["niche_constraint"] = f"ilike.*{q}*"
+    formats = supabase.select("viral_formats", params)
+    if not formats:
+        return []
+
+    format_ids = [str(f["id"]) for f in formats if f.get("id")]
+    videos_by_format: dict[str, list[dict[str, Any]]] = {}
+    if format_ids:
+        video_params: dict[str, Any] = {
+            "select": _VIDEO_COLUMNS,
+            "format_id": f"in.({','.join(format_ids)})",
+            "order": "views.desc.nullslast",
+            "limit": "2000",
+        }
+        if posted_after:
+            video_params["date_created"] = f"gte.{posted_after}"
+        rows = supabase.select("ugc_items", video_params)
+        for row in rows:
+            videos_by_format.setdefault(str(row.get("format_id")), []).append(_video_out(row))
+
+    out: list[dict[str, Any]] = []
+    for fmt in formats:
+        videos = videos_by_format.get(str(fmt["id"]), [])
+        # With a posted-date filter on, a format is only kept if it still has an
+        # in-window example video (empty ones would otherwise pass the min_views gate).
+        if posted_after and not videos:
+            continue
+        agg_views = sum(v["views"] or 0 for v in videos)
+        if agg_views < min_views:
+            continue
+        out.append(
+            {
+                "id": fmt["id"],
+                "source_name": fmt.get("source_name"),
+                "source_url": fmt.get("source_url"),
+                "issue_date": fmt.get("issue_date"),
+                "format_name": fmt.get("format_name"),
+                "format_description": fmt.get("format_description"),
+                "niche_constraint": fmt.get("niche_constraint"),
+                "ingest_note": fmt.get("ingest_note"),
+                "video_count": len(videos),
+                "total_views": agg_views,
+                "videos": videos,
+            }
+        )
+
+    # Rank formats by aggregate live views (most viral first).
+    out.sort(key=lambda f: f["total_views"], reverse=True)
+    return out
 
 
 def match_product(
@@ -243,7 +334,7 @@ def _judge(
 
 
 def _hydrate_videos(supabase: SupabaseClient, format_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
-    """Example videos per format (ugc_items, source='trend'), same shape as routes_trends."""
+    """Example videos per format (ugc_items, source='trend'), same card shape as the listing."""
     if not format_ids:
         return {}
     rows = supabase.select(
@@ -257,20 +348,5 @@ def _hydrate_videos(supabase: SupabaseClient, format_ids: list[str]) -> dict[str
     )
     videos_by_format: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
-        metrics = row.get("source_metrics") if isinstance(row.get("source_metrics"), dict) else {}
-        videos_by_format.setdefault(str(row.get("format_id")), []).append(
-            {
-                "id": row.get("id"),
-                "video_url": row.get("storage_video_url") or row.get("video_url"),
-                "thumb_url": row.get("storage_thumb_url") or row.get("cover"),
-                "original_url": metrics.get("page_url"),
-                "views": row.get("views"),
-                "likes": row.get("likes"),
-                "virality": row.get("virality_score"),
-                "handle": row.get("handle"),
-                "description": row.get("description"),
-                "enrichment_status": row.get("enrichment_status"),
-                "date_created": row.get("date_created"),
-            }
-        )
+        videos_by_format.setdefault(str(row.get("format_id")), []).append(_video_out(row))
     return videos_by_format

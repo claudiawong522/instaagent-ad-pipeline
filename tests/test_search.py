@@ -31,6 +31,13 @@ class FakeSupabase:
             {"item_type": "paid_ad", "item_id": "p1", "source_text": "...", "similarity": 0.80},
         ]
 
+
+    def select_by_ids(self, table, id_column, ids, columns):
+        if not ids:
+            return {}
+        rows = self.select(table, {"select": columns, id_column: f"in.({','.join(ids)})", "limit": str(len(ids))})
+        return {str(row.get(id_column)): row for row in rows if row.get(id_column)}
+
     def select(self, table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         if table == "paid_ads":
             return [
@@ -101,9 +108,6 @@ def _no_voyage(monkeypatch):
         "rerank",
         lambda config, query, documents, **k: [(i, 0.9 - 0.05 * i) for i in range(len(documents))],
     )
-    # expand_query has no OpenRouter key in the test config, so it returns the raw query;
-    # pin it anyway to keep tests hermetic.
-    monkeypatch.setattr(search_module, "expand_query", lambda config, query: query)
 
 
 def test_search_ranks_hydrates_and_attaches_transcripts() -> None:

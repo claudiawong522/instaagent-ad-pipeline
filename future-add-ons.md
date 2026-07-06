@@ -1,5 +1,16 @@
 # Future Add-Ons
 
+- **Query expansion for search recall (removed 2026-07-06).** `search.expand_query` expanded short
+  queries ("genz" → "gen z, young, casual, trendy") via a cheap OpenRouter call before embedding.
+  Removed because it was config-disabled by default: an A/B over the niche query set showed it
+  changed zero results (the enriched icp space + reranker already surface the right candidates and
+  the 100/space candidate pool covers the corpus) while adding ~2.6s/search. Worth reintroducing
+  once the corpus outgrows `rerank_candidate_pool`, where expansion's recall benefit returns —
+  see git history of `api/search.py` for the implementation.
+- **`GET /products` and `GET /items/{item_type}/{item_id}` endpoints (removed 2026-07-06).** Both
+  had zero frontend call sites (the UI reads products via campaign listings and items via search
+  results). Trivial to restore from git history if a product picker or item-detail page lands.
+
 These are good ideas intentionally deferred to keep the first version lean.
 
 ## Competitor Mode

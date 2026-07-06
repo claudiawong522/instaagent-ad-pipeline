@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from . import search as search_module
+from .deps import require_supabase
 
 router = APIRouter()
 
@@ -28,16 +29,9 @@ class SearchRequest(BaseModel):
     limit: Optional[int] = Field(default=None, ge=1, le=1000)
 
 
-def _require_supabase(request: Request):
-    supabase = request.app.state.supabase
-    if supabase is None:
-        raise HTTPException(503, "Supabase is not configured (set SUPABASE_URL and a key).")
-    return supabase
-
-
 @router.post("/search")
 def search(req: SearchRequest, request: Request) -> dict[str, Any]:
-    supabase = _require_supabase(request)
+    supabase = require_supabase(request)
     # An empty query is allowed: search_ads treats it as "browse all ads".
     if req.item_type not in (None, "paid_ad", "ugc_item"):
         raise HTTPException(400, "item_type must be 'paid_ad' or 'ugc_item'")
@@ -66,14 +60,4 @@ def search(req: SearchRequest, request: Request) -> dict[str, Any]:
 
 @router.get("/runs")
 def runs(request: Request) -> dict[str, Any]:
-    return {"runs": search_module.list_runs(_require_supabase(request))}
-
-
-@router.get("/items/{item_type}/{item_id}")
-def item(item_type: str, item_id: str, request: Request) -> dict[str, Any]:
-    result = search_module.get_item(
-        request.app.state.config, _require_supabase(request), item_type, item_id
-    )
-    if result is None:
-        raise HTTPException(404, "item not found")
-    return result
+    return {"runs": search_module.list_runs(require_supabase(request))}
