@@ -25,3 +25,5 @@ Guidance for Claude Code working in this repo. `AGENTS.md` holds the full projec
 ## Keep docs current
 
 When you make architectural changes, update `database.md`. When you defer a good idea, note it in `future-add-ons.md`.
+
+**Never edit `DEVELOPER-READ-ME.md`.** It is the owner's hand-written doc, kept deliberately in their own words. If it's inaccurate or incomplete, say so in chat and suggest wording — do not write to the file.
