@@ -146,6 +146,8 @@ def list_campaigns(supabase: SupabaseClient) -> list[dict[str, Any]]:
         cfg = run.get("config") or {}
         if cfg.get("discovery"):
             continue  # the keyword-free Viral Discovery run lives on the Discover page, not here
+        if cfg.get("trend_source"):
+            continue  # trend-scrape bookkeeping runs live on the /trends page, not here
         out.append(
             {
                 "run_id": str(run.get("id")),
