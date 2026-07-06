@@ -2,7 +2,7 @@
 
 Unlike a campaign scrape (product- and keyword-scoped), discovery pulls TikTok's For You
 feed with no search term to study winning *formats* regardless of product. It writes to
-ugc_items under a single sentinel "Viral Discovery" pipeline_run (pipeline_runs.product_id
+organic_items under a single sentinel "Viral Discovery" pipeline_run (pipeline_runs.product_id
 is NOT NULL, so the run needs a product). One Discover click runs the full chain in a
 background thread so the items become searchable and correctly scored:
 
@@ -25,12 +25,11 @@ from ..apify_organic import (
 )
 from ..audience_enrichment import enrich_audience
 from ..config import Config
-from ..costs import detect_out_of_credits, estimate_cost, reconcile_actual_cost
+from ..costs import estimate_cost
 from ..embeddings import ALL_SPACES, embed_items
-from ..ingestion import utc_now_iso
 from ..organic_enrichment import enrich_organic_items
 from ..supabase_client import SupabaseClient
-from .campaigns import _running, _running_lock
+from . import jobs
 
 # The discovery run is a singleton pseudo-campaign keyed by this product name + a config flag
 # (list_campaigns hides runs whose config.discovery is true). "tiktok-trends" is the platform
@@ -81,11 +80,8 @@ def trigger_discovery(
     """Kick off a keyword-free trends scrape in a background thread; return immediately with the
     discovery run_id so the UI can poll /campaigns/{run_id}/scrape-stats for live progress."""
     run_id = find_or_create_discovery_run(config, supabase)
-    key = (run_id, DISCOVERY_PLATFORM)
-    with _running_lock:
-        if key in _running:
-            return {"started": False, "run_id": run_id, "reason": "already running"}
-        _running.add(key)
+    if not jobs.try_claim(run_id, DISCOVERY_PLATFORM):
+        return {"started": False, "run_id": run_id, "reason": "already running"}
     threading.Thread(
         target=_run_discovery,
         args=(config, run_id, region, target_count, min_views, estimated_cost_usd),
@@ -103,33 +99,15 @@ def _run_discovery(
     estimated_cost_usd: float | None = None,
 ) -> None:
     """Full chain so discovered videos become searchable AND correctly scored. Long-running
-    (minutes) — runs in a thread. Mirrors campaigns._run_scrape but keyword-free, and adds the
-    follower backfill + virality recompute that only the trend source needs."""
-    # Fresh client for the thread — don't share the request handler's session across threads.
-    supabase = SupabaseClient(config.supabase_url, config.supabase_key)
+    (minutes) — runs in a thread. Same job skeleton as a campaign scrape (jobs.run_job) but
+    keyword-free, plus the follower backfill + virality recompute only the trend source needs."""
     estimate = (
         estimated_cost_usd
         if estimated_cost_usd is not None
         else estimate_cost("tiktok", target_count)
     )
-    event_id: str | None = None
-    started_at: str | None = None
-    try:
-        event = supabase.insert(
-            "scrape_events",
-            {
-                "run_id": run_id,
-                "platform": DISCOVERY_PLATFORM,
-                "target_count": target_count,
-                "estimated_cost_usd": estimate,
-            },
-        )
-        event_id, started_at = event.get("id"), event.get("started_at")
-    except Exception as exc:  # cost bookkeeping must never block the scrape
-        print(f"[discover] run={run_id} could not record scrape_event: {exc}")
-    written = 0
-    failed = False
-    try:
+
+    def work(supabase: SupabaseClient, state: jobs.JobState) -> None:
         # Stage 1 — ingest the For You feed (keyword-free), dropping sub-min_views filler.
         result = ingest_tiktok_trends(
             config=config,
@@ -140,7 +118,7 @@ def _run_discovery(
             min_views=min_views,
             dry_run=False,
         )
-        written = getattr(result, "written", 0) or 0
+        state.items_ingested = getattr(result, "written", 0) or 0
         # Stage 2 — SCORING FIRST. Fill follower counts (absent from the trend payload) and
         # re-score virality before the expensive/rate-capped enrichment. Trend items land with
         # followers=None → engagement-only scores that wrongly tank mega-viral hits; this fixes
@@ -156,30 +134,14 @@ def _run_discovery(
             embed_items(config=config, supabase=supabase, run_id=run_id, spaces=ALL_SPACES, dry_run=False)
         except Exception as exc:
             print(f"[discover] run={run_id} enrichment/embed incomplete (scores are still correct): {exc}")
-        print(f"[discover] run={run_id} region={region} ingested={written}")
-    except Exception as exc:  # background thread — surface to the server log
-        failed = True
-        print(f"[discover] run={run_id} region={region} failed: {exc}")
-    finally:
-        if event_id:
-            try:
-                actual = reconcile_actual_cost(supabase, run_id, started_at) if started_at else None
-                # Out-of-credits on either leg? Detected from failed source_queries so the Discover
-                # card can prompt a refill + re-run. Set even when status is 'done' (discovery keeps
-                # its scores when enrichment throttles, but the user still needs to know it stalled).
-                credit_error = detect_out_of_credits(supabase, run_id, started_at) if started_at else None
-                supabase.update_by_id(
-                    "scrape_events",
-                    str(event_id),
-                    {
-                        "actual_cost_usd": actual,
-                        "items_ingested": written,
-                        "status": "failed" if failed else "done",
-                        "error_message": credit_error,
-                        "finished_at": utc_now_iso(),
-                    },
-                )
-            except Exception as exc:
-                print(f"[discover] run={run_id} cost reconcile failed: {exc}")
-        with _running_lock:
-            _running.discard((run_id, DISCOVERY_PLATFORM))
+        print(f"[discover] run={run_id} region={region} ingested={state.items_ingested}")
+
+    jobs.run_job(
+        config=config,
+        run_id=run_id,
+        platform=DISCOVERY_PLATFORM,
+        target_count=target_count,
+        estimate=estimate,
+        work=work,
+        log_prefix="discover",
+    )

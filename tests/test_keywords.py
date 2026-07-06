@@ -9,9 +9,9 @@ def test_parse_keyword_allocations_requires_totals_to_match() -> None:
     text = """
     {
       "keywords": [
-        {"keyword_text": "cleanser", "target_paid_count": 4, "target_ugc_count": 10, "target_tiktok_count": 7},
-        {"keyword_text": "gentle cleanser", "target_paid_count": 3, "target_ugc_count": 10, "target_tiktok_count": 7},
-        {"keyword_text": "sensitive skin cleanser", "target_paid_count": 3, "target_ugc_count": 10, "target_tiktok_count": 6}
+        {"keyword_text": "cleanser", "target_paid_count": 4, "target_organic_count": 10, "target_tiktok_count": 7},
+        {"keyword_text": "gentle cleanser", "target_paid_count": 3, "target_organic_count": 10, "target_tiktok_count": 7},
+        {"keyword_text": "sensitive skin cleanser", "target_paid_count": 3, "target_organic_count": 10, "target_tiktok_count": 6}
       ]
     }
     """
@@ -26,7 +26,7 @@ def test_parse_keyword_allocations_requires_totals_to_match() -> None:
         "sensitive skin cleanser",
     ]
     assert sum(allocation.target_paid_count for allocation in allocations) == 10
-    assert sum(allocation.target_ugc_count for allocation in allocations) == 30
+    assert sum(allocation.target_organic_count for allocation in allocations) == 30
     assert sum(allocation.target_tiktok_count for allocation in allocations) == 20
 
 
@@ -34,9 +34,9 @@ def test_parse_keyword_allocations_rejects_wrong_totals() -> None:
     text = """
     {
       "keywords": [
-        {"keyword_text": "cleanser", "target_paid_count": 1, "target_ugc_count": 10, "target_tiktok_count": 10},
-        {"keyword_text": "gentle cleanser", "target_paid_count": 1, "target_ugc_count": 10, "target_tiktok_count": 10},
-        {"keyword_text": "sensitive skin cleanser", "target_paid_count": 1, "target_ugc_count": 10, "target_tiktok_count": 10}
+        {"keyword_text": "cleanser", "target_paid_count": 1, "target_organic_count": 10, "target_tiktok_count": 10},
+        {"keyword_text": "gentle cleanser", "target_paid_count": 1, "target_organic_count": 10, "target_tiktok_count": 10},
+        {"keyword_text": "sensitive skin cleanser", "target_paid_count": 1, "target_organic_count": 10, "target_tiktok_count": 10}
       ]
     }
     """
@@ -51,12 +51,12 @@ def test_allocate_manual_keywords_splits_targets_exactly() -> None:
     allocations = allocate_manual_keywords(
         ["cleanser", "gentle cleanser", "skincare routine"],
         target_paid_count=10,
-        target_ugc_count=31,
+        target_organic_count=31,
         keyword_type="seed",
     )
 
     assert [allocation.target_paid_count for allocation in allocations] == [4, 3, 3]
-    assert [allocation.target_ugc_count for allocation in allocations] == [11, 10, 10]
+    assert [allocation.target_organic_count for allocation in allocations] == [11, 10, 10]
     assert sum(allocation.target_paid_count for allocation in allocations) == 10
-    assert sum(allocation.target_ugc_count for allocation in allocations) == 31
+    assert sum(allocation.target_organic_count for allocation in allocations) == 31
     assert all(allocation.source == "manual" for allocation in allocations)

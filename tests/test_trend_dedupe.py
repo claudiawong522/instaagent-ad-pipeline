@@ -16,7 +16,7 @@ class FakeSupabase:
         self.formats = formats
 
     def select(self, table, params):
-        rows = self.ugc if table == "ugc_items" else self.formats
+        rows = self.ugc if table == "organic_items" else self.formats
         out = []
         for r in rows:
             ok = True

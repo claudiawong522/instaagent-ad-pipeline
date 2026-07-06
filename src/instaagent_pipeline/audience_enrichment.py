@@ -17,13 +17,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
-from .ad_enrichment import (
-    OPENROUTER_BASE_URL,
-    OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
-    parse_enrichment_response,
-)
 from .config import Config
-from .http_client import HttpClientError, request_json
+from .http_client import HttpClientError
+from .openrouter import openrouter_json_call
 from .supabase_client import SupabaseClient
 
 TARGET_GENERATIONS = ("genz", "millennial", "genx", "boomer", "mixed")
@@ -112,12 +108,12 @@ def enrich_audience(
 ) -> AudienceResult:
     if supabase is None:
         raise RuntimeError("Supabase credentials are required for audience enrichment.")
-    if source not in {"paid", "ugc", "all"}:
-        raise ValueError("--source must be one of paid, ugc, all.")
+    if source not in {"paid", "organic", "all"}:
+        raise ValueError("--source must be one of paid, organic, all.")
     if not config.openrouter_api_key:
         raise RuntimeError("OPENROUTER_API_KEY is required for audience enrichment.")
 
-    item_types = {"paid": ["paid_ad"], "ugc": ["ugc_item"], "all": ["paid_ad", "ugc_item"]}[source]
+    item_types = {"paid": ["paid_ad"], "organic": ["organic_item"], "all": ["paid_ad", "organic_item"]}[source]
     result = AudienceResult()
     rows: list[dict[str, Any]] = []
     for item_type in item_types:
@@ -182,25 +178,15 @@ def _call_audience_llm(config: Config, row: dict[str, Any], *, timeout: int) -> 
         transcript=(row.get("transcript_text") or "(none)").strip(),
         has_product="unknown" if has_product is None else str(bool(has_product)).lower(),
     )
-    response = request_json(
-        "POST",
-        f"{OPENROUTER_BASE_URL}{OPENROUTER_CHAT_COMPLETIONS_ENDPOINT}",
-        headers={"Authorization": f"Bearer {config.openrouter_api_key}"},
-        body={
-            "model": config.openrouter_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": "audience", "strict": True, "schema": AUDIENCE_SCHEMA},
-            },
-            "max_tokens": 300,
-        },
+    return openrouter_json_call(
+        config,
+        prompt=prompt,
+        schema=AUDIENCE_SCHEMA,
+        schema_name="audience",
+        max_tokens=300,
         timeout=timeout,
+        empty_error="OpenRouter returned no audience analysis.",
     )
-    analysis = parse_enrichment_response(response.body)
-    if analysis is None:
-        raise RuntimeError("OpenRouter returned no audience analysis.")
-    return analysis
 
 
 def _normalize(analysis: dict[str, Any]) -> dict[str, Any]:

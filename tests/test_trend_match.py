@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from instaagent_pipeline.api import match as match_module
+from instaagent_pipeline import openrouter as openrouter_module
+from instaagent_pipeline.api import trends as match_module
 from instaagent_pipeline.config import Config
 
 
@@ -28,10 +29,17 @@ class FakeSupabase:
         self.rpc_calls.append((fn, params))
         return []
 
+
+    def select_by_ids(self, table, id_column, ids, columns):
+        if not ids:
+            return {}
+        rows = self.select(table, {"select": columns, id_column: f"in.({','.join(ids)})", "limit": str(len(ids))})
+        return {str(row.get(id_column)): row for row in rows if row.get(id_column)}
+
     def select(self, table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         if table == "viral_formats":
             return self._formats
-        if table == "ugc_items":
+        if table == "organic_items":
             return [
                 {
                     "id": "v1",
@@ -83,7 +91,7 @@ def test_match_product_ranks_by_score_and_hydrates(monkeypatch):
             {"format_id": "f2", "fit": "no", "score": 10, "idea": ""},
         ])})()
 
-    monkeypatch.setattr(match_module, "request_json", fake_request_json)
+    monkeypatch.setattr(openrouter_module, "request_json", fake_request_json)
     supabase = FakeSupabase(FORMATS)
 
     out = match_module.match_product(make_config(), supabase, product="magnesium sleep gummy")
@@ -109,7 +117,7 @@ def test_match_product_defaults_missing_verdict_to_no(monkeypatch):
             {"format_id": "f1", "fit": "workable", "score": 55, "idea": "Show the texture."},
         ])})()
 
-    monkeypatch.setattr(match_module, "request_json", fake_request_json)
+    monkeypatch.setattr(openrouter_module, "request_json", fake_request_json)
     out = match_module.match_product(make_config(), FakeSupabase(FORMATS), product="a phone case")
 
     by_id = {f["id"]: f for f in out}
@@ -151,7 +159,7 @@ def test_candidates_blend_reserves_universals_but_recall_fills_majority(monkeypa
 
 
 def test_latest_month_per_source_filters_stale_months():
-    from instaagent_pipeline.api.routes_trends import _latest_month_per_source
+    from instaagent_pipeline.api.trends import _latest_month_per_source
 
     formats = [
         {"id": "a", "source_name": "newengen", "issue_date": "2026-07-01"},

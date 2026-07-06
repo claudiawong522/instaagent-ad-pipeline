@@ -27,9 +27,16 @@ class FakeSupabase:
     def rpc(self, fn: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         self.rpc_calls.append((fn, params))
         return [
-            {"item_type": "ugc_item", "item_id": "u1", "source_text": "...", "similarity": 0.91},
+            {"item_type": "organic_item", "item_id": "u1", "source_text": "...", "similarity": 0.91},
             {"item_type": "paid_ad", "item_id": "p1", "source_text": "...", "similarity": 0.80},
         ]
+
+
+    def select_by_ids(self, table, id_column, ids, columns):
+        if not ids:
+            return {}
+        rows = self.select(table, {"select": columns, id_column: f"in.({','.join(ids)})", "limit": str(len(ids))})
+        return {str(row.get(id_column)): row for row in rows if row.get(id_column)}
 
     def select(self, table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         if table == "paid_ads":
@@ -43,7 +50,7 @@ class FakeSupabase:
                     "storage_thumb_url": "https://store/p1.jpg",
                 }
             ]
-        if table == "ugc_items":
+        if table == "organic_items":
             return [
                 {
                     "id": "u1",
@@ -74,7 +81,7 @@ class FakeSupabase:
                         "transcript_text": "paid transcript",
                     }
                 ]
-            if params.get("item_type") == "eq.ugc_item":
+            if params.get("item_type") == "eq.organic_item":
                 return [
                     {
                         "item_id": "u1",
@@ -101,9 +108,6 @@ def _no_voyage(monkeypatch):
         "rerank",
         lambda config, query, documents, **k: [(i, 0.9 - 0.05 * i) for i in range(len(documents))],
     )
-    # expand_query has no OpenRouter key in the test config, so it returns the raw query;
-    # pin it anyway to keep tests hermetic.
-    monkeypatch.setattr(search_module, "expand_query", lambda config, query: query)
 
 
 def test_search_ranks_hydrates_and_attaches_transcripts() -> None:
@@ -154,8 +158,8 @@ def test_min_views_filter_drops_paid_without_views() -> None:
 
 def test_item_type_forwarded_to_rpc() -> None:
     supabase = FakeSupabase()
-    search_module.search_ads(make_config(), supabase, query="x", item_type="ugc_item")
-    assert supabase.rpc_calls[0][1]["p_item_type"] == "ugc_item"
+    search_module.search_ads(make_config(), supabase, query="x", item_type="organic_item")
+    assert supabase.rpc_calls[0][1]["p_item_type"] == "organic_item"
 
 
 def test_content_formats_filter_matches_by_overlap() -> None:

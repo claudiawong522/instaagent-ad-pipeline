@@ -16,15 +16,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
-from .ad_enrichment import (
-    OPENROUTER_BASE_URL,
-    OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
-    parse_enrichment_response,
-)
 from .config import Config
 from .embeddings import EMBEDDING_BATCH_SIZE, EmbeddingCandidate, batched, embed_batch
-from .http_client import HttpClientError, request_json
+from .http_client import HttpClientError
 from .ingestion import utc_now_iso
+from .openrouter import openrouter_json_call
 from .supabase_client import SupabaseClient
 
 # Space + item_type for a viral format's own embedding (see migration 027).
@@ -214,7 +210,7 @@ def _embed_trends(
 def _example_context(supabase: SupabaseClient, format_id: str) -> str:
     """The ai_description/transcript of a format's example videos, for the LLM."""
     videos = supabase.select(
-        "ugc_items", {"select": "id", "format_id": f"eq.{format_id}", "limit": "10"}
+        "organic_items", {"select": "id", "format_id": f"eq.{format_id}", "limit": "10"}
     )
     ids = [str(v["id"]) for v in videos if v.get("id")]
     if not ids:
@@ -223,7 +219,7 @@ def _example_context(supabase: SupabaseClient, format_id: str) -> str:
         "item_enrichments",
         {
             "select": "ai_description,transcript_text",
-            "item_type": "eq.ugc_item",
+            "item_type": "eq.organic_item",
             "item_id": f"in.({','.join(ids)})",
         },
     )
@@ -243,24 +239,15 @@ def _call_llm(config: Config, fmt: dict[str, Any], examples: str, *, timeout: in
         format_description=(fmt.get("format_description") or "").strip() or "(none)",
         examples=examples[:12000],
     )
-    response = request_json(
-        "POST",
-        f"{OPENROUTER_BASE_URL}{OPENROUTER_CHAT_COMPLETIONS_ENDPOINT}",
-        headers={"Authorization": f"Bearer {config.openrouter_api_key}"},
-        body={
-            "model": config.openrouter_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": "format_tags", "strict": True, "schema": CONSTRAINT_SCHEMA},
-            },
-            "max_tokens": 400,
-        },
+    analysis = openrouter_json_call(
+        config,
+        prompt=prompt,
+        schema=CONSTRAINT_SCHEMA,
+        schema_name="format_tags",
+        max_tokens=400,
         timeout=timeout,
+        empty_error="OpenRouter returned no format tags.",
     )
-    analysis = parse_enrichment_response(response.body)
-    if not isinstance(analysis, dict):
-        raise RuntimeError("OpenRouter returned no format tags.")
     constraint = analysis.get("niche_constraint")
     versatility = analysis.get("versatility")
     if not isinstance(constraint, str) or not constraint.strip():

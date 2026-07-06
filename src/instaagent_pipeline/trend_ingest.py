@@ -1,11 +1,11 @@
-"""ingest-trends orchestration: web trend pages -> viral_formats + ugc_items.
+"""ingest-trends orchestration: web trend pages -> viral_formats + organic_items.
 
 For each configured source: fetch the page, skip it if unchanged since last run, LLM-parse
 it into formats, upsert a viral_formats row per format, then re-scrape each example video
-URL to get live metrics + a downloadable video, writing ugc_items linked via format_id.
+URL to get live metrics + a downloadable video, writing organic_items linked via format_id.
 TikTok links go through the Apify TikTok scraper (by postURLs) and Instagram reel links
 through the Apify Instagram scraper (by directUrls). The video MP4s are downloaded and the
-analysis filled by the existing organic enrichment (enrich-ugc), chained after.
+analysis filled by the existing organic enrichment (enrich-organic), chained after.
 
 TikTok short links (vm./vt.tiktok.com, /t/) are redirect-resolved to their canonical
 /video/<id> form first. YouTube Shorts are not re-scraped yet. When a format ends up with no
@@ -54,7 +54,7 @@ class TrendSourceResult:
     videos_found: int = 0
     videos_ingested: int = 0
     videos_skipped: int = 0  # YouTube, unresolvable short links, or non-video links — not re-scraped
-    videos_already_ingested: int = 0  # in ugc_items from a prior run — not re-scraped (metrics not refreshed)
+    videos_already_ingested: int = 0  # in organic_items from a prior run — not re-scraped (metrics not refreshed)
     formats_removed: int = 0  # empty duplicate rows a rename left behind, pruned after re-link
     error: str | None = None
 
@@ -108,13 +108,13 @@ def _latest_content_hash(supabase: SupabaseClient, source_name: str) -> str | No
 def _existing_video_ids(
     supabase: SupabaseClient, run_id: str, video_ids: list[str]
 ) -> set[str]:
-    """Which of video_ids are already in ugc_items for this run (scraped by a prior pass).
+    """Which of video_ids are already in organic_items for this run (scraped by a prior pass).
     Changed pages keep their old formats' embeds, so without this every weekly page edit
     would re-pay the Apify scrape for the whole archive."""
     if not video_ids:
         return set()
     rows = supabase.select(
-        "ugc_items",
+        "organic_items",
         {
             "select": "external_id",
             "run_id": f"eq.{run_id}",
@@ -130,13 +130,13 @@ def _relink_existing_videos(
     video_ids: set[str],
     vid_to_format: dict[str, str],
 ) -> None:
-    """Point already-scraped ugc_items at the format the current parse assigns them to,
+    """Point already-scraped organic_items at the format the current parse assigns them to,
     without re-scraping. A page that renames/re-splits a trend would otherwise leave the
     video stranded on its old-name row and the new row empty."""
     if not video_ids:
         return
     rows = supabase.select(
-        "ugc_items",
+        "organic_items",
         {
             "select": "id,external_id,format_id",
             "run_id": f"eq.{run_id}",
@@ -146,11 +146,11 @@ def _relink_existing_videos(
     for row in rows:
         target = vid_to_format.get(str(row.get("external_id")))
         if target and str(row.get("format_id")) != target:
-            supabase.update_by_id("ugc_items", str(row["id"]), {"format_id": target})
+            supabase.update_by_id("organic_items", str(row["id"]), {"format_id": target})
 
 
 def _prune_empty_formats(supabase: SupabaseClient, source_name: str) -> int:
-    """Delete this source's viral_formats rows that have no example video (0 linked ugc_items),
+    """Delete this source's viral_formats rows that have no example video (0 linked organic_items),
     evaluated AFTER the current render's videos are re-linked. An empty row is a trend the page
     renamed between renders — its video just moved to the new-name row, leaving the old name
     empty (e.g. "Hate That I Made U" vs '"Hate That I Made U Love Me" Dance').
@@ -226,7 +226,7 @@ def _dedupe_formats(formats: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Collapse formats that share an example video into one. The trend blogs — and the LLM
     reading them — sometimes emit the same trend under two or three names ("Sorry I can't" /
     "Hands are full"). Left alone, those become duplicate cards fighting over the single
-    ugc_items row per (run, video): the video attaches to one and its siblings render empty.
+    organic_items row per (run, video): the video attaches to one and its siblings render empty.
     Merging up front means one card per trend, with its video. Formats with no example video
     have nothing to key on and are kept as-is."""
     kept: list[dict[str, Any]] = []
@@ -503,7 +503,7 @@ def _rescrape_and_write(
     vid_to_format: dict[str, str],
 ) -> tuple[int, set[str]]:
     """Re-scrape the example TikTok URLs for live metrics + a downloadable video, then
-    upsert them into ugc_items (source='trend') linked to their format. Returns
+    upsert them into organic_items (source='trend') linked to their format. Returns
     (rows written, format_ids that got at least one video)."""
     if not tiktok_urls:
         return 0, set()
@@ -534,7 +534,7 @@ def _rescrape_and_write(
         format_id = vid_to_format.get(str(item.get("id") or ""))
         normalized["source"] = "trend"
         normalized["format_id"] = format_id
-        supabase.upsert("ugc_items", normalized, "run_id,external_id")
+        supabase.upsert("organic_items", normalized, "run_id,external_id")
         written += 1
         if format_id:
             format_ids.add(format_id)
@@ -550,7 +550,7 @@ def _rescrape_instagram(
     code_to_format: dict[str, str],
 ) -> tuple[int, set[str]]:
     """Re-scrape Instagram reel URLs via apify/instagram-scraper (by directUrls) and upsert
-    them into ugc_items (source='trend') linked to their format by reel shortcode. Rows with
+    them into organic_items (source='trend') linked to their format by reel shortcode. Rows with
     no downloadable video_url are skipped, so a failed scrape degrades to no rows (never
     corrupt ones). Returns (rows written, format_ids that got at least one video)."""
     if not ig_urls:
@@ -583,7 +583,7 @@ def _rescrape_instagram(
         format_id = code_to_format.get(code)
         normalized["source"] = "trend"
         normalized["format_id"] = format_id
-        supabase.upsert("ugc_items", normalized, "run_id,external_id")
+        supabase.upsert("organic_items", normalized, "run_id,external_id")
         written += 1
         if format_id:
             format_ids.add(format_id)
@@ -626,11 +626,11 @@ def _ingest_note(counts: dict[str, int], has_video: bool) -> str | None:
 
 
 def _formats_with_videos(supabase: SupabaseClient, format_ids: list[str]) -> set[str]:
-    """Which of format_ids currently have at least one ugc_items row."""
+    """Which of format_ids currently have at least one organic_items row."""
     if not format_ids:
         return set()
     rows = supabase.select(
-        "ugc_items",
+        "organic_items",
         {"select": "format_id", "format_id": f"in.({','.join(format_ids)})"},
     )
     return {str(row["format_id"]) for row in rows if row.get("format_id")}

@@ -7,17 +7,18 @@ from typing import Any
 
 import numpy as np
 
-from .ad_enrichment import (
-    OPENROUTER_BASE_URL,
-    OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
-    OPENROUTER_PROVIDER,
-    openrouter_usage,
-    parse_enrichment_response,
-)
 from .config import Config
 from .embeddings import vector_literal
 from .http_client import HttpClientError, request_json
-from .ingestion import complete_query, log_api_usage, log_failed_query, start_query
+from .ingestion import logged_query
+from .openrouter import (
+    OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
+    OPENROUTER_CHAT_URL,
+    OPENROUTER_PROVIDER,
+    openrouter_json_body,
+    openrouter_usage,
+    parse_json_response,
+)
 from .supabase_client import SupabaseClient
 
 
@@ -28,8 +29,8 @@ EXEMPLAR_COUNT = 5
 # item_type per source, ordered so paid ads cluster before organic in "all".
 ITEM_TYPES = {
     "paid": ("paid_ad",),
-    "ugc": ("ugc_item",),
-    "all": ("paid_ad", "ugc_item"),
+    "organic": ("organic_item",),
+    "all": ("paid_ad", "organic_item"),
 }
 
 EMBEDDING_SELECT_COLUMNS = "item_id,source_text,embedding"
@@ -119,7 +120,7 @@ def cluster_items(
     if supabase is None:
         raise RuntimeError("Supabase credentials are required to load clustering candidates.")
     if source not in ITEM_TYPES:
-        raise ValueError("--source must be one of paid, ugc, all.")
+        raise ValueError("--source must be one of paid, organic, all.")
     if limit < 1:
         raise ValueError("--limit must be greater than 0.")
     if min_cluster_size < 2:
@@ -352,80 +353,31 @@ def label_cluster(
     input_json: Path | None,
     timeout: int,
 ) -> dict[str, Any] | None:
-    endpoint = OPENROUTER_CHAT_COMPLETIONS_ENDPOINT
-    provider = f"{OPENROUTER_PROVIDER}:{label_model}"
-    request_params = {"model": label_model, "item_type": item_type, "exemplar_count": len(exemplars)}
-    source_query_id = start_query(
+    with logged_query(
         supabase=supabase,
-        dry_run=False,
         run_id=run_id,
-        provider=provider,
-        endpoint=endpoint,
-        method="POST",
-        request_params=request_params,
-    )
-    response_headers: dict[str, str] = {}
-    response_status: int | None = None
-    try:
+        provider=f"{OPENROUTER_PROVIDER}:{label_model}",
+        endpoint=OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
+        request_params={"model": label_model, "item_type": item_type, "exemplar_count": len(exemplars)},
+    ) as log:
+        log.metadata = {"model": label_model}
         if input_json:
             body = json.loads(input_json.read_text())
         else:
             response = request_json(
                 "POST",
-                f"{OPENROUTER_BASE_URL}{endpoint}",
+                OPENROUTER_CHAT_URL,
                 headers={"Authorization": f"Bearer {config.openrouter_api_key}"},
                 body=openrouter_label_body(model=label_model, exemplars=exemplars),
                 timeout=timeout,
             )
             body = response.body
-            response_headers = response.headers
-            response_status = response.status
+            log.headers = response.headers
+            log.status = response.status
 
         label = parse_label_response(body)
-        log_api_usage(
-            supabase=supabase,
-            dry_run=False,
-            run_id=run_id,
-            provider=provider,
-            endpoint=endpoint,
-            status=response_status,
-            response_count=1 if label is not None else 0,
-            headers=response_headers,
-            metadata={"model": label_model, "usage": openrouter_usage(body)},
-        )
-        complete_query(
-            supabase=supabase,
-            dry_run=False,
-            source_query_id=source_query_id,
-            response_count=1 if label is not None else 0,
-            http_status=response_status,
-        )
-    except (HttpClientError, RuntimeError) as exc:
-        if isinstance(exc, HttpClientError) and response_status is None:
-            log_api_usage(
-                supabase=supabase,
-                dry_run=False,
-                run_id=run_id,
-                provider=provider,
-                endpoint=endpoint,
-                status=exc.status,
-                response_count=None,
-                headers={},
-                metadata={"model": label_model},
-            )
-        log_failed_query(
-            supabase=supabase,
-            dry_run=False,
-            run_id=run_id,
-            provider=provider,
-            endpoint=endpoint,
-            method="POST",
-            request_params=request_params,
-            source_query_id=source_query_id,
-            http_status=getattr(exc, "status", None),
-            error_message=str(exc),
-        )
-        raise
+        log.response_count = 1 if label is not None else 0
+        log.metadata["usage"] = openrouter_usage(body)
 
     return label
 
@@ -433,22 +385,16 @@ def label_cluster(
 def openrouter_label_body(*, model: str, exemplars: list[str]) -> dict[str, Any]:
     rendered = "\n".join(f"- {text}" for text in exemplars if text)
     prompt = ICP_LABEL_PROMPT.format(exemplars=rendered)
-    return {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "icp_cluster_label",
-                "strict": True,
-                "schema": ICP_LABEL_SCHEMA,
-            },
-        },
-    }
+    return openrouter_json_body(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        schema=ICP_LABEL_SCHEMA,
+        schema_name="icp_cluster_label",
+    )
 
 
 def parse_label_response(body: Any) -> dict[str, Any] | None:
-    parsed = parse_enrichment_response(body)  # shared choices[0].message.content JSON extraction
+    parsed = parse_json_response(body)  # shared choices[0].message.content JSON extraction
     if parsed is None:
         return None
     if not isinstance(parsed.get("persona"), str) or not parsed["persona"].strip():

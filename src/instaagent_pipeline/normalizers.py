@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import math
 from datetime import UTC, datetime
 from typing import Any
+
+from .virality import recompute_virality
 
 
 APIFY_AD_FIRST_CLASS_KEYS = {
@@ -325,80 +326,12 @@ def epoch_to_iso(value: float) -> str:
     return datetime.fromtimestamp(seconds, tz=UTC).isoformat()
 
 
-def days_since_timestamp(value: str | None) -> int | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return max((datetime.now(UTC) - parsed).days, 0)
-
-
-# ── Organic: Apify TikTok (clockworks) + Instagram (data-slayer) → ugc_items ──
+# ── Organic: Apify TikTok (clockworks) + Instagram (data-slayer) → organic_items ──
 #
 # These replace TopYappers as the organic source. The Apify scrapers provide engagement
 # + creator metadata only; the analysis columns (hook, content_format, persona, ...)
 # are filled later by the organic vision enrichment, so they are left null here. virality
-# is recomputed from reach + engagement since these providers do not supply a virality score.
-
-
-# Values at which each raw ratio reaches the top of its 0-1 log curve. REACH_CAP=100
-# means "seen by 100x your followers" is maximally viral; ENGAGEMENT_CAP=0.30 means a
-# 30% interaction rate is the engagement ceiling. Both are heavy-tailed, hence log.
-REACH_CAP = 100.0
-ENGAGEMENT_CAP = 0.30
-
-
-def _log_norm(ratio: float, cap: float) -> float:
-    """Map a non-negative ratio onto [0, 1] via a log curve where `cap` -> 1.0.
-
-    log spreads heavy tails so e.g. reach 10x vs 500x don't both flatten near 1 the
-    way a plain ratio/(ratio+1) squash would.
-    """
-    if ratio <= 0:
-        return 0.0
-    return min(math.log1p(ratio) / math.log1p(cap), 1.0)
-
-
-def recompute_virality(
-    *,
-    views: int | None,
-    likes: int | None,
-    comments: int | None,
-    shares: int | None,
-    followers: int | None = None,
-) -> tuple[float | None, str | None]:
-    """Normalized 0-1 virality blending reach amplification with engagement rate.
-
-    Both signals pass through the SAME log normalizer (`_log_norm`) so neither is
-    scaled while the other is clamped:
-      reach      = views / followers          (cap REACH_CAP)
-      engagement = interactions / views       (cap ENGAGEMENT_CAP)
-    Final score = 0.6*reach + 0.4*engagement, in [0, 1]. When follower count is
-    unknown the score degrades to engagement-only. Stands in for TopYappers'
-    virality_score (TikTok/IG don't supply one).
-    """
-    if not views or views <= 0:
-        return None, None
-    engagement_rate = ((likes or 0) + (comments or 0) + (shares or 0)) / views
-    engagement_norm = _log_norm(engagement_rate, ENGAGEMENT_CAP)
-    if followers and followers > 0:
-        reach_norm = _log_norm(views / followers, REACH_CAP)
-        score = round(0.6 * reach_norm + 0.4 * engagement_norm, 3)
-    else:
-        score = round(engagement_norm, 3)
-    if score >= 0.6:
-        tier = "high"
-    elif score >= 0.35:
-        tier = "medium"
-    elif score > 0:
-        tier = "low"
-    else:
-        tier = None
-    return score, tier
+# scoring lives in virality.py.
 
 
 def tiktok_download_url(item: dict[str, Any]) -> str | None:
@@ -495,7 +428,7 @@ def tiktok_trend_views(item: dict[str, Any]) -> int | None:
 
 
 def normalize_tiktok_trend_item(item: dict[str, Any], run_id: str, raw_payload_id: str | None) -> dict[str, Any]:
-    """novi/tiktok-trend-api (keyword-free For You feed) → ugc_items. Distinct from
+    """novi/tiktok-trend-api (keyword-free For You feed) → organic_items. Distinct from
     normalize_tiktok_item: this is TikTok's raw aweme shape (statistics.*, author.unique_id,
     cha_list), not the clockworks scraper shape. follower_count is absent from the trend
     payload, so it stays null here and is filled by backfill_tiktok_followers."""

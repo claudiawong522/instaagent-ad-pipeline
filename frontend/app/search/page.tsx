@@ -1,32 +1,27 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Search, Loader2, X, HelpCircle, Sparkles } from 'lucide-react'
+import { Search, Loader2, X, Sparkles } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { searchAds, listRuns } from '@/lib/api'
 import type { ItemType, RunSummary, VideoResult } from '@/lib/types'
-
-function formatNum(n: number | null | undefined): string {
-  if (n == null) return '—'
-  const compact = (v: number) => (v % 1 === 0 ? String(v) : v.toFixed(1))
-  if (n >= 1_000_000) return `${compact(n / 1_000_000)}M`
-  if (n >= 1_000) return `${compact(n / 1_000)}K`
-  return String(n)
-}
+import { formatNum } from '@/lib/format'
+import { HelpPopover } from '@/components/HelpPopover'
+import { VideoTile } from '@/components/VideoTile'
 
 const TYPE_OPTIONS: { label: string; value: ItemType | null }[] = [
   { label: 'All', value: null },
   { label: 'Paid ads', value: 'paid_ad' },
-  { label: 'Organic', value: 'ugc_item' },
+  { label: 'Organic', value: 'organic_item' },
 ]
 
 // Platform options are scoped to the type filter: organic lives on TikTok/Instagram (Reels),
 // paid ads on Facebook/Meta. 'All' offers every platform. Keyed by itemType ('all' when null).
-const PLATFORM_OPTIONS: Record<'all' | 'paid_ad' | 'ugc_item', { value: string; label: string }[]> = {
-  ugc_item: [
+const PLATFORM_OPTIONS: Record<'all' | 'paid_ad' | 'organic_item', { value: string; label: string }[]> = {
+  organic_item: [
     { value: 'tiktok', label: 'TikTok' },
     { value: 'instagram', label: 'Instagram (Reels)' },
   ],
@@ -74,7 +69,7 @@ function sortByPerformance(items: VideoResult[]): VideoResult[] {
   const signal = (r: VideoResult) =>
     r.item_type === 'paid_ad' ? r.days_live ?? -1 : r.virality ?? -1
   const rank = new Map<VideoResult, number>()
-  for (const type of ['paid_ad', 'ugc_item'] as const) {
+  for (const type of ['paid_ad', 'organic_item'] as const) {
     const group = items.filter((r) => r.item_type === type)
     const sorted = [...group].sort((a, b) => signal(a) - signal(b))
     sorted.forEach((r, i) => rank.set(r, group.length > 1 ? i / (group.length - 1) : 1))
@@ -122,7 +117,7 @@ export default function SearchPage() {
       const res = await searchAds({
         query: query.trim(),
         // Viral discovery is a single TikTok organic run — force organic and drop platform.
-        item_type: viralOnly ? 'ugc_item' : itemType,
+        item_type: viralOnly ? 'organic_item' : itemType,
         platform: viralOnly ? null : platform || null,
         run_id: effectiveRunId || null,
         min_views: minViews ? Number(minViews) : null,
@@ -333,7 +328,7 @@ export default function SearchPage() {
               className="h-8 w-44 text-xs md:text-xs"
             />
           )}
-          {!viralOnly && itemType !== 'ugc_item' && (
+          {!viralOnly && itemType !== 'organic_item' && (
             <Input
               type="number"
               value={minDaysLive}
@@ -439,120 +434,102 @@ function ChipFilter({
   )
 }
 
-// Click-to-toggle explainer for the organic virality score. Click-away backdrop closes it.
+// Click-to-toggle explainer for the organic virality score.
 function ViralityHelp() {
-  const [open, setOpen] = useState(false)
   return (
-    <span className="relative inline-flex items-center">
-      <button
-        type="button"
-        aria-label="How is the virality score computed?"
-        onClick={() => setOpen((v) => !v)}
-        className="ml-0.5 text-muted-foreground/70 transition-colors hover:text-foreground"
-      >
-        <HelpCircle className="h-3 w-3" />
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute bottom-full left-1/2 z-50 mb-1 w-64 -translate-x-1/2 rounded-md border border-border bg-popover p-3 text-left text-xs leading-relaxed text-popover-foreground shadow-md">
-            <p className="font-medium">Virality score (0–1)</p>
-            <p className="mt-1 text-muted-foreground">
-              Blends how far a post escaped its own follower base with how engaging it was:
-            </p>
-            <p className="mt-1 font-mono text-[11px]">0.6 × reach + 0.4 × engagement</p>
-            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted-foreground">
-              <li><span className="font-medium text-popover-foreground">reach</span> = views ÷ followers</li>
-              <li><span className="font-medium text-popover-foreground">engagement</span> = (likes + comments + shares) ÷ views</li>
-            </ul>
-            <p className="mt-1 text-muted-foreground">
-              Each is put on a 0–1 log curve (going viral has diminishing returns), then blended.
-              Higher = reached well beyond its audience with strong engagement.
-            </p>
-          </div>
-        </>
-      )}
-    </span>
+    <HelpPopover
+      ariaLabel="How is the virality score computed?"
+      wrapperClassName="inline-flex items-center"
+      triggerClassName="ml-0.5 text-muted-foreground/70"
+      iconClassName="h-3 w-3"
+      panelClassName="bottom-full left-1/2 mb-1 w-64 -translate-x-1/2 leading-relaxed"
+    >
+      <p className="font-medium">Virality score (0–1)</p>
+      <p className="mt-1 text-muted-foreground">
+        Blends how far a post escaped its own follower base with how engaging it was:
+      </p>
+      <p className="mt-1 font-mono text-[11px]">0.6 × reach + 0.4 × engagement</p>
+      <ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted-foreground">
+        <li><span className="font-medium text-popover-foreground">reach</span> = views ÷ followers</li>
+        <li><span className="font-medium text-popover-foreground">engagement</span> = (likes + comments + shares) ÷ views</li>
+      </ul>
+      <p className="mt-1 text-muted-foreground">
+        Each is put on a 0–1 log curve (going viral has diminishing returns), then blended.
+        Higher = reached well beyond its audience with strong engagement.
+      </p>
+    </HelpPopover>
   )
 }
 
 function VideoCard({ result: r }: { result: VideoResult }) {
   return (
-    <div className="flex flex-col rounded-lg border border-border bg-card">
-      {r.video_url ? (
-        <video
-          src={r.video_url}
-          poster={r.thumb_url ?? undefined}
-          controls
-          playsInline
-          preload="none"
-          className="aspect-[9/16] w-full rounded-t-lg bg-black object-cover"
-        />
-      ) : (
-        <div className="flex aspect-[9/16] w-full items-center justify-center rounded-t-lg bg-muted text-xs text-muted-foreground">
-          no video
+    <VideoTile
+      videoUrl={r.video_url}
+      thumbUrl={r.thumb_url}
+      fallback="no video"
+      className="rounded-lg border border-border bg-card"
+      videoClassName="rounded-t-lg"
+      fallbackClassName="text-xs"
+      bodyClassName="flex-1 gap-2 p-3"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate text-sm font-medium">{r.title || 'untitled'}</span>
+        {r.platform && <Badge variant="secondary" className="capitalize">{r.platform}</Badge>}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        <Badge variant={r.item_type === 'paid_ad' ? 'default' : 'outline'}>
+          {r.item_type === 'paid_ad' ? 'Paid' : 'Organic'}
+        </Badge>
+        {r.content_formats.map((f) => (
+          <Badge key={`fmt-${f}`} variant="outline">{f.replace(/_/g, ' ')}</Badge>
+        ))}
+        {typeof r.similarity === 'number' && (
+          <Badge variant="outline">{Math.round(r.similarity * 100)}% relevance</Badge>
+        )}
+        {r.price_positioning && <Badge variant="outline">{r.price_positioning}</Badge>}
+        {r.target_generation && <Badge variant="outline">{r.target_generation}</Badge>}
+      </div>
+      {(r.age_brackets.length > 0 || r.languages.length > 0) && (
+        <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
+          {r.age_brackets.map((a) => (
+            <span key={`age-${a}`} className="rounded bg-muted px-1.5 py-0.5">{a}</span>
+          ))}
+          {r.languages.map((l) => (
+            <span key={`lang-${l}`} className="rounded bg-muted px-1.5 py-0.5">{l}</span>
+          ))}
         </div>
       )}
-      <div className="flex flex-1 flex-col gap-2 p-3">
-        <div className="flex items-center justify-between gap-2">
-          <span className="min-w-0 truncate text-sm font-medium">{r.title || 'untitled'}</span>
-          {r.platform && <Badge variant="secondary" className="capitalize">{r.platform}</Badge>}
-        </div>
-        <div className="flex flex-wrap gap-1">
-          <Badge variant={r.item_type === 'paid_ad' ? 'default' : 'outline'}>
-            {r.item_type === 'paid_ad' ? 'Paid' : 'Organic'}
-          </Badge>
-          {r.content_formats.map((f) => (
-            <Badge key={`fmt-${f}`} variant="outline">{f.replace(/_/g, ' ')}</Badge>
-          ))}
-          {typeof r.similarity === 'number' && (
-            <Badge variant="outline">{Math.round(r.similarity * 100)}% relevance</Badge>
-          )}
-          {r.price_positioning && <Badge variant="outline">{r.price_positioning}</Badge>}
-          {r.target_generation && <Badge variant="outline">{r.target_generation}</Badge>}
-        </div>
-        {(r.age_brackets.length > 0 || r.languages.length > 0) && (
-          <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
-            {r.age_brackets.map((a) => (
-              <span key={`age-${a}`} className="rounded bg-muted px-1.5 py-0.5">{a}</span>
-            ))}
-            {r.languages.map((l) => (
-              <span key={`lang-${l}`} className="rounded bg-muted px-1.5 py-0.5">{l}</span>
-            ))}
-          </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+        {r.views != null && <span>{formatNum(r.views)} views</span>}
+        {r.followers != null && <span>{formatNum(r.followers)} followers</span>}
+        {r.likes != null && <span>{formatNum(r.likes)} likes</span>}
+        {r.virality != null && (
+          <span className="inline-flex items-center">
+            vir {r.virality.toFixed(2)}
+            <ViralityHelp />
+          </span>
         )}
-        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-          {r.views != null && <span>{formatNum(r.views)} views</span>}
-          {r.followers != null && <span>{formatNum(r.followers)} followers</span>}
-          {r.likes != null && <span>{formatNum(r.likes)} likes</span>}
-          {r.virality != null && (
-            <span className="inline-flex items-center">
-              vir {r.virality.toFixed(2)}
-              <ViralityHelp />
-            </span>
-          )}
-          {r.days_live != null && <span>{Math.round(r.days_live)}d live</span>}
-          {r.date_created && <span>posted {new Date(r.date_created).toLocaleDateString()}</span>}
-        </div>
-        {r.hook && (
-          <p className="line-clamp-3 text-xs">
-            <span className="font-medium">Hook:</span> {r.hook}
-          </p>
-        )}
-        {r.ai_description && (
-          <p className="line-clamp-4 text-xs text-muted-foreground">{r.ai_description}</p>
-        )}
-        {r.original_url && (
-          <a
-            href={r.original_url}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-auto text-xs text-primary hover:underline"
-          >
-            Open original ↗
-          </a>
-        )}
+        {r.days_live != null && <span>{Math.round(r.days_live)}d live</span>}
+        {r.date_created && <span>posted {new Date(r.date_created).toLocaleDateString()}</span>}
       </div>
-    </div>
+      {r.hook && (
+        <p className="line-clamp-3 text-xs">
+          <span className="font-medium">Hook:</span> {r.hook}
+        </p>
+      )}
+      {r.ai_description && (
+        <p className="line-clamp-4 text-xs text-muted-foreground">{r.ai_description}</p>
+      )}
+      {r.original_url && (
+        <a
+          href={r.original_url}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-auto text-xs text-primary hover:underline"
+        >
+          Open original ↗
+        </a>
+      )}
+    </VideoTile>
   )
 }

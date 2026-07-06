@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from instaagent_pipeline.ingestion import complete_query, log_api_usage
-from instaagent_pipeline.keywords import KeywordAllocation, KeywordGenerationResult, claude_provider, log_claude_keyword_usage
+from instaagent_pipeline.keywords import claude_provider
 from instaagent_pipeline.normalizers import normalize_apify_ad, result_items
 
 
@@ -179,48 +179,6 @@ def test_complete_query_records_success_status_and_http_status() -> None:
     ]
 
 
-def test_claude_usage_provider_includes_model() -> None:
-    supabase = RecordingSupabase()
-    result = KeywordGenerationResult(
-        allocations=[
-            KeywordAllocation(keyword_text="gentle cleanser", target_paid_count=100, target_ugc_count=250),
-        ],
-        model="claude-haiku-4-5",
-        status=200,
-        headers={"anthropic-ratelimit-requests-remaining": "49"},
-        usage={"input_tokens": 12, "output_tokens": 8},
-    )
-
-    log_claude_keyword_usage(
-        supabase=supabase,  # type: ignore[arg-type]
-        dry_run=False,
-        run_id="run_1",
-        result=result,
-    )
-
-    assert supabase.inserts == [
-        (
-            "api_usage",
-            {
-                "run_id": "run_1",
-                "provider": "claude-haiku-4-5",
-                "endpoint": "/v1/messages",
-                "credits_used": None,
-                "rate_limit": {
-                    "http_status": 200,
-                    "response_count": 1,
-                    "keyword_count": 1,
-                    "model": "claude-haiku-4-5",
-                    "usage": {"input_tokens": 12, "output_tokens": 8},
-                    "headers": {
-                        "anthropic-ratelimit-requests-remaining": "49",
-                    },
-                },
-            },
-        )
-    ]
-
-
-def test_claude_provider_prefixes_non_claude_model_names() -> None:
-    assert claude_provider("claude-haiku-4-5") == "claude-haiku-4-5"
-    assert claude_provider("haiku45") == "claude-haiku45"
+def test_claude_provider_uses_provider_model_shape() -> None:
+    assert claude_provider("claude-haiku-4-5") == "claude:claude-haiku-4-5"
+    assert claude_provider("haiku45") == "claude:haiku45"

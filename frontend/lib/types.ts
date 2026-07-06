@@ -1,4 +1,4 @@
-export type ItemType = 'paid_ad' | 'ugc_item'
+export type ItemType = 'paid_ad' | 'organic_item'
 
 export interface VideoResult {
   item_type: ItemType
@@ -55,15 +55,6 @@ export interface SearchFilters {
   limit?: number
 }
 
-export interface Product {
-  id: string
-  name: string
-  category: string | null
-  target_market: string | null
-  notes: string | null
-  created_at: string | null
-}
-
 export interface Campaign {
   run_id: string
   status: string | null
@@ -75,7 +66,7 @@ export interface Campaign {
   marketing_goals: string[]
   campaign_objective: string | null
   target_paid_count: number | null
-  target_ugc_count: number | null // reels (Instagram)
+  target_organic_count: number | null // reels (Instagram)
   target_tiktok_count: number | null
   created_at: string | null
 }
@@ -91,7 +82,7 @@ export interface CreateCampaignInput {
   // Scrape targets aren't set at creation — they're chosen per-platform at scrape time.
   // Omitted here so the backend defaults apply (used only to seed keyword allocation).
   target_paid_count?: number
-  target_ugc_count?: number // reels (Instagram)
+  target_organic_count?: number // reels (Instagram)
   target_tiktok_count?: number
 }
 
@@ -126,6 +117,9 @@ export interface DiscoverResult {
   run_id: string // the singleton discovery run; poll scrape-stats with it
   reason?: string
 }
+
+// The platforms a campaign scrape can target (and the prefixes of ScrapeStats' flat fields).
+export type ScrapePlatform = 'facebook' | 'instagram' | 'tiktok'
 
 // Per-platform enrichment breakdown. searchable = scraped video became searchable;
 // expired = provider URL no longer served video; failed = analysis produced nothing;
@@ -259,7 +253,7 @@ export interface RunSummary {
   product_name: string | null
   category: string | null
   target_paid_count: number | null
-  target_ugc_count: number | null // reels (Instagram)
+  target_organic_count: number | null // reels (Instagram)
   target_tiktok_count: number | null
   created_at: string | null
 }

@@ -3,18 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from instaagent_pipeline.ad_enrichment import (
-    ENRICHMENT_SCHEMA,
-    PaidAdEnrichmentCandidate,
-    enrich_paid_ad,
-    enrich_paid_ads,
-    is_probable_video_url,
-    openrouter_request_body,
-    paid_ad_enrichment_candidates,
-    parse_enrichment_response,
-)
 from instaagent_pipeline.config import Config
 from instaagent_pipeline.http_client import HttpClientError
+from instaagent_pipeline.media import is_probable_video_url
+from instaagent_pipeline.paid_enrichment import (
+    PAID_AD_KIND,
+    enrich_paid_ads,
+    paid_ad_enrichment_candidates,
+)
+from instaagent_pipeline.video_enrichment import (
+    ENRICHMENT_SCHEMA,
+    EnrichmentCandidate,
+    enrich_item,
+    openrouter_request_body,
+)
 
 
 FIXTURE = Path("tests/fixtures/openrouter_enrichment_success.json")
@@ -85,22 +87,6 @@ def test_openrouter_request_body_requires_a_video_source() -> None:
         raise AssertionError("expected ValueError when neither video_url nor video_bytes given")
 
 
-def test_parse_enrichment_response_rejects_invalid_json() -> None:
-    body = {"choices": [{"message": {"content": "not json"}}]}
-    try:
-        parse_enrichment_response(body)
-    except RuntimeError as exc:
-        assert "invalid JSON" in str(exc)
-    else:
-        raise AssertionError("expected RuntimeError")
-
-
-def test_parse_enrichment_response_handles_content_part_lists() -> None:
-    body = {"choices": [{"message": {"content": [{"type": "text", "text": "{\"transcript_text\": null}"}]}}]}
-
-    assert parse_enrichment_response(body) == {"transcript_text": None}
-
-
 def test_paid_ad_enrichment_candidates_skips_bad_urls() -> None:
     supabase = FakeSupabase(
         select_rows={
@@ -125,7 +111,7 @@ def test_paid_ad_enrichment_candidates_skips_bad_urls() -> None:
     )
 
     assert skipped_unsupported == 2
-    assert [candidate.paid_ad_row_id for candidate in candidates] == ["row_1"]
+    assert [candidate.item_id for candidate in candidates] == ["row_1"]
     assert candidates[0].ad_copy == {"headline": "Gentle cleanser"}
 
 
@@ -149,19 +135,21 @@ def test_paid_ad_enrichment_candidates_skips_already_enriched() -> None:
     )
 
     assert skipped_unsupported == 0
-    assert [candidate.paid_ad_row_id for candidate in candidates] == ["row_2"]
+    assert [candidate.item_id for candidate in candidates] == ["row_2"]
 
 
 def test_enrich_paid_ad_writes_single_item_enrichment_upsert() -> None:
     supabase = FakeSupabase()
 
-    written = enrich_paid_ad(
+    written = enrich_item(
         config=make_config(),
         supabase=supabase,  # type: ignore[arg-type]
         run_id="run_1",
-        candidate=PaidAdEnrichmentCandidate(
-            paid_ad_row_id="row_1",
-            ad_archive_id="ad_1",
+        kind=PAID_AD_KIND,
+        candidate=EnrichmentCandidate(
+            item_id="row_1",
+            external_id="ad_1",
+            extra_ids={"ad_archive_id": "ad_1"},
             video_url=FBCDN_URL,
             ad_copy={"headline": "Gentle cleanser"},
         ),

@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import json
 
+import instaagent_pipeline.apify_client as apify_client
 import instaagent_pipeline.apify_organic as apify_organic
 from instaagent_pipeline.apify_organic import ingest_tiktok, ingest_tiktok_trends
 from instaagent_pipeline.config import Config
+from instaagent_pipeline.virality import recompute_virality
 from instaagent_pipeline.normalizers import (
     normalize_instagram_reel,
     normalize_tiktok_item,
     normalize_tiktok_trend_item,
-    recompute_virality,
     tiktok_trend_video_url,
 )
 
@@ -164,7 +165,7 @@ def test_ingest_tiktok_trends_actor_input(monkeypatch) -> None:
         captured["actor_input"] = actor_input
         return [TIKTOK_TREND_ITEM], 200, {}, {}
 
-    monkeypatch.setattr(apify_organic, "run_apify_actor_items", fake_run)
+    monkeypatch.setattr(apify_client, "run_apify_actor_items", fake_run)
     cfg = Config(
         supabase_url=None,
         supabase_key=None,

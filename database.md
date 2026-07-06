@@ -8,9 +8,9 @@
 2. If no manual keywords are passed, Claude Haiku extracts 3-5 keywords, aiming for 3 highly relevant single-word keywords, and splits paid ad / organic targets across them. The allocations must add up to the user's requested totals. Keywords are stored in `keywords`; the Claude call is logged in `api_usage`.
 3. Ingest commands load active keywords for the run. Apify paid-ad ingestion (`ingest-apify-ads`, Meta Ad Library) and Apify organic ingestion (`ingest-tiktok` via `clockworks/tiktok-scraper`; `ingest-instagram` reels via `data-slayer/instagram-search-reels`) query each keyword for its allocated count. Each query is logged in `source_queries`; each live API response is logged in `api_usage`; raw JSON goes into `raw_payloads`.
 4. If an API returns fewer ads or videos than requested for a keyword, the pipeline saves what came back and moves on.
-5. Normalized Apify Meta Ad Library output fills `paid_ads`. Normalized Apify TikTok/Instagram output fills `ugc_items`. TikTok follower counts are native; Instagram reel follower counts are backfilled by `backfill-ig-followers` (via `apify/instagram-profile-scraper`). The Apify normalizers recompute `virality_score` / `virality_tier` from engagement metrics.
-6. Vision enrichment runs after ingestion: `enrich-paid-ads` is auto-triggered by `ingest-apify-ads`, and organic vision enrichment (`enrich-ugc`) is auto-triggered by `ingest-tiktok` / `ingest-instagram`. For each item, enrichment downloads the video bytes into memory, uploads them to the Supabase Storage bucket `ad-videos`, and records the persisted `storage_video_url` / `storage_thumb_url` on the item table (`paid_ads` / `ugc_items`). It reuses the same in-memory bytes, base64-encoded, for a single OpenRouter vision call (default model `google/gemini-3-flash-preview`) that returns the spoken transcript plus creative analysis. For paid ads, the existing ad copy is also passed to the model.
-7. Each enrichment writes one row to `item_enrichments` (polymorphic on `item_type` / `item_id`, one row per item): `transcript_text` + `transcript_segments`, `ai_description`, and the analysis fields (`hook`, `persona`, `target_demographic`, `content_format`, and the rest), with `analysis_model` and `analyzed_at` recording the run. It also stamps the per-video outcome back onto the source row (`paid_ads.enrichment_status` / `ugc_items.enrichment_status`): `enriched` when the item became searchable, `expired` when the provider URL no longer served video bytes (Apify links expire before OpenRouter fetches them), or `failed` otherwise — so the campaigns UI can show "X of Y videos searchable" per platform via the `scrape-stats` endpoint.
+5. Normalized Apify Meta Ad Library output fills `paid_ads`. Normalized Apify TikTok/Instagram output fills `organic_items`. TikTok follower counts are native; Instagram reel follower counts are backfilled by `backfill-ig-followers` (via `apify/instagram-profile-scraper`). The Apify normalizers recompute `virality_score` / `virality_tier` from engagement metrics.
+6. Vision enrichment runs after ingestion: `enrich-paid-ads` is auto-triggered by `ingest-apify-ads`, and organic vision enrichment (`enrich-organic`) is auto-triggered by `ingest-tiktok` / `ingest-instagram`. For each item, enrichment downloads the video bytes into memory, uploads them to the Supabase Storage bucket `ad-videos`, and records the persisted `storage_video_url` / `storage_thumb_url` on the item table (`paid_ads` / `organic_items`). It reuses the same in-memory bytes, base64-encoded, for a single OpenRouter vision call (default model `google/gemini-3-flash-preview`) that returns the spoken transcript plus creative analysis. For paid ads, the existing ad copy is also passed to the model.
+7. Each enrichment writes one row to `item_enrichments` (polymorphic on `item_type` / `item_id`, one row per item): `transcript_text` + `transcript_segments`, `ai_description`, and the analysis fields (`hook`, `persona`, `target_demographic`, `content_format`, and the rest), with `analysis_model` and `analyzed_at` recording the run. It also stamps the per-video outcome back onto the source row (`paid_ads.enrichment_status` / `organic_items.enrichment_status`): `enriched` when the item became searchable, `expired` when the provider URL no longer served video bytes (Apify links expire before OpenRouter fetches them), or `failed` otherwise — so the campaigns UI can show "X of Y videos searchable" per platform via the `scrape-stats` endpoint.
 8. `embed-items` writes ICP and search vectors to `item_embeddings` (Voyage AI). The `search` space combines `ai_description`, a labeled tag block, and the full transcript; the `icp` space combines `persona` and `target_demographic`.
 9. `cluster-items` clusters ICP vectors per source, writes item assignments to `item_clusters`, and writes cluster summaries, centroids, exemplars, and optional OpenRouter labels to `clusters`.
 
@@ -27,17 +27,17 @@ products ── pipeline_runs ── keywords  (Claude Haiku splits paid/organic
         │     └─ auto: enrich-paid-ads
         │
         ├─ ingest-tiktok (per keyword)
-        │     clockworks/tiktok-scraper ──► ugc_items  (metrics, native followers)
-        │     └─ auto: enrich-ugc
+        │     clockworks/tiktok-scraper ──► organic_items  (metrics, native followers)
+        │     └─ auto: enrich-organic
         │
         └─ ingest-instagram (per keyword)
-              data-slayer/instagram-search-reels ──► ugc_items  (metrics)
+              data-slayer/instagram-search-reels ──► organic_items  (metrics)
               ├─ backfill-ig-followers (apify/instagram-profile-scraper)
-              └─ auto: enrich-ugc
+              └─ auto: enrich-organic
 
    vision enrichment (paid + organic):
         download video bytes ──► Supabase Storage bucket 'ad-videos'
-              └─► storage_video_url / storage_thumb_url on paid_ads / ugc_items
+              └─► storage_video_url / storage_thumb_url on paid_ads / organic_items
         same bytes base64 (+ ad copy for paid) ──► OpenRouter Gemini (1 call/item)
               └─► item_enrichments  (transcript + segments, ai_description, analysis fields)
 
@@ -80,7 +80,7 @@ Tracks one configured collection run for one product.
 | `status` | `text` | Not null, default `'created'` | Run state. |
 | `config` | `jsonb` | Not null, default `'{}'::jsonb` | Arbitrary run configuration. |
 | `target_paid_count` | `integer` | Not null, default `1000` | Target number of paid ads. |
-| `target_ugc_count` | `integer` | Not null, default `2500` | Target number of organic items. |
+| `target_organic_count` | `integer` | Not null, default `2500` | Target number of organic items. |
 | `top_k` | `integer` | Not null, default `3` | Downstream selection count. |
 | `created_at` | `timestamptz` | Not null, default `now()` | Creation timestamp. |
 | `updated_at` | `timestamptz` | Not null, default `now()` | Last update timestamp. |
@@ -97,7 +97,7 @@ Stores generated or manual discovery keywords attached to a run, including per-k
 | `keyword_type` | `text` | Not null, default `'seed'` | Keyword category. |
 | `source` | `text` | Not null, default `'manual'` | Where the keyword came from. |
 | `target_paid_count` | `integer` | Not null, default `0` | Number of paid ads to request for this keyword. |
-| `target_ugc_count` | `integer` | Not null, default `0` | Number of organic items to request for this keyword. |
+| `target_organic_count` | `integer` | Not null, default `0` | Number of organic items to request for this keyword. |
 | `active` | `boolean` | Not null, default `true` | Whether the keyword should be used. |
 | `created_at` | `timestamptz` | Not null, default `now()` | Creation timestamp. |
 
@@ -192,7 +192,7 @@ Stores Apify Meta Ad Library paid ad records with stable fields mapped into firs
 
 Unique constraint: `unique (run_id, id)`.
 
-### `ugc_items`
+### `organic_items`
 
 Stores Apify TikTok / Instagram organic records with stable fields mapped into first-class columns. Provider-specific overflow fields that are not promoted to columns live in `source_metrics`. Transcript and creative-analysis fields now live in `item_enrichments`, not on this table.
 
@@ -222,9 +222,9 @@ Stores Apify TikTok / Instagram organic records with stable fields mapped into f
 | `date_created` | `timestamptz` | Nullable | Post creation timestamp. |
 | `virality_score` | `numeric` | Nullable | Recomputed from engagement metrics by the Apify normalizer. |
 | `virality_tier` | `text` | Nullable | Recomputed from engagement metrics by the Apify normalizer. |
-| `storage_video_url` | `text` | Nullable | Persisted Supabase Storage (`ad-videos`) URL of the downloaded video; written by `enrich-ugc` (migration `015`). |
-| `storage_thumb_url` | `text` | Nullable | Persisted Supabase Storage (`ad-videos`) URL of the thumbnail; written by `enrich-ugc` (migration `015`). |
-| `enrichment_status` | `text` | Nullable | Per-video enrichment outcome written by `enrich-ugc` (migration `021`): `enriched` (searchable), `expired` (URL no longer served video), `failed`. Null until enrichment touches the row. |
+| `storage_video_url` | `text` | Nullable | Persisted Supabase Storage (`ad-videos`) URL of the downloaded video; written by `enrich-organic` (migration `015`). |
+| `storage_thumb_url` | `text` | Nullable | Persisted Supabase Storage (`ad-videos`) URL of the thumbnail; written by `enrich-organic` (migration `015`). |
+| `enrichment_status` | `text` | Nullable | Per-video enrichment outcome written by `enrich-organic` (migration `021`): `enriched` (searchable), `expired` (URL no longer served video), `failed`. Null until enrichment touches the row. |
 | `enrichment_error` | `text` | Nullable | Human-readable reason for an `expired`/`failed` status (migration `021`). |
 | `format_id` | `uuid` | Nullable, references `viral_formats(id)` on delete cascade | Trend pipeline (migration `025`): set when this is an example video of a viral format (`source='trend'`). |
 | `source_metrics` | `jsonb` | Not null, default `{}` | Provider-specific fields not mapped to first-class columns, plus `endpoint_kind`. |
@@ -234,9 +234,9 @@ Unique constraint: `unique (run_id, external_id)`.
 
 ### `viral_formats`
 
-Trend pipeline (migration `025`). One row per viral format scraped from a web trend page (`ingest-trends`); example videos hang off it via `ugc_items.format_id` and a format is ranked on the `/trends` dashboard by its videos' aggregate live views. `classify-formats` writes the free-form `niche_constraint` plus (migration `027`) the structured match fields `versatility` / `fit_niches` / `product_requirements`, which power product→trend matching (`POST /trends/match`) and the versatility badge. Each source has a persistent product/`pipeline_run` (`products.name = 'Trend: <source>'`).
+Trend pipeline (migration `025`). One row per viral format scraped from a web trend page (`ingest-trends`); example videos hang off it via `organic_items.format_id` and a format is ranked on the `/trends` dashboard by its videos' aggregate live views. `classify-formats` writes the free-form `niche_constraint` plus (migration `027`) the structured match fields `versatility` / `fit_niches` / `product_requirements`, which power product→trend matching (`POST /trends/match`) and the versatility badge. Each source has a persistent product/`pipeline_run` (`products.name = 'Trend: <source>'`).
 
-**Keeping cards from going empty.** A blog (and the LLM reading it) can list the same trend under several names, and can rename a trend between fetches; JS-rendered pages (newengen) also render a *random subset* of their trends per fetch (embeds lazy-load), so no single pass is guaranteed complete. Because only one `ugc_items` row exists per `(run, video)`, `ingest-trends` guards against duplicate/renamed formats stealing each other's video: (1) it collapses formats that share an example video before upserting (`_dedupe_formats`); (2) it drops parsed formats with **no example-video link** (FAQ/prose name-drops) before writing, and skips a `render:"js"` fetch that came back with zero videos (`incomplete_render`) so a half-loaded page never writes empties; (3) for videos already scraped in a prior pass it *re-links* the existing `ugc_items` row onto the format the current parse assigns it to (`_relink_existing_videos`); (4) after ingest it prunes only this source's **empty** rows — 0 linked videos after re-link (`_prune_empty_formats`) — which drops rename leftovers while a trend a partial render *missed* keeps its video and survives. This is an **accumulate-and-keep** model: re-running ingest adds the trends each render happened to see, and pruning by emptiness (never by `content_hash`) means a partial render can't delete good trends. Net: no empty/duplicate cards, and each video follows its trend across renames and flaky renders.
+**Keeping cards from going empty.** A blog (and the LLM reading it) can list the same trend under several names, and can rename a trend between fetches; JS-rendered pages (newengen) also render a *random subset* of their trends per fetch (embeds lazy-load), so no single pass is guaranteed complete. Because only one `organic_items` row exists per `(run, video)`, `ingest-trends` guards against duplicate/renamed formats stealing each other's video: (1) it collapses formats that share an example video before upserting (`_dedupe_formats`); (2) it drops parsed formats with **no example-video link** (FAQ/prose name-drops) before writing, and skips a `render:"js"` fetch that came back with zero videos (`incomplete_render`) so a half-loaded page never writes empties; (3) for videos already scraped in a prior pass it *re-links* the existing `organic_items` row onto the format the current parse assigns it to (`_relink_existing_videos`); (4) after ingest it prunes only this source's **empty** rows — 0 linked videos after re-link (`_prune_empty_formats`) — which drops rename leftovers while a trend a partial render *missed* keeps its video and survives. This is an **accumulate-and-keep** model: re-running ingest adds the trends each render happened to see, and pruning by emptiness (never by `content_hash`) means a partial render can't delete good trends. Net: no empty/duplicate cards, and each video follows its trend across renames and flaky renders.
 
 | Column | Type | Constraints / default | Notes |
 | --- | --- | --- | --- |
@@ -261,14 +261,14 @@ Unique constraint: `unique (source_name, format_name)` (idempotent re-ingest).
 
 ### `item_enrichments`
 
-Stores one vision-enrichment row per item, written by `enrich-paid-ads` and `enrich-ugc` from a single OpenRouter (Gemini) vision call. Polymorphic on `(item_type, item_id)` like `item_embeddings` — `item_id` points at `paid_ads.paid_ad_row_id` or `ugc_items.id` with no FK. Holds the LLM transcript, the AI description, and all creative-analysis fields.
+Stores one vision-enrichment row per item, written by `enrich-paid-ads` and `enrich-organic` from a single OpenRouter (Gemini) vision call. Polymorphic on `(item_type, item_id)` like `item_embeddings` — `item_id` points at `paid_ads.paid_ad_row_id` or `organic_items.id` with no FK. Holds the LLM transcript, the AI description, and all creative-analysis fields.
 
 | Column | Type | Constraints / default | Notes |
 | --- | --- | --- | --- |
 | `id` | `uuid` | Primary key, default `gen_random_uuid()` | Enrichment row identifier. |
 | `run_id` | `uuid` | Not null, references `pipeline_runs(id)` on delete cascade | Parent run. |
-| `item_type` | `text` | Not null, check in (`paid_ad`, `ugc_item`) | Which content table the item lives in. |
-| `item_id` | `uuid` | Not null | `paid_ads.paid_ad_row_id` or `ugc_items.id` (no FK — points at one of two tables). |
+| `item_type` | `text` | Not null, check in (`paid_ad`, `organic_item`) | Which content table the item lives in. |
+| `item_id` | `uuid` | Not null | `paid_ads.paid_ad_row_id` or `organic_items.id` (no FK — points at one of two tables). |
 | `transcript_text` | `text` | Nullable | Spoken transcript text. |
 | `transcript_segments` | `jsonb` | Nullable | Segment-level transcript data. |
 | `ai_description` | `text` | Nullable | LLM description of the video; core search text. |
@@ -313,8 +313,8 @@ A third `trend` space (migration `027`, `item_type='viral_format'`, `item_id=vir
 | --- | --- | --- | --- |
 | `id` | `uuid` | Primary key, default `gen_random_uuid()` | Embedding row identifier. |
 | `run_id` | `uuid` | Not null, references `pipeline_runs(id)` on delete cascade | Parent run. |
-| `item_type` | `text` | Not null, check in (`paid_ad`, `ugc_item`, `viral_format`) | Which table the item lives in (`viral_format` = `viral_formats.id`, migration `027`). |
-| `item_id` | `uuid` | Not null | `paid_ads.paid_ad_row_id`, `ugc_items.id`, or `viral_formats.id` (no FK — points at one of several tables). |
+| `item_type` | `text` | Not null, check in (`paid_ad`, `organic_item`, `viral_format`) | Which table the item lives in (`viral_format` = `viral_formats.id`, migration `027`). |
+| `item_id` | `uuid` | Not null | `paid_ads.paid_ad_row_id`, `organic_items.id`, or `viral_formats.id` (no FK — points at one of several tables). |
 | `space` | `text` | Not null, check in (`icp`, `search`, `trend`) | Embedding space. Never concatenated across spaces. The DB check allows the legacy values (`icp`, `format`, `hook`, `search`) plus `trend` (migration `027`); `embed-items` writes `icp` + `search`, `classify-formats` writes `trend`. |
 | `embedding_model` | `text` | Not null | Voyage model name, e.g. `voyage-4-lite`. |
 | `source_text` | `text` | Not null | The exact text that was embedded, for debugging and dedupe. |
@@ -331,8 +331,8 @@ Stores one clustering assignment per embedded item and embedding space, written 
 | --- | --- | --- | --- |
 | `id` | `uuid` | Primary key, default `gen_random_uuid()` | Assignment row identifier. |
 | `run_id` | `uuid` | Not null, references `pipeline_runs(id)` on delete cascade | Parent run. |
-| `item_type` | `text` | Not null, check in (`paid_ad`, `ugc_item`) | Source table represented by `item_id`. |
-| `item_id` | `uuid` | Not null | `paid_ads.paid_ad_row_id` or `ugc_items.id`. |
+| `item_type` | `text` | Not null, check in (`paid_ad`, `organic_item`) | Source table represented by `item_id`. |
+| `item_id` | `uuid` | Not null | `paid_ads.paid_ad_row_id` or `organic_items.id`. |
 | `space` | `text` | Not null, check in (`icp`, `format`, `hook`) | Embedding space; currently `icp`. |
 | `cluster_label` | `integer` | Not null | HDBSCAN label; `-1` means noise. |
 | `distance_to_centroid` | `double precision` | Nullable | Cosine distance to the cluster centroid for clustered items. |
@@ -349,7 +349,7 @@ Stores one discovered cluster per run, source, and space, written by `cluster-it
 | --- | --- | --- | --- |
 | `id` | `uuid` | Primary key, default `gen_random_uuid()` | Cluster row identifier. |
 | `run_id` | `uuid` | Not null, references `pipeline_runs(id)` on delete cascade | Parent run. |
-| `item_type` | `text` | Not null, check in (`paid_ad`, `ugc_item`) | Source being clustered. |
+| `item_type` | `text` | Not null, check in (`paid_ad`, `organic_item`) | Source being clustered. |
 | `space` | `text` | Not null, check in (`icp`, `format`, `hook`) | Embedding space; currently `icp`. |
 | `cluster_label` | `integer` | Not null | HDBSCAN cluster label. |
 | `name` | `text` | Nullable | Short label, currently the labeled persona when labeling succeeds. |
@@ -395,11 +395,11 @@ One row per UI scrape trigger (a click of Scrape / Scrape more for a platform), 
 | `paid_ads_ad_id_idx` | `paid_ads` | `ad_id` | Lookup by Apify/Meta ad archive id. |
 | `paid_ads_brand_id_idx` | `paid_ads` | `brand_id` | Find ads for a Meta page id. |
 | `paid_ads_saved_to_supabase_at_idx` | `paid_ads` | `saved_to_supabase_at desc` | Find recently saved paid ads. |
-| `ugc_items_run_id_idx` | `ugc_items` | `run_id` | Find organic items for a run. |
-| `ugc_items_external_idx` | `ugc_items` | `external_id` | Lookup by provider id. |
-| `ugc_items_video_id_idx` | `ugc_items` | `video_id` | Lookup platform video IDs. |
-| `ugc_items_virality_idx` | `ugc_items` | `virality_score desc` | Rank organic items by virality. |
-| `ugc_items_saved_to_supabase_at_idx` | `ugc_items` | `saved_to_supabase_at desc` | Find recently saved organic items. |
+| `organic_items_run_id_idx` | `organic_items` | `run_id` | Find organic items for a run. |
+| `organic_items_external_idx` | `organic_items` | `external_id` | Lookup by provider id. |
+| `organic_items_video_id_idx` | `organic_items` | `video_id` | Lookup platform video IDs. |
+| `organic_items_virality_idx` | `organic_items` | `virality_score desc` | Rank organic items by virality. |
+| `organic_items_saved_to_supabase_at_idx` | `organic_items` | `saved_to_supabase_at desc` | Find recently saved organic items. |
 | `item_enrichments_run_idx` | `item_enrichments` | `run_id` | Find enrichments for a run. |
 | `item_enrichments_item_idx` | `item_enrichments` | `item_type, item_id` (unique) | Upsert one enrichment per item and look it up by item. |
 | `item_embeddings_run_idx` | `item_embeddings` | `run_id` | Find embeddings for a run. |

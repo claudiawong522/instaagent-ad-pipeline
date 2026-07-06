@@ -217,6 +217,18 @@ class SupabaseClient:
             return [row for row in response.body if isinstance(row, dict)]
         return []
 
+    def select_by_ids(
+        self, table: str, id_column: str, ids: list[str], columns: str
+    ) -> dict[str, dict[str, Any]]:
+        """Fetch rows whose id_column is in `ids`, keyed by that id. [] ids → {}."""
+        if not ids:
+            return {}
+        rows = self.select(
+            table,
+            {"select": columns, id_column: f"in.({','.join(ids)})", "limit": str(len(ids))},
+        )
+        return {str(row.get(id_column)): row for row in rows if row.get(id_column)}
+
     def delete(self, table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         # PostgREST requires at least one filter in params, otherwise it refuses
         # to delete the whole table. Callers always pass eq filters.

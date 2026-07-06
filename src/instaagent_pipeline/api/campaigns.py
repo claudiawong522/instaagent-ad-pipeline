@@ -12,12 +12,12 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from ..ad_enrichment import enrich_paid_ads
+from ..paid_enrichment import enrich_paid_ads
 from ..apify_ads import ingest_apify_ads
 from ..apify_organic import ingest_instagram, ingest_tiktok
 from ..audience_enrichment import enrich_audience
 from ..config import Config
-from ..costs import detect_out_of_credits, estimate_cost, reconcile_actual_cost, reconstruct_history
+from ..costs import estimate_cost, reconcile_actual_cost, reconstruct_history
 from ..embeddings import ALL_SPACES, embed_items
 from ..ingestion import utc_now_iso
 from ..keywords import (
@@ -28,53 +28,44 @@ from ..keywords import (
 )
 from ..supabase_client import SupabaseClient
 from ..organic_enrichment import enrich_organic_items
-from .search import _hydrate
+from . import jobs
+from .discover import DISCOVERY_PLATFORM
 
 # UI platform name -> (ingest function, run target column, Apify page_size).
 # page_size mirrors the CLI: the ads actor paginates by target_count, the organic actors use 0.
 _PLATFORMS: dict[str, tuple[Any, str, bool]] = {
     "facebook": (ingest_apify_ads, "target_paid_count", True),
-    "instagram": (ingest_instagram, "target_ugc_count", False),
+    "instagram": (ingest_instagram, "target_organic_count", False),
     "tiktok": (ingest_tiktok, "target_tiktok_count", False),
 }
-
-# Scrapes currently running, so the UI can show a spinner and we refuse duplicates. Keyed
-# by (run_id, platform). Process-local — fine for the single-worker dev server; a
-# multi-worker deploy would track this in the DB instead.
-_running: set[tuple[str, str]] = set()
-_running_lock = threading.Lock()
 
 # How long a scrape_event may sit in 'running' with no completion before we treat its worker
 # as dead. A job's thread marks the event done/failed in a finally block; if the process is
 # killed first (e.g. a `uvicorn --reload` restart), the event stays 'running' forever and its
 # items stay stuck at "processing". Real jobs take minutes, so anything older than this whose
-# key isn't in the live _running set is an orphan we can safely re-run.
+# key isn't in the live running set is an orphan we can safely re-run.
 STALE_AFTER_SECONDS = 10 * 60
 # Don't auto-resume jobs older than this. Recent kills (a reload) are worth self-healing;
 # a run abandoned days ago shouldn't suddenly re-spend when the server next boots.
 MAX_RESUME_AGE_SECONDS = 48 * 60 * 60
-# Backstop for a worker that hangs *after* fetching (e.g. a stalled vision/embed call): if its
-# event sits in 'running' this long, mark it failed so the UI stops spinning forever and offers a
-# re-run, and free the _running slot. Sized above a full first post-pass, not a tight SLA — the
-# run-wide passes are serialized and skip already-done items, so only one worker pays full cost.
-WATCHDOG_SECONDS = 30 * 60
 
-# The post-ingest passes (organic enrich, audience, embed) all cover a run's WHOLE item set, not
-# just one scrape's. With several platform workers live at once, running them in parallel just makes
-# N workers hammer the same rate-limited vision/embed APIs and crawl — which is what leaves an event
-# stuck 'running' long after its fetch is done. Serialize them per run: one lock per run_id, lazily
-# created under a guard. Apify ingest stays parallel; only post-processing is single-file.
-_postpass_locks: dict[str, threading.Lock] = {}
-_postpass_guard = threading.Lock()
+# pipeline_runs columns every run/campaign listing reads.
+RUN_SELECT_COLUMNS = (
+    "id,status,config,target_paid_count,target_organic_count,target_tiktok_count,created_at,product_id"
+)
 
 
-def _postpass_lock(run_id: str) -> threading.Lock:
-    with _postpass_guard:
-        lock = _postpass_locks.get(run_id)
-        if lock is None:
-            lock = threading.Lock()
-            _postpass_locks[run_id] = lock
-        return lock
+def runs_with_products(
+    supabase: SupabaseClient, product_columns: str
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """All pipeline_runs newest-first, each paired with its (possibly empty) product row.
+    Shared by the campaign listing here and search's run filter."""
+    runs = supabase.select(
+        "pipeline_runs", {"select": RUN_SELECT_COLUMNS, "order": "created_at.desc"}
+    )
+    product_ids = [str(r["product_id"]) for r in runs if r.get("product_id")]
+    products = supabase.select_by_ids("products", "id", product_ids, product_columns)
+    return [(run, products.get(str(run.get("product_id"))) or {}) for run in runs]
 
 
 def create_campaign(
@@ -89,7 +80,7 @@ def create_campaign(
     marketing_goals: list[str],
     campaign_objective: str | None,
     target_paid_count: int,
-    target_ugc_count: int,
+    target_organic_count: int,
     target_tiktok_count: int,
 ) -> dict[str, Any]:
     """Create the product + pipeline_run and seed keywords. Mirrors cli.init_run, but stores
@@ -113,7 +104,7 @@ def create_campaign(
             "config": run_config,
             "product_id": product["id"],
             "target_paid_count": target_paid_count,
-            "target_ugc_count": target_ugc_count,
+            "target_organic_count": target_organic_count,
             "target_tiktok_count": target_tiktok_count,
         },
     )
@@ -132,7 +123,7 @@ def create_campaign(
             notes=notes,
             campaign_guidelines=campaign_objective,
             target_paid_count=target_paid_count,
-            target_ugc_count=target_ugc_count,
+            target_organic_count=target_organic_count,
             target_tiktok_count=target_tiktok_count,
         )
         keywords = insert_keyword_allocations(supabase, run_id=run["id"], allocations=result.allocations)
@@ -150,18 +141,8 @@ def create_campaign(
 
 def list_campaigns(supabase: SupabaseClient) -> list[dict[str, Any]]:
     """All campaigns (runs) newest-first, with product + campaign config fields."""
-    runs = supabase.select(
-        "pipeline_runs",
-        {
-            "select": "id,status,config,target_paid_count,target_ugc_count,target_tiktok_count,created_at,product_id",
-            "order": "created_at.desc",
-        },
-    )
-    product_ids = [str(r["product_id"]) for r in runs if r.get("product_id")]
-    products = _hydrate(supabase, "products", "id", product_ids, "id,name,category,target_market,notes")
     out: list[dict[str, Any]] = []
-    for run in runs:
-        product = products.get(str(run.get("product_id"))) or {}
+    for run, product in runs_with_products(supabase, "id,name,category,target_market,notes"):
         cfg = run.get("config") or {}
         if cfg.get("discovery"):
             continue  # the keyword-free Viral Discovery run lives on the Discover page, not here
@@ -177,7 +158,7 @@ def list_campaigns(supabase: SupabaseClient) -> list[dict[str, Any]]:
                 "marketing_goals": cfg.get("marketing_goals") or [],
                 "campaign_objective": cfg.get("campaign_objective"),
                 "target_paid_count": run.get("target_paid_count"),
-                "target_ugc_count": run.get("target_ugc_count"),
+                "target_organic_count": run.get("target_organic_count"),
                 "target_tiktok_count": run.get("target_tiktok_count"),
                 "created_at": run.get("created_at"),
             }
@@ -279,14 +260,13 @@ def scrape_stats(supabase: SupabaseClient, run_id: str) -> dict[str, Any]:
     cols = "enrichment_status,saved_to_supabase_at"
     paid = supabase.select("paid_ads", {"select": f"{cols},video", "run_id": f"eq.{run_id}", "limit": "100000"})
     organic = supabase.select(
-        "ugc_items", {"select": f"{cols},video_url,source", "run_id": f"eq.{run_id}", "limit": "100000"}
+        "organic_items", {"select": f"{cols},video_url,source", "run_id": f"eq.{run_id}", "limit": "100000"}
     )
     fb = _breakdown(paid, "video")
     ig = _breakdown([r for r in organic if r.get("source") == "instagram"], "video_url")
     tt = _breakdown([r for r in organic if r.get("source") == "tiktok"], "video_url")
     outcome = _last_scrape_outcome(supabase, run_id)
-    with _running_lock:
-        running = sorted(p for (r, p) in _running if r == run_id)
+    running = jobs.running_platforms(run_id)
 
     def _failed(platform: str) -> bool:
         return platform not in running and (outcome.get(platform) or {}).get("failed", False)
@@ -341,7 +321,7 @@ def _last_scrape_outcome(supabase: SupabaseClient, run_id: str) -> dict[str, dic
     out: dict[str, dict[str, Any]] = {}
     for r in rows:  # newest-first, so the first row seen per platform is the latest
         platform = r.get("platform")
-        if platform == "tiktok-trends":  # discover.DISCOVERY_PLATFORM (literal avoids a circular import)
+        if platform == DISCOVERY_PLATFORM:
             platform = "tiktok"
         if platform and platform not in out:
             out[platform] = {"failed": r.get("status") == "failed", "error_message": r.get("error_message")}
@@ -363,11 +343,8 @@ def trigger_scrape(
     """
     if platform not in _PLATFORMS:
         raise ValueError(f"unknown platform {platform!r}; expected one of {sorted(_PLATFORMS)}")
-    key = (run_id, platform)
-    with _running_lock:
-        if key in _running:
-            return {"started": False, "platform": platform, "reason": "already running"}
-        _running.add(key)
+    if not jobs.try_claim(run_id, platform):
+        return {"started": False, "platform": platform, "reason": "already running"}
     threading.Thread(
         target=_run_scrape, args=(config, run_id, platform, target_count, estimated_cost_usd), daemon=True
     ).start()
@@ -441,35 +418,10 @@ def _existing_count(supabase: SupabaseClient, run_id: str, platform: str) -> int
         rows = supabase.select("paid_ads", {"select": "id", "run_id": f"eq.{run_id}", "limit": "100000"})
     else:
         rows = supabase.select(
-            "ugc_items",
+            "organic_items",
             {"select": "id", "run_id": f"eq.{run_id}", "source": f"eq.{platform}", "limit": "100000"},
         )
     return len(rows)
-
-
-def _watchdog_timeout(config: Config, run_id: str, platform: str, event_id: str) -> None:
-    """Fired by a Timer if a worker overruns WATCHDOG_SECONDS. Flips a still-'running' event to
-    failed (so the UI offers a re-run instead of spinning forever) and frees the _running slot.
-    No-op if the worker already closed the event — the worker cancels this Timer in its finally,
-    so this only runs when the worker is genuinely stuck and never reached that finally."""
-    supabase = SupabaseClient(config.supabase_url, config.supabase_key)
-    try:
-        rows = supabase.select("scrape_events", {"select": "status", "id": f"eq.{event_id}", "limit": "1"})
-        if rows and rows[0].get("status") == "running":
-            supabase.update_by_id(
-                "scrape_events",
-                event_id,
-                {
-                    "status": "failed",
-                    "error_message": "Scrape timed out — the worker stalled. Re-run to finish.",
-                    "finished_at": utc_now_iso(),
-                },
-            )
-            print(f"[scrape] run={run_id} platform={platform} watchdog: stalled scrape marked failed")
-    except Exception as exc:
-        print(f"[scrape] run={run_id} watchdog update failed: {exc}")
-    with _running_lock:
-        _running.discard((run_id, platform))
 
 
 def _run_scrape(
@@ -481,37 +433,16 @@ def _run_scrape(
 ) -> None:
     """Full chain so scraped items become searchable: ingest → enrich (downloads video, vision,
     uploads to Storage) → audience fields → embed (search + icp). Each stage skips already-done
-    items, so it's safe to re-run. Long-running (minutes) — that's why it lives in a thread."""
+    items, so it's safe to re-run. Long-running (minutes) — that's why it lives in a thread.
+    Event/cost bookkeeping and the hung-worker watchdog come from jobs.run_job."""
     ingest_func, target_field, ads_pagesize = _PLATFORMS[platform]
     is_paid = target_field == "target_paid_count"
-    # Fresh client for the thread — don't share the request handler's session across threads.
-    supabase = SupabaseClient(config.supabase_url, config.supabase_key)
-    # Record the scrape so the UI can show its cost. Fall back to a server-side estimate if the UI
-    # didn't send one (estimate treats the whole requested total as new items). Best-effort — cost
-    # bookkeeping must never block the scrape (e.g. if migration 022 hasn't been applied yet).
+    # Fall back to a server-side estimate if the UI didn't send one (the estimate treats the
+    # whole requested total as new items).
     estimate = estimated_cost_usd if estimated_cost_usd is not None else estimate_cost(platform, target_count or 0)
-    event_id: str | None = None
-    started_at: str | None = None
-    try:
-        event = supabase.insert(
-            "scrape_events",
-            {"run_id": run_id, "platform": platform, "target_count": target_count, "estimated_cost_usd": estimate},
-        )
-        event_id, started_at = event.get("id"), event.get("started_at")
-    except Exception as exc:
-        print(f"[scrape] run={run_id} could not record scrape_event: {exc}")
-    # Backstop a hung worker: if we never reach the finally below in time, this fires and closes the
-    # event (see _watchdog_timeout). Cancelled in the finally the moment the worker finishes normally.
-    watchdog: threading.Timer | None = None
-    if event_id:
-        watchdog = threading.Timer(WATCHDOG_SECONDS, _watchdog_timeout, args=(config, run_id, platform, str(event_id)))
-        watchdog.daemon = True
-        watchdog.start()
-    items_ingested = 0
-    failed = False
-    keyword_errors = 0
-    try:
-        # Stage 1 — ingest: fetch from Apify, write rows to paid_ads/ugc_items.
+
+    def work(supabase: SupabaseClient, state: jobs.JobState) -> None:
+        # Stage 1 — ingest: fetch from Apify, write rows to paid_ads/organic_items.
         rows = active_keyword_allocations(supabase, run_id)
         valid = [r for r in rows if str(r.get("keyword_text") or "").strip()]
         # The UI always supplies the ceiling. Top up toward it: split only the GAP between
@@ -547,16 +478,18 @@ def _run_scrape(
                     input_json=None,
                     extra_params={},
                 )
-                items_ingested += getattr(result, "written", 0) or 0
+                state.items_ingested += getattr(result, "written", 0) or 0
             except Exception as exc:
-                keyword_errors += 1
+                # Any keyword erroring = a short delivery, so flag failed (the UI shows it
+                # as a partial and offers retry to fill the gap).
+                state.partial_failure = True
                 print(f"[scrape] run={run_id} platform={platform} keyword={keyword!r} ingest failed: {exc}")
 
         # Stages 2–3 are run-wide (they cover every platform's items, not just this scrape's), so
         # serialize them per run — concurrent platform workers would otherwise throttle each other
         # on the same vision/embed APIs. Skip-already-done makes the later workers cheap; the last
         # one through embeds any stragglers. Apify ingest above stayed parallel.
-        with _postpass_lock(run_id):
+        with jobs.postpass_lock(run_id):
             # Stage 2 — enrich: download each new video → Gemini vision (ai_description, tone…) →
             # upload mp4 + thumbnail to Supabase Storage → write item_enrichments.
             if is_paid:
@@ -568,38 +501,17 @@ def _run_scrape(
 
             # Stage 3 — embed both spaces so the new items are searchable. Skips already-embedded.
             embed_items(config=config, supabase=supabase, run_id=run_id, spaces=ALL_SPACES, dry_run=False)
-    except Exception as exc:  # background thread — surface to the server log, nothing to return to
-        failed = True
-        print(f"[scrape] run={run_id} platform={platform} failed: {exc}")
-    finally:
-        # Worker finished (or errored) on its own — call off the backstop before it can fire.
-        if watchdog is not None:
-            watchdog.cancel()
-        # Reconcile the real spend (Apify USD + token-priced LLM/embeds) for this scrape's window.
-        if event_id:
-            try:
-                actual = reconcile_actual_cost(supabase, run_id, started_at) if started_at else None
-                # Did either leg (Apify ingest / LLM enrichment) run out of credits? Detected from
-                # the run's failed source_queries so the UI can prompt a top-up + re-run. Set even
-                # when status is 'done' (an enrichment credit failure is swallowed per item).
-                credit_error = detect_out_of_credits(supabase, run_id, started_at) if started_at else None
-                supabase.update_by_id(
-                    "scrape_events",
-                    str(event_id),
-                    {
-                        "actual_cost_usd": actual,
-                        "items_ingested": items_ingested,
-                        # Any keyword erroring = a short delivery, so flag failed (the UI shows it
-                        # as a partial and offers retry to fill the gap).
-                        "status": "failed" if (failed or keyword_errors) else "done",
-                        "error_message": credit_error,
-                        "finished_at": utc_now_iso(),
-                    },
-                )
-            except Exception as exc:  # never let cost bookkeeping mask the scrape outcome
-                print(f"[scrape] run={run_id} cost reconcile failed: {exc}")
-        with _running_lock:
-            _running.discard((run_id, platform))
+
+    jobs.run_job(
+        config=config,
+        run_id=run_id,
+        platform=platform,
+        target_count=target_count,
+        estimate=estimate,
+        work=work,
+        watchdog_seconds=jobs.WATCHDOG_SECONDS,
+        log_prefix="scrape",
+    )
 
 
 def orphaned_events(supabase: SupabaseClient, run_id: str | None = None) -> list[dict[str, Any]]:
@@ -620,8 +532,7 @@ def orphaned_events(supabase: SupabaseClient, run_id: str | None = None) -> list
         return []
     now = datetime.now(timezone.utc)
     stale_before = (now - timedelta(seconds=STALE_AFTER_SECONDS)).isoformat()
-    with _running_lock:
-        live = set(_running)
+    live = jobs.live_keys()
     out: list[dict[str, Any]] = []
     for r in rows:
         started = r.get("started_at") or ""
@@ -647,7 +558,7 @@ def _resume(config: Config, event: dict[str, Any]) -> None:
         # is organic. Discovery does its scoring before enrichment, so leftovers only need this.
         # Same run-wide passes as a live scrape — serialize per run so a resume can't run them
         # concurrently with a fresh scrape and throttle it.
-        with _postpass_lock(run_id):
+        with jobs.postpass_lock(run_id):
             if platform == "facebook":
                 enrich_paid_ads(config=config, supabase=supabase, run_id=run_id, limit=10000, dry_run=False)
             else:
@@ -676,8 +587,7 @@ def _resume(config: Config, event: dict[str, Any]) -> None:
             )
         except Exception as exc:
             print(f"[resume] run={run_id} could not close scrape_event: {exc}")
-        with _running_lock:
-            _running.discard((run_id, platform))
+        jobs.release(run_id, platform)
 
 
 def resume_orphaned_jobs(config: Config, supabase: SupabaseClient) -> int:
@@ -691,11 +601,8 @@ def resume_orphaned_jobs(config: Config, supabase: SupabaseClient) -> int:
         if (event.get("started_at") or "") < resume_after:
             print(f"[resume] skipping stale job run={event.get('run_id')} platform={event.get('platform')} (too old)")
             continue
-        key = (str(event["run_id"]), event["platform"])
-        with _running_lock:
-            if key in _running:
-                continue
-            _running.add(key)
+        if not jobs.try_claim(str(event["run_id"]), event["platform"]):
+            continue
         threading.Thread(target=_resume, args=(config, event), daemon=True).start()
         resumed += 1
     return resumed
