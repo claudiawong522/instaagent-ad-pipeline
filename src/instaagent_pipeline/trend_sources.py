@@ -33,7 +33,11 @@ from .http_client import HttpClientError, request_json
 # so they must be fetched through a headless browser (Apify) instead of plain requests.
 DEFAULT_TREND_SOURCES: list[dict[str, str]] = [
     {"name": "ramdam", "url": "https://www.ramd.am/blog/trends-tiktok"},
-    {"name": "newengen", "url": "https://newengen.com/tiktok-trends/", "render": "js"},
+    # Newengen's monthly "insights" report is the deep-dive: one section per trend, each with
+    # its own embedded example video (~9-11 trends). The weekly /tiktok-trends/ hub only
+    # features ~3 and name-drops the rest in FAQ prose, so it yielded mostly empty cards. Point
+    # at the current month's report; update the slug (…/insights/<month>-tiktok-trends/) monthly.
+    {"name": "newengen", "url": "https://newengen.com/insights/june-tiktok-trends/", "render": "js"},
     {"name": "socialbee", "url": "https://socialbee.com/blog/tiktok-trends/"},
 ]
 
@@ -174,8 +178,13 @@ def _fetch_rendered_html(url: str, apify_api_key: str | None) -> str:
             "maxCrawlDepth": 0,
             "saveHtml": True,
             "htmlTransformer": "none",
-            "waitForSelectorOnLoadTimeoutSecs": 15,
-            "maxScrollHeightPixels": 50000,
+            # The monthly report lazy-loads a TikTok embed per trend as it scrolls into view;
+            # each embed's script then injects the canonical link we harvest. Too little scroll
+            # or wait and the lower trends never render (a partial render silently drops them).
+            # Scroll the full page and give the embeds time to initialize before capturing HTML.
+            "waitForSelectorOnLoadTimeoutSecs": 30,
+            "maxScrollHeightPixels": 120000,
+            "dynamicContentWaitSecs": 20,
         },
         target_count=1,
     )
