@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { searchAds, listRuns } from '@/lib/api'
 import type { ItemType, RunSummary, VideoResult } from '@/lib/types'
-import { formatNum } from '@/lib/format'
+import { formatNum, fmtDate } from '@/lib/format'
 import { ViralityHelp } from '@/components/ViralityHelp'
 import { VideoTile } from '@/components/VideoTile'
 
@@ -381,6 +381,12 @@ export default function SearchPage() {
         </div>
       )}
 
+      {!loading && !searched && !error && (
+        <div className="py-20 text-center text-sm text-muted-foreground">
+          Search by keyword, or press <span className="font-medium text-foreground">Show all</span> to browse the whole database.
+        </div>
+      )}
+
       {!loading && searched && results.length === 0 && !error && (
         <div className="py-20 text-center text-sm text-muted-foreground">
           No videos found. Try a broader keyword, or check that items have been enriched + embedded.
@@ -472,8 +478,8 @@ function VideoCard({ result: r }: { result: VideoResult }) {
         {typeof r.similarity === 'number' && (
           <Badge variant="outline">{Math.round(r.similarity * 100)}% relevance</Badge>
         )}
-        {r.price_positioning && <Badge variant="outline">{r.price_positioning}</Badge>}
-        {r.target_generation && <Badge variant="outline">{r.target_generation}</Badge>}
+        {r.price_positioning && <Badge variant="outline" className="capitalize">{r.price_positioning.replace(/_/g, ' ')}</Badge>}
+        {r.target_generation && <Badge variant="outline" className="capitalize">{r.target_generation.replace(/_/g, ' ')}</Badge>}
       </div>
       {(r.age_brackets.length > 0 || r.languages.length > 0) && (
         <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
@@ -496,7 +502,7 @@ function VideoCard({ result: r }: { result: VideoResult }) {
           </span>
         )}
         {r.days_live != null && <span>{Math.round(r.days_live)}d live</span>}
-        {r.date_created && <span>posted {new Date(r.date_created).toLocaleDateString()}</span>}
+        {r.date_created && <span>posted {fmtDate(r.date_created)}</span>}
       </div>
       {r.hook && (
         <p className="line-clamp-3 text-xs">

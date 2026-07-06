@@ -134,7 +134,11 @@ function CampaignCard({
             {c.created_at ? ` · created ${timeAgo(c.created_at)}` : ''}
           </div>
         </div>
-        {c.status && <Badge variant={c.status === 'failed' ? 'destructive' : 'secondary'}>{c.status}</Badge>}
+        {c.status && (
+          <Badge variant={c.status === 'failed' ? 'destructive' : 'secondary'} className="capitalize">
+            {c.status.replace(/_/g, ' ')}
+          </Badge>
+        )}
       </div>
 
       {c.marketing_goals.length > 0 && (

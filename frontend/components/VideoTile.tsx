@@ -1,4 +1,6 @@
-import type { ReactNode } from 'react'
+'use client'
+
+import { useState, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 /** Portrait video card shell shared by search results and trend example cards: the 9:16 <video>
@@ -24,15 +26,18 @@ export function VideoTile({
   bodyClassName?: string // metadata area (padding, gap)
   children: ReactNode
 }) {
+  // A stored/provider URL can 404 or expire; without this the browser shows a dead black player.
+  const [loadFailed, setLoadFailed] = useState(false)
   return (
     <div className={cn('flex flex-col', className)}>
-      {videoUrl ? (
+      {videoUrl && !loadFailed ? (
         <video
           src={videoUrl}
           poster={thumbUrl ?? undefined}
           controls
           playsInline
           preload="none"
+          onError={() => setLoadFailed(true)}
           className={cn('aspect-[9/16] w-full bg-black object-cover', videoClassName)}
         />
       ) : (
@@ -43,7 +48,7 @@ export function VideoTile({
             fallbackClassName,
           )}
         >
-          {fallback}
+          {loadFailed ? 'video unavailable' : fallback}
         </div>
       )}
       <div className={cn('flex flex-col', bodyClassName)}>{children}</div>

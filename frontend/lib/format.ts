@@ -4,7 +4,8 @@
 export function formatNum(n: number | null | undefined): string {
   if (n == null) return '—'
   const compact = (v: number) => (v % 1 === 0 ? String(v) : v.toFixed(1))
-  if (n >= 1_000_000) return `${compact(n / 1_000_000)}M`
+  // 999,950+ rounds to "1000.0K" at one decimal, so promote it to "1.0M".
+  if (n >= 999_950) return `${compact(n / 1_000_000)}M`
   if (n >= 1_000) return `${compact(n / 1_000)}K`
   return String(n)
 }
@@ -39,7 +40,10 @@ export function timeAgo(iso: string | null | undefined): string | null {
   return `${days}d ago`
 }
 
-/** Short date, e.g. "Jun 23, 2026". */
-export function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+/** Short date, e.g. "Jun 23, 2026"; "—" when missing/malformed. */
+export function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }

@@ -18,7 +18,7 @@ export function Navbar() {
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
-        <Link href="/" className="flex items-center gap-2">
+        <Link href="/" className="flex shrink-0 items-center gap-2">
           <Image
             src="/instaagent-wordmark.png"
             alt="InstaAgent"
@@ -27,18 +27,18 @@ export function Navbar() {
             priority
             className="h-7 w-auto opacity-90"
           />
-          <span className="text-muted-foreground text-sm font-medium">· Personal Ad Intelligence</span>
+          <span className="hidden text-sm font-medium text-muted-foreground sm:inline">· Personal Ad Intelligence</span>
         </Link>
-        <nav className="flex items-center gap-1">
+        <nav className="flex min-w-0 items-center gap-1 overflow-x-auto">
           {navLinks.map(({ href, label, primary, divider }) => {
             const isActive = pathname.startsWith(href)
             return (
-              <div key={href} className="flex items-center gap-1">
-                {divider && <span className="mx-1 h-6 w-px bg-border" aria-hidden />}
+              <div key={href} className="flex shrink-0 items-center gap-1">
+                {divider && <span className="mx-1 h-6 w-px shrink-0 bg-border" aria-hidden />}
                 <Link
                   href={href}
                   className={cn(
-                    'rounded-md px-3 py-1.5 text-sm transition-colors',
+                    'whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition-colors',
                     primary ? 'font-bold' : 'font-medium',
                     isActive
                       ? 'bg-[#fdedf4] text-[#9d1555]'

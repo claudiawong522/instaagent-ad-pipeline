@@ -1,6 +1,9 @@
 import type { Config } from 'tailwindcss'
 
 const config: Config = {
+  // The app ships a light theme only. Gate `dark:` variants behind a `.dark` class (never applied)
+  // rather than the `media` default, so a dark-OS visitor doesn't get half-flipped accent colors.
+  darkMode: 'class',
   content: [
     './pages/**/*.{js,ts,jsx,tsx,mdx}',
     './components/**/*.{js,ts,jsx,tsx,mdx}',

@@ -78,7 +78,7 @@ export default function TrendsPage() {
         })
         setError(null)
       })
-      .catch((e) => setError(String(e)))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
   }
 
@@ -131,7 +131,7 @@ export default function TrendsPage() {
         setMatched(res.formats)
         setMatchedFor(q)
       })
-      .catch((e) => setError(String(e)))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setMatching(false))
   }
 
@@ -149,10 +149,10 @@ export default function TrendsPage() {
   const inMatchMode = matched !== null
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+    <div>
       <div className="mb-1 flex items-center gap-2">
-        <TrendingUp className="h-5 w-5 text-[#9d1555]" />
-        <h1 className="text-lg font-semibold">Viral Formats</h1>
+        <TrendingUp className="h-6 w-6 text-[#9d1555]" />
+        <h1 className="text-2xl font-semibold tracking-tight">Viral Formats</h1>
         <SourcesHelp />
       </div>
       <p className="mb-4 text-sm text-muted-foreground">
@@ -340,7 +340,7 @@ function FormatCard({ format: f }: { format: ViralFormat & Partial<MatchedFormat
           {f.fit ? (
             <Badge className={cn('capitalize', FIT_STYLES[f.fit])}>
               {f.score != null ? `${f.score} · ` : ''}
-              {f.fit}
+              {f.fit === 'no' ? 'no fit' : f.fit}
             </Badge>
           ) : (
             <>
@@ -386,7 +386,13 @@ function TrendVideoCard({ video: v }: { video: TrendVideo }) {
     <VideoTile
       videoUrl={v.video_url}
       thumbUrl={v.thumb_url}
-      fallback={v.enrichment_status === 'expired' ? 'video expired' : 'processing…'}
+      fallback={
+        v.enrichment_status === 'expired'
+          ? 'video expired'
+          : v.enrichment_status === 'failed'
+            ? 'unavailable'
+            : 'processing…'
+      }
       className="overflow-hidden rounded-md border border-border bg-background"
       fallbackClassName="text-[11px]"
       bodyClassName="gap-1 p-2"
