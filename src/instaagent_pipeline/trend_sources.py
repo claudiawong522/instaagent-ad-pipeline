@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -27,19 +28,33 @@ from .ad_enrichment import (
 from .config import Config
 from .http_client import HttpClientError, request_json
 
+_MONTH_SLUGS = (
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+)
+
+
+def _newengen_insights_url(today: date | None = None) -> str:
+    """Newengen's monthly deep-dive at /insights/<month>-tiktok-trends/ — the report with one
+    section per trend, each with its own embedded example video (~9-11 trends). The weekly
+    /tiktok-trends/ hub only features ~3 and name-drops the rest in FAQ prose (which yielded
+    empty cards). The month slug rolls over, so derive it from today's date rather than
+    hard-coding a month that silently goes stale. Newengen publishes each month's report before
+    the month begins, so the current month is reliably live. (Month names are hard-coded rather
+    than strftime('%B') so the slug never depends on the server locale.)"""
+    return f"https://newengen.com/insights/{_MONTH_SLUGS[(today or date.today()).month - 1]}-tiktok-trends/"
+
+
 # Public web trend pages, no auth. Override via the TREND_SOURCES env var (JSON list of
-# {"name", "url", optional "render"}). These are weekly-updated TikTok/Reel trend roundups.
-# render:"js" pages inject their example-video links client-side (no <a> in the static HTML),
-# so they must be fetched through a headless browser (Apify) instead of plain requests.
-DEFAULT_TREND_SOURCES: list[dict[str, str]] = [
-    {"name": "ramdam", "url": "https://www.ramd.am/blog/trends-tiktok"},
-    # Newengen's monthly "insights" report is the deep-dive: one section per trend, each with
-    # its own embedded example video (~9-11 trends). The weekly /tiktok-trends/ hub only
-    # features ~3 and name-drops the rest in FAQ prose, so it yielded mostly empty cards. Point
-    # at the current month's report; update the slug (…/insights/<month>-tiktok-trends/) monthly.
-    {"name": "newengen", "url": "https://newengen.com/insights/june-tiktok-trends/", "render": "js"},
-    {"name": "socialbee", "url": "https://socialbee.com/blog/tiktok-trends/"},
-]
+# {"name", "url", optional "render"}). render:"js" pages inject their example-video links
+# client-side (no <a> in the static HTML), so they must be fetched through a headless browser
+# (Apify) instead of plain requests. Built fresh per call so newengen's month slug stays current.
+def default_trend_sources() -> list[dict[str, str]]:
+    return [
+        {"name": "ramdam", "url": "https://www.ramd.am/blog/trends-tiktok"},
+        {"name": "newengen", "url": _newengen_insights_url(), "render": "js"},
+        {"name": "socialbee", "url": "https://socialbee.com/blog/tiktok-trends/"},
+    ]
 
 # Patterns that identify a link as an actual example *video post* (not a tag, sound,
 # profile, or hashtag page, which TikTok also links and we must not treat as examples).
@@ -73,7 +88,7 @@ class TrendIssue:
 def resolve_trend_sources(config: Config) -> list[dict[str, str]]:
     """The configured trend pages, falling back to the built-in defaults."""
     if not config.trend_sources_json:
-        return DEFAULT_TREND_SOURCES
+        return default_trend_sources()
     try:
         parsed = json.loads(config.trend_sources_json)
     except json.JSONDecodeError as exc:

@@ -21,7 +21,7 @@ class Config:
     enrichment_provider: str = "openrouter"
     # Web trend pages to scrape viral formats from (trend_sources.py). JSON list of
     # {"name": ..., "url": ...} via the TREND_SOURCES env var; falls back to
-    # DEFAULT_TREND_SOURCES when unset. Each page is fetched, stripped to text, and parsed
+    # default_trend_sources() when unset. Each page is fetched, stripped to text, and parsed
     # by the LLM into formats. None means "use the built-in defaults".
     trend_sources_json: str | None = None
     # Relevance floor for the search-space KNN. Cosine scores scale with query length

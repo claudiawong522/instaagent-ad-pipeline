@@ -49,7 +49,7 @@ class TrendSourceResult:
     videos_ingested: int = 0
     videos_skipped: int = 0  # YouTube, unresolvable short links, or non-video links — not re-scraped
     videos_already_ingested: int = 0  # in ugc_items from a prior run — not re-scraped (metrics not refreshed)
-    formats_removed: int = 0  # stale rows from an earlier page version, pruned after re-link
+    formats_removed: int = 0  # empty duplicate rows a rename left behind, pruned after re-link
     error: str | None = None
 
 
@@ -143,20 +143,26 @@ def _relink_existing_videos(
             supabase.update_by_id("ugc_items", str(row["id"]), {"format_id": target})
 
 
-def _prune_stale_formats(
-    supabase: SupabaseClient, source_name: str, current_hash: str
-) -> int:
-    """Delete this source's viral_formats rows left over from an earlier page version
-    (content_hash != current). Their videos were just re-linked onto the current rows, so
-    what remains are empty renamed/removed trends. content_hash is the stable per-page-version
-    identity — format_name is not (the LLM renames trends between fetches)."""
-    stale = supabase.select(
-        "viral_formats",
-        {"select": "id", "source_name": f"eq.{source_name}", "content_hash": f"neq.{current_hash}"},
-    )
-    for row in stale:
-        supabase.delete("viral_formats", {"id": f"eq.{row['id']}"})
-    return len(stale)
+def _prune_empty_formats(supabase: SupabaseClient, source_name: str) -> int:
+    """Delete this source's viral_formats rows that have no example video (0 linked ugc_items),
+    evaluated AFTER the current render's videos are re-linked. An empty row is a trend the page
+    renamed between renders — its video just moved to the new-name row, leaving the old name
+    empty (e.g. "Hate That I Made U" vs '"Hate That I Made U Love Me" Dance').
+
+    Pruning by EMPTINESS — not by content_hash — is what makes this safe under a flaky/partial
+    render: the JS page loads a random subset of its trend embeds each fetch, so a trend absent
+    from this render still has its video and is NOT empty, so it survives here. Only genuinely
+    video-less rows are dropped, so a partial render can never delete a real trend (the earlier
+    hash-based prune did exactly that — it deleted every row from a different page version)."""
+    rows = supabase.select("viral_formats", {"select": "id", "source_name": f"eq.{source_name}"})
+    if not rows:
+        return 0
+    ids = [str(r["id"]) for r in rows]
+    have = _formats_with_videos(supabase, ids)
+    empty = [i for i in ids if i not in have]
+    for fid in empty:
+        supabase.delete("viral_formats", {"id": f"eq.{fid}"})
+    return len(empty)
 
 
 # ── URL helpers ───────────────────────────────────────────────────────────────────
@@ -308,8 +314,7 @@ def ingest_trends(
                 continue
 
             # A JS-rendered page whose TikTok embeds didn't finish loading parses to formats
-            # with no example videos at all. Persisting that would spawn empty cards and, worse,
-            # let _prune_stale_formats delete the good rows from a healthy render. Treat a
+            # with no example videos at all. Persisting that would spawn empty cards. Treat a
             # zero-video JS render as incomplete: skip it without writing (existing data stays
             # intact; the next scheduled run retries). Static sources can legitimately list a
             # format with no example link, so this guard is JS-only.
@@ -411,9 +416,9 @@ def ingest_trends(
             )
             sr.videos_ingested = tt_written + ig_written
             _annotate_formats(supabase, fmt_counts)
-            # The DB should mirror the current page: drop rows left behind by earlier page
-            # versions (renamed/removed trends), whose videos have just been re-linked away.
-            sr.formats_removed = _prune_stale_formats(supabase, name, issue.content_hash)
+            # Drop empty rows a rename left behind (video re-linked to the new-name row). Safe
+            # under partial renders: trends this render missed keep their video and survive.
+            sr.formats_removed = _prune_empty_formats(supabase, name)
             _record_scrape_event(
                 supabase, run_id, len(tiktok_urls) + len(ig_urls), sr.videos_ingested
             )

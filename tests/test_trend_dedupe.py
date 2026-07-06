@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from instaagent_pipeline.trend_ingest import (
     _dedupe_formats,
-    _prune_stale_formats,
+    _prune_empty_formats,
     _relink_existing_videos,
     _video_key,
 )
@@ -95,15 +95,31 @@ def test_relink_noop_when_already_correct():
     assert ugc[0]["format_id"] == "row"
 
 
-def test_prune_drops_only_old_page_version_rows():
+def test_prune_removes_rename_leftover_keeps_video_rows():
+    # A rename between renders left "X" empty (its video moved to the fuller-named row); a trend
+    # this render simply missed keeps its video. Prune drops only the empty one, and never the
+    # missed trend or a different source.
     formats = [
-        {"id": "cur1", "source_name": "socialbee", "content_hash": "H2"},
-        {"id": "old1", "source_name": "socialbee", "content_hash": "H1"},  # stale, empty after relink
-        {"id": "old2", "source_name": "socialbee", "content_hash": "H1"},  # trend dropped from page
+        {"id": "keep", "source_name": "newengen", "format_name": "X Love Me Dance"},
+        {"id": "missed", "source_name": "newengen", "format_name": "Missed this render"},
+        {"id": "empty", "source_name": "newengen", "format_name": "X"},
+        {"id": "other_src", "source_name": "ramdam", "format_name": "Y"},
     ]
-    ugc = [{"id": "u2", "external_id": "999", "format_id": "old2", "run_id": "R"}]  # cascades away
+    ugc = [
+        {"id": "u1", "format_id": "keep", "run_id": "R"},
+        {"id": "u2", "format_id": "missed", "run_id": "R"},
+    ]
     sb = FakeSupabase(ugc, formats)
-    removed = _prune_stale_formats(sb, "socialbee", "H2")
-    assert removed == 2
-    assert [f["id"] for f in formats] == ["cur1"]
-    assert ugc == []  # cascade deleted the orphaned video
+    removed = _prune_empty_formats(sb, "newengen")
+    assert removed == 1
+    assert {f["id"] for f in sb.formats} == {"keep", "missed", "other_src"}
+
+
+def test_prune_noop_when_all_have_videos():
+    formats = [{"id": "a", "source_name": "newengen", "format_name": "A"}]
+    ugc = [{"id": "u1", "format_id": "a", "run_id": "R"}]
+    sb = FakeSupabase(ugc, formats)
+    assert _prune_empty_formats(sb, "newengen") == 0
+    assert len(sb.formats) == 1
+
+
