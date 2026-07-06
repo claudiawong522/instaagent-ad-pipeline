@@ -125,6 +125,12 @@ create table if not exists viral_formats (
   format_description text,
   niche_constraint text,
   niche_constraint_model text,
+  -- Structured, machine-matchable fields written by classify-formats (see migration 027),
+  -- powering product→trend matching and the versatility badge. product_requirements is the
+  -- concrete attributes a product must show for the format to work (empty = any product).
+  versatility text check (versatility is null or versatility in ('universal', 'broad', 'niche')),
+  fit_niches text[],
+  product_requirements text[],
   classified_at timestamptz,
   created_at timestamptz not null default now(),
   unique (source_name, format_name)
@@ -205,9 +211,11 @@ create table if not exists item_enrichments (
 create table if not exists item_embeddings (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references pipeline_runs(id) on delete cascade,
-  item_type text not null check (item_type in ('paid_ad', 'ugc_item')),
+  -- 'viral_format' (item_id = viral_formats.id) in the 'trend' space powers product→trend
+  -- recall; see migration 027. The paid_ad/ugc_item content spaces are unaffected.
+  item_type text not null check (item_type in ('paid_ad', 'ugc_item', 'viral_format')),
   item_id uuid not null,
-  space text not null check (space in ('icp', 'format', 'hook', 'search')),
+  space text not null check (space in ('icp', 'format', 'hook', 'search', 'trend')),
   embedding_model text not null,
   source_text text not null,
   embedding vector(1024) not null,
@@ -303,6 +311,11 @@ create index if not exists item_embeddings_search_hnsw
 create index if not exists item_embeddings_icp_hnsw
   on item_embeddings using hnsw (embedding vector_cosine_ops)
   where space = 'icp';
+
+-- Product→trend recall queries the 'trend' space (viral_format embeddings); see migration 027.
+create index if not exists item_embeddings_trend_hnsw
+  on item_embeddings using hnsw (embedding vector_cosine_ops)
+  where space = 'trend';
 
 create or replace function match_item_embeddings(
   p_query vector(1024),

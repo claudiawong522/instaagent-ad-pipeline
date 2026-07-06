@@ -1,12 +1,12 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { HelpCircle, Loader2, Search, TrendingUp } from 'lucide-react'
+import { HelpCircle, Loader2, Search, Sparkles, TrendingUp, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
-import { listTrendFormats } from '@/lib/api'
-import type { ViralFormat, TrendVideo } from '@/lib/types'
+import { listTrendFormats, matchProduct } from '@/lib/api'
+import type { MatchedFormat, ViralFormat, TrendVideo } from '@/lib/types'
 
 // Newsletter/trend-roundup sources, kept in sync with DEFAULT_TREND_SOURCES in
 // src/instaagent_pipeline/trend_sources.py — the pages these formats are scraped from.
@@ -30,15 +30,21 @@ export default function TrendsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [source, setSource] = useState<string | null>(null)
-  const [query, setQuery] = useState('')
   // Chips persist across filtered loads: accumulate every source ever seen
   // (the initial unfiltered load seeds the full set) instead of deriving from
   // the currently filtered `formats`.
   const [sources, setSources] = useState<string[]>([])
 
-  const load = (opts?: { sourceName?: string | null; q?: string | null }) => {
+  // Product-match mode: when `matched` is set, the list is ranked by fit to a product
+  // (POST /trends/match) instead of browsed. Empty box / clear returns to browse.
+  const [product, setProduct] = useState('')
+  const [matched, setMatched] = useState<MatchedFormat[] | null>(null)
+  const [matching, setMatching] = useState(false)
+  const [matchedFor, setMatchedFor] = useState('')
+
+  const load = (opts?: { sourceName?: string | null }) => {
     setLoading(true)
-    listTrendFormats({ sourceName: opts?.sourceName ?? null, q: opts?.q ?? null })
+    listTrendFormats({ sourceName: opts?.sourceName ?? null })
       .then((res) => {
         setFormats(res.formats)
         setSources((prev) => {
@@ -58,13 +64,34 @@ export default function TrendsPage() {
 
   const selectSource = (s: string | null) => {
     setSource(s)
-    load({ sourceName: s, q: query.trim() || null })
+    load({ sourceName: s })
   }
 
-  const onSearch = (e: React.FormEvent) => {
+  const onMatch = (e: React.FormEvent) => {
     e.preventDefault()
-    load({ sourceName: source, q: query.trim() || null })
+    const q = product.trim()
+    if (!q) {
+      clearMatch()
+      return
+    }
+    setMatching(true)
+    setError(null)
+    matchProduct({ product: q })
+      .then((res) => {
+        setMatched(res.formats)
+        setMatchedFor(q)
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => setMatching(false))
   }
+
+  const clearMatch = () => {
+    setMatched(null)
+    setMatchedFor('')
+    setProduct('')
+  }
+
+  const inMatchMode = matched !== null
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
@@ -74,38 +101,75 @@ export default function TrendsPage() {
         <SourcesHelp />
       </div>
       <p className="mb-4 text-sm text-muted-foreground">
-        Trending TikTok/Reel formats scraped from web trend pages, ranked by their example
-        videos&rsquo; live views. Each card shows the format&rsquo;s marketing constraint.
+        Trending TikTok/Reel formats scraped from web trend pages. Describe a product to rank them
+        by how well you could reuse each one — or browse all, ranked by live views.
       </p>
 
-      <form onSubmit={onSearch} className="mb-3 flex items-center gap-2">
+      <form onSubmit={onMatch} className="mb-3 flex items-center gap-2">
         <div className="relative flex-1">
-          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Sparkles className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9d1555]" />
           <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Filter by constraint, e.g. beauty, food, universal…"
+            value={product}
+            onChange={(e) => setProduct(e.target.value)}
+            placeholder="Describe your product, e.g. magnesium sleep gummy…"
             className="pl-8"
           />
         </div>
+        <button
+          type="submit"
+          disabled={matching}
+          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-[#9d1555] px-3 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          {matching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+          Match
+        </button>
       </form>
 
-      {sources.length > 0 && (
-        <div className="mb-5 flex flex-wrap items-center gap-1.5">
-          <span className="text-xs font-medium text-muted-foreground">Source</span>
-          <SourceChip label="all" active={source === null} onClick={() => selectSource(null)} />
-          {sources.map((s) => (
-            <SourceChip key={s} label={s} active={source === s} onClick={() => selectSource(s)} />
-          ))}
+      {inMatchMode ? (
+        <div className="mb-5 flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">
+            Ranked for <span className="font-medium text-foreground">{matchedFor}</span>
+          </span>
+          <button
+            type="button"
+            onClick={clearMatch}
+            className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-3 w-3" /> clear
+          </button>
         </div>
+      ) : (
+        sources.length > 0 && (
+          <div className="mb-5 flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">Source</span>
+            <SourceChip label="all" active={source === null} onClick={() => selectSource(null)} />
+            {sources.map((s) => (
+              <SourceChip key={s} label={s} active={source === s} onClick={() => selectSource(s)} />
+            ))}
+          </div>
+        )
       )}
 
-      {loading ? (
+      {matching ? (
+        <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> Matching formats to your product…
+        </div>
+      ) : loading && !inMatchMode ? (
         <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading formats…
         </div>
       ) : error ? (
         <p className="py-16 text-sm text-destructive">{error}</p>
+      ) : inMatchMode ? (
+        matched.length === 0 ? (
+          <p className="py-16 text-sm text-muted-foreground">No formats to match yet.</p>
+        ) : (
+          <div className="flex flex-col gap-4">
+            {matched.map((f) => (
+              <FormatCard key={f.id} format={f} />
+            ))}
+          </div>
+        )
       ) : formats.length === 0 ? (
         <p className="py-16 text-sm text-muted-foreground">
           No formats yet. Run <code className="rounded bg-muted px-1">ingest-trends</code> then{' '}
@@ -184,13 +248,29 @@ function SourceChip({ label, active, onClick }: { label: string; active: boolean
   )
 }
 
-function FormatCard({ format: f }: { format: ViralFormat }) {
+const VERSATILITY_STYLES: Record<string, string> = {
+  universal: 'border-transparent bg-emerald-100 text-emerald-700',
+  broad: 'border-transparent bg-amber-100 text-amber-700',
+  niche: 'border-transparent bg-muted text-muted-foreground',
+}
+
+const FIT_STYLES: Record<string, string> = {
+  great: 'border-transparent bg-emerald-100 text-emerald-700',
+  workable: 'border-transparent bg-amber-100 text-amber-700',
+  no: 'border-transparent bg-muted text-muted-foreground',
+}
+
+function FormatCard({ format: f }: { format: ViralFormat & Partial<MatchedFormat> }) {
+  const isNoFit = f.fit === 'no'
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
+    <div className={cn('rounded-lg border border-border bg-card p-4', isNoFit && 'opacity-60')}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-base font-semibold">{f.format_name || 'untitled format'}</h2>
+            {f.versatility && (
+              <Badge className={cn('capitalize', VERSATILITY_STYLES[f.versatility])}>{f.versatility}</Badge>
+            )}
             {f.source_name && (
               <Badge variant="secondary" className="capitalize">{f.source_name}</Badge>
             )}
@@ -200,21 +280,36 @@ function FormatCard({ format: f }: { format: ViralFormat }) {
           )}
         </div>
         <div className="whitespace-nowrap text-right text-xs text-muted-foreground">
-          <div className="text-sm font-semibold text-foreground">{formatNum(f.total_views)} views</div>
-          <div>{f.video_count} example{f.video_count === 1 ? '' : 's'}</div>
+          {f.fit ? (
+            <Badge className={cn('capitalize', FIT_STYLES[f.fit])}>
+              {f.score != null ? `${f.score} · ` : ''}
+              {f.fit}
+            </Badge>
+          ) : (
+            <>
+              <div className="text-sm font-semibold text-foreground">{formatNum(f.total_views)} views</div>
+              <div>{f.video_count} example{f.video_count === 1 ? '' : 's'}</div>
+            </>
+          )}
         </div>
       </div>
 
-      {f.niche_constraint ? (
+      {/* Match mode shows how to use the format for the product; browse mode shows the constraint. */}
+      {f.fit && f.idea ? (
+        <div className="mt-2 flex items-start gap-1.5">
+          <Badge variant="outline" className="shrink-0">idea</Badge>
+          <p className="text-sm">{f.idea}</p>
+        </div>
+      ) : !f.fit && f.niche_constraint ? (
         <div className="mt-2 flex items-start gap-1.5">
           <Badge variant="outline" className="shrink-0">constraint</Badge>
           <p className="text-sm">{f.niche_constraint}</p>
         </div>
-      ) : (
+      ) : !f.fit ? (
         <p className="mt-2 text-xs italic text-muted-foreground">
           Not yet classified — run <code className="rounded bg-muted px-1">classify-formats</code>.
         </p>
-      )}
+      ) : null}
 
       {f.videos.length > 0 ? (
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">

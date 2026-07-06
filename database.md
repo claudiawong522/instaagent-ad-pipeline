@@ -234,7 +234,7 @@ Unique constraint: `unique (run_id, external_id)`.
 
 ### `viral_formats`
 
-Trend pipeline (migration `025`). One row per viral format scraped from a web trend page (`ingest-trends`); example videos hang off it via `ugc_items.format_id` and a format is ranked on the `/trends` dashboard by its videos' aggregate live views. The free-form `niche_constraint` is written by `classify-formats`. Each source has a persistent product/`pipeline_run` (`products.name = 'Trend: <source>'`).
+Trend pipeline (migration `025`). One row per viral format scraped from a web trend page (`ingest-trends`); example videos hang off it via `ugc_items.format_id` and a format is ranked on the `/trends` dashboard by its videos' aggregate live views. `classify-formats` writes the free-form `niche_constraint` plus (migration `027`) the structured match fields `versatility` / `fit_niches` / `product_requirements`, which power product→trend matching (`POST /trends/match`) and the versatility badge. Each source has a persistent product/`pipeline_run` (`products.name = 'Trend: <source>'`).
 
 | Column | Type | Constraints / default | Notes |
 | --- | --- | --- | --- |
@@ -247,6 +247,9 @@ Trend pipeline (migration `025`). One row per viral format scraped from a web tr
 | `format_name` | `text` | Not null | Short name of the format. |
 | `format_description` | `text` | Nullable | The trend description as written on the page. |
 | `niche_constraint` | `text` | Nullable | Free-form marketing constraint (which niches the format suits); written by `classify-formats`. |
+| `versatility` | `text` | Nullable, check `universal`/`broad`/`niche` (migration `027`) | Coarse reuse bucket; drives the badge and the product→trend structured filter. Written by `classify-formats`. |
+| `fit_niches` | `text[]` | Nullable (migration `027`) | Product niches the format suits (`{}` = any product). Written by `classify-formats`. |
+| `product_requirements` | `text[]` | Nullable (migration `027`) | Concrete attributes a product must show to reuse the format (`{}` = any product); the key signal for whether a product "fits none". Written by `classify-formats`. |
 | `ingest_note` | `text` | Nullable (migration `026`) | Why the format has no playable example video (e.g. IG/YT link not scraped, short link unresolved, source listed no link); `NULL` when it has one. Written by `ingest-trends`, shown on the empty card. |
 | `niche_constraint_model` | `text` | Nullable | OpenRouter model that wrote the constraint. |
 | `classified_at` | `timestamptz` | Nullable | When the constraint was written. |
@@ -302,13 +305,15 @@ Stores one embedding vector per item per embedding space, written by `embed-item
 - `search` — `ai_description` as core text, followed by a labeled tag block (`content_format`, `main_category`, `content_category`, `product_category`, `video_topic`, `niches`, `hook`, `setting`, `primary_emotion`, `brand_mentioned`), with the full transcript appended.
 - `icp` — `persona` + `target_demographic` (reserved for future clustering use).
 
+A third `trend` space (migration `027`, `item_type='viral_format'`, `item_id=viral_formats.id`) is written by `classify-formats`, not `embed-items`: one vector per viral format built by `build_trend_text` (format name/description + `fit_niches` + `product_requirements`). It powers product→trend vector recall (`POST /trends/match` → `match_item_embeddings` with `p_space='trend'`).
+
 | Column | Type | Constraints / default | Notes |
 | --- | --- | --- | --- |
 | `id` | `uuid` | Primary key, default `gen_random_uuid()` | Embedding row identifier. |
 | `run_id` | `uuid` | Not null, references `pipeline_runs(id)` on delete cascade | Parent run. |
-| `item_type` | `text` | Not null, check in (`paid_ad`, `ugc_item`) | Which content table the item lives in. |
-| `item_id` | `uuid` | Not null | `paid_ads.paid_ad_row_id` or `ugc_items.id` (no FK — points at one of two tables). |
-| `space` | `text` | Not null, check in (`icp`, `search`) | Embedding space. Never concatenated across spaces. The DB check still allows the legacy values (`icp`, `format`, `hook`, `search`) from migration `015`, but `embed-items` only writes `icp` + `search`. |
+| `item_type` | `text` | Not null, check in (`paid_ad`, `ugc_item`, `viral_format`) | Which table the item lives in (`viral_format` = `viral_formats.id`, migration `027`). |
+| `item_id` | `uuid` | Not null | `paid_ads.paid_ad_row_id`, `ugc_items.id`, or `viral_formats.id` (no FK — points at one of several tables). |
+| `space` | `text` | Not null, check in (`icp`, `search`, `trend`) | Embedding space. Never concatenated across spaces. The DB check allows the legacy values (`icp`, `format`, `hook`, `search`) plus `trend` (migration `027`); `embed-items` writes `icp` + `search`, `classify-formats` writes `trend`. |
 | `embedding_model` | `text` | Not null | Voyage model name, e.g. `voyage-4-lite`. |
 | `source_text` | `text` | Not null | The exact text that was embedded, for debugging and dedupe. |
 | `embedding` | `vector(1024)` | Not null | pgvector embedding. |

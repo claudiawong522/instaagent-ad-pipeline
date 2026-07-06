@@ -2,6 +2,7 @@
 
 GET /trends/formats returns each viral_formats row with its example videos (re-scraped
 ugc_items, source='trend') grouped under it, ranked by the videos' aggregate live views.
+POST /trends/match ranks those formats by how well a given product could reuse each one.
 """
 
 from __future__ import annotations
@@ -9,8 +10,17 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+
+from ..http_client import HttpClientError
+from .match import match_product
 
 router = APIRouter()
+
+
+class MatchRequest(BaseModel):
+    product: str
+    limit: int | None = None
 
 # ugc_items fields the cards need (storage_* are filled by enrichment's MP4 persist).
 _VIDEO_COLUMNS = (
@@ -89,6 +99,29 @@ def list_trend_formats(
     # Rank formats by aggregate live views (most viral first).
     out.sort(key=lambda f: f["total_views"], reverse=True)
     return {"formats": out}
+
+
+@router.post("/trends/match")
+def match_trends(request: Request, body: MatchRequest) -> dict[str, Any]:
+    """Rank viral formats by how well the given product could reuse each one. Each returned
+    format carries a fit verdict (great/workable/no), a 0-100 score, and a one-line idea for
+    using it with this product. Same card shape as /trends/formats, plus those match fields."""
+    supabase = _supabase(request)
+    config = request.app.state.config
+    if not (body.product or "").strip():
+        return {"formats": []}
+    try:
+        formats = match_product(
+            config,
+            supabase,
+            product=body.product,
+            limit=body.limit or 30,
+        )
+    except HttpClientError as exc:
+        raise HTTPException(502, f"Upstream error while matching: {exc}") from exc
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"formats": formats}
 
 
 def _video_out(row: dict[str, Any]) -> dict[str, Any]:

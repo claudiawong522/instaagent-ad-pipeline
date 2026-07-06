@@ -14,6 +14,7 @@ import type {
   ScrapeStats,
   ScrapeEventsResponse,
   TrendFormatsResponse,
+  MatchFormatsResponse,
 } from './types'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -99,6 +100,16 @@ export async function listTrendFormats(opts?: {
   if (opts?.minViews) params.set('min_views', String(opts.minViews))
   const qs = params.toString()
   return request(`/trends/formats${qs ? `?${qs}` : ''}`)
+}
+
+export async function matchProduct(opts: {
+  product: string
+  limit?: number | null
+}): Promise<MatchFormatsResponse> {
+  return request('/trends/match', {
+    method: 'POST',
+    body: JSON.stringify({ product: opts.product, limit: opts.limit ?? null }),
+  })
 }
 
 export async function getScrapeStats(runId: string): Promise<ScrapeStats> {

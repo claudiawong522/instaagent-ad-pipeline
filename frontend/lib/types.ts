@@ -226,7 +226,10 @@ export interface ViralFormat {
   format_name: string | null
   format_description: string | null
   niche_constraint: string | null // free-form, LLM-written marketing constraint
-  ingest_note: string | null // why the format has no playable video (null when it has one)
+  versatility?: 'universal' | 'broad' | 'niche' | null // coarse reuse bucket (classify-formats)
+  fit_niches?: string[] // niches the format suits ([] = any product)
+  product_requirements?: string[] // what a product must show to reuse it ([] = any product)
+  ingest_note?: string | null // why the format has no playable video (null when it has one)
   video_count: number
   total_views: number // aggregate live views across example videos (ranking key)
   videos: TrendVideo[]
@@ -234,6 +237,17 @@ export interface ViralFormat {
 
 export interface TrendFormatsResponse {
   formats: ViralFormat[]
+}
+
+// A viral format ranked against a product by POST /trends/match: ViralFormat + fit fields.
+export interface MatchedFormat extends ViralFormat {
+  fit: 'great' | 'workable' | 'no'
+  score: number // 0-100, how well the product suits the format (ranking key)
+  idea: string // one-line how-to-use-it-for-your-product ('' when fit is 'no')
+}
+
+export interface MatchFormatsResponse {
+  formats: MatchedFormat[]
 }
 
 export interface RunSummary {
