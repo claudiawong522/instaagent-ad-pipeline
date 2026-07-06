@@ -24,6 +24,15 @@ function formatNum(n: number | null | undefined): string {
   return String(n)
 }
 
+// Posted-date presets → an ISO cutoff sent to the API (filters example videos by date_created).
+const RANGE_DAYS: Record<string, number> = { '7d': 7, '30d': 30, '90d': 90 }
+const cutoffFor = (r: string | null): string | null =>
+  r && RANGE_DAYS[r] ? new Date(Date.now() - RANGE_DAYS[r] * 86400000).toISOString() : null
+
+function fmtDate(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
 export default function TrendsPage() {
   const [formats, setFormats] = useState<ViralFormat[]>([])
   const [loading, setLoading] = useState(true)
@@ -33,6 +42,8 @@ export default function TrendsPage() {
   // (the initial unfiltered load seeds the full set) instead of deriving from
   // the currently filtered `formats`.
   const [sources, setSources] = useState<string[]>([])
+  // Posted-date filter: keep formats with an example video posted within the window.
+  const [dateRange, setDateRange] = useState<string | null>(null)
 
   // Product-match mode: when `matched` is set, the list is ranked by fit to a product
   // (POST /trends/match) instead of browsed. Empty box / clear returns to browse.
@@ -41,9 +52,9 @@ export default function TrendsPage() {
   const [matching, setMatching] = useState(false)
   const [matchedFor, setMatchedFor] = useState('')
 
-  const load = (opts?: { sourceName?: string | null }) => {
+  const load = (opts?: { sourceName?: string | null; postedAfter?: string | null }) => {
     setLoading(true)
-    listTrendFormats({ sourceName: opts?.sourceName ?? null })
+    listTrendFormats({ sourceName: opts?.sourceName ?? null, postedAfter: opts?.postedAfter ?? null })
       .then((res) => {
         setFormats(res.formats)
         setSources((prev) => {
@@ -63,7 +74,12 @@ export default function TrendsPage() {
 
   const selectSource = (s: string | null) => {
     setSource(s)
-    load({ sourceName: s })
+    load({ sourceName: s, postedAfter: cutoffFor(dateRange) })
+  }
+
+  const selectDateRange = (r: string | null) => {
+    setDateRange(r)
+    load({ sourceName: source, postedAfter: cutoffFor(r) })
   }
 
   const onMatch = (e: React.FormEvent) => {
@@ -138,15 +154,24 @@ export default function TrendsPage() {
           </button>
         </div>
       ) : (
-        sources.length > 0 && (
-          <div className="mb-5 flex flex-wrap items-center gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Source</span>
-            <SourceChip label="all" active={source === null} onClick={() => selectSource(null)} />
-            {sources.map((s) => (
-              <SourceChip key={s} label={s} active={source === s} onClick={() => selectSource(s)} />
+        <div className="mb-5 flex flex-col gap-1.5">
+          {sources.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Source</span>
+              <SourceChip label="all" active={source === null} onClick={() => selectSource(null)} />
+              {sources.map((s) => (
+                <SourceChip key={s} label={s} active={source === s} onClick={() => selectSource(s)} />
+              ))}
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">Posted</span>
+            <SourceChip label="any" active={dateRange === null} onClick={() => selectDateRange(null)} />
+            {['7d', '30d', '90d'].map((r) => (
+              <SourceChip key={r} label={r} active={dateRange === r} onClick={() => selectDateRange(r)} />
             ))}
           </div>
-        )
+        </div>
       )}
 
       {matching ? (
@@ -170,12 +195,19 @@ export default function TrendsPage() {
           </div>
         )
       ) : formats.length === 0 ? (
-        <p className="py-16 text-sm text-muted-foreground">
-          No formats yet. Run <code className="rounded bg-muted px-1">ingest-trends</code> then{' '}
-          <code className="rounded bg-muted px-1">classify-formats</code>.
-        </p>
+        source !== null || dateRange !== null ? (
+          <p className="py-16 text-sm text-muted-foreground">No formats match this filter.</p>
+        ) : (
+          <p className="py-16 text-sm text-muted-foreground">
+            No formats yet. Run <code className="rounded bg-muted px-1">ingest-trends</code> then{' '}
+            <code className="rounded bg-muted px-1">classify-formats</code>.
+          </p>
+        )
       ) : (
         <div className="flex flex-col gap-4">
+          <p className="text-xs text-muted-foreground">
+            {formats.length} format{formats.length === 1 ? '' : 's'}
+          </p>
           {formats.map((f) => (
             <FormatCard key={f.id} format={f} />
           ))}
@@ -344,6 +376,7 @@ function TrendVideoCard({ video: v }: { video: TrendVideo }) {
         <div className="flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
           {v.views != null && <span>{formatNum(v.views)} views</span>}
           {v.likes != null && <span>{formatNum(v.likes)} likes</span>}
+          {v.date_created && <span>{fmtDate(v.date_created)}</span>}
         </div>
         {v.handle && <span className="truncate text-[11px] text-muted-foreground">@{v.handle}</span>}
         {v.original_url && (

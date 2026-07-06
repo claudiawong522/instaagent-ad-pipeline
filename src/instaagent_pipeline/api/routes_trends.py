@@ -25,7 +25,7 @@ class MatchRequest(BaseModel):
 # ugc_items fields the cards need (storage_* are filled by enrichment's MP4 persist).
 _VIDEO_COLUMNS = (
     "id,format_id,storage_video_url,storage_thumb_url,video_url,cover,views,likes,"
-    "virality_score,handle,description,enrichment_status,source_metrics"
+    "virality_score,handle,description,enrichment_status,source_metrics,date_created"
 )
 
 
@@ -42,6 +42,7 @@ def list_trend_formats(
     source_name: str | None = None,
     q: str | None = None,
     min_views: int = 0,
+    posted_after: str | None = None,
     limit: int = 200,
 ) -> dict[str, Any]:
     supabase = _supabase(request)
@@ -62,21 +63,25 @@ def list_trend_formats(
     format_ids = [str(f["id"]) for f in formats if f.get("id")]
     videos_by_format: dict[str, list[dict[str, Any]]] = {}
     if format_ids:
-        rows = supabase.select(
-            "ugc_items",
-            {
-                "select": _VIDEO_COLUMNS,
-                "format_id": f"in.({','.join(format_ids)})",
-                "order": "views.desc.nullslast",
-                "limit": "2000",
-            },
-        )
+        video_params: dict[str, Any] = {
+            "select": _VIDEO_COLUMNS,
+            "format_id": f"in.({','.join(format_ids)})",
+            "order": "views.desc.nullslast",
+            "limit": "2000",
+        }
+        if posted_after:
+            video_params["date_created"] = f"gte.{posted_after}"
+        rows = supabase.select("ugc_items", video_params)
         for row in rows:
             videos_by_format.setdefault(str(row.get("format_id")), []).append(_video_out(row))
 
     out: list[dict[str, Any]] = []
     for fmt in formats:
         videos = videos_by_format.get(str(fmt["id"]), [])
+        # With a posted-date filter on, a format is only kept if it still has an
+        # in-window example video (empty ones would otherwise pass the min_views gate).
+        if posted_after and not videos:
+            continue
         agg_views = sum(v["views"] or 0 for v in videos)
         if agg_views < min_views:
             continue
@@ -137,4 +142,5 @@ def _video_out(row: dict[str, Any]) -> dict[str, Any]:
         "handle": row.get("handle"),
         "description": row.get("description"),
         "enrichment_status": row.get("enrichment_status"),
+        "date_created": row.get("date_created"),
     }

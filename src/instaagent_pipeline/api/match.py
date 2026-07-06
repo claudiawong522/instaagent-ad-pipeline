@@ -37,7 +37,7 @@ _FORMAT_COLUMNS = (
 # ugc_items fields the cards need (mirrors routes_trends).
 _VIDEO_COLUMNS = (
     "id,format_id,storage_video_url,storage_thumb_url,video_url,cover,views,likes,"
-    "virality_score,handle,description,enrichment_status,source_metrics"
+    "virality_score,handle,description,enrichment_status,source_metrics,date_created"
 )
 
 MATCH_SCHEMA = {
@@ -281,6 +281,7 @@ def _hydrate_videos(supabase: SupabaseClient, format_ids: list[str]) -> dict[str
                 "handle": row.get("handle"),
                 "description": row.get("description"),
                 "enrichment_status": row.get("enrichment_status"),
+                "date_created": row.get("date_created"),
             }
         )
     return videos_by_format

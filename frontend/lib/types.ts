@@ -216,6 +216,7 @@ export interface TrendVideo {
   handle: string | null
   description: string | null
   enrichment_status: string | null
+  date_created: string | null // when the video was posted (ISO)
 }
 
 export interface ViralFormat {

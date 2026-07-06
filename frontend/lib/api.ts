@@ -93,11 +93,13 @@ export async function listTrendFormats(opts?: {
   sourceName?: string | null
   q?: string | null
   minViews?: number | null
+  postedAfter?: string | null
 }): Promise<TrendFormatsResponse> {
   const params = new URLSearchParams()
   if (opts?.sourceName) params.set('source_name', opts.sourceName)
   if (opts?.q) params.set('q', opts.q)
   if (opts?.minViews) params.set('min_views', String(opts.minViews))
+  if (opts?.postedAfter) params.set('posted_after', opts.postedAfter)
   const qs = params.toString()
   return request(`/trends/formats${qs ? `?${qs}` : ''}`)
 }
