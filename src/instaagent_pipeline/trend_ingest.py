@@ -34,7 +34,9 @@ from .normalizers import normalize_instagram_post, normalize_tiktok_item
 from .organic_enrichment import enrich_organic_items
 from .supabase_client import SupabaseClient
 from .trend_sources import (
-    fetch_sge_formats,
+    SGE_PARSE_PROMPT,
+    TREND_PARSE_PROMPT,
+    fetch_sge_newsletter,
     fetch_trend_page,
     issue_date_from_url,
     parse_trend_formats,
@@ -299,21 +301,15 @@ def ingest_trends(
         name, url = src["name"], src["url"]
         sr = TrendSourceResult(source_name=name, status="parsed")
         try:
-            # Structured-JSON sources (Social Growth Engineers' /api/formats/) already hand us the
-            # formats + their example links, so we skip the HTML fetch + LLM parse and map directly.
-            # Everything downstream (video mapping, re-scrape, upsert) is shared with page sources.
-            if src.get("kind") == "sge_formats":
-                issue, parsed = fetch_sge_formats(
-                    name, url,
-                    limit=src.get("limit"),
-                    since=src.get("since"),
-                    categories=src.get("categories"),
-                )
+            # Social Growth Engineers' weekly newsletter: discover the latest post from the sitemap
+            # and fetch its email-gated body with the subscriber token. The returned HTML then goes
+            # through the same html_to_text + LLM parse as the other page sources.
+            if src.get("kind") == "sge_newsletter":
+                issue = fetch_sge_newsletter(name, url, access_token=config.sge_access_token)
             else:
                 issue = fetch_trend_page(
                     name, url, render=src.get("render"), apify_api_key=config.apify_api_key
                 )
-                parsed = None
 
             if not dry_run and not force:
                 if _latest_content_hash(supabase, name) == issue.content_hash:
@@ -321,9 +317,13 @@ def ingest_trends(
                     result.sources.append(sr.__dict__)
                     continue
 
+            # SGE's newsletter heads each section with an app/brand name; its own prompt extracts
+            # the underlying content format instead of the brand. Other sources use the default.
+            prompt_template = (
+                SGE_PARSE_PROMPT if src.get("kind") == "sge_newsletter" else TREND_PARSE_PROMPT
+            )
             formats = _dedupe_formats(
-                parsed if parsed is not None
-                else parse_trend_formats(config, issue, timeout=min(timeout, 180))
+                parse_trend_formats(config, issue, timeout=min(timeout, 180), prompt_template=prompt_template)
             )
             sr.formats = len(formats)
             sr.videos_found = sum(len(f["video_urls"]) for f in formats)
