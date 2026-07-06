@@ -54,6 +54,23 @@ def _latest_month_per_source(formats: list[dict[str, Any]]) -> list[dict[str, An
     ]
 
 
+@router.get("/trends/scrape-dates")
+def list_trend_scrape_dates(request: Request, source_name: str | None = None) -> dict[str, Any]:
+    """Distinct dates (UTC, YYYY-MM-DD) on which formats were scraped, newest-first — one chip per
+    scrape batch for the given source (or all sources). Powers the /trends "Scraped" date filter."""
+    supabase = _supabase(request)
+    params: dict[str, Any] = {"select": "created_at", "order": "created_at.desc"}
+    if source_name:
+        params["source_name"] = f"eq.{source_name}"
+    rows = supabase.select("viral_formats", params)
+    seen: dict[str, None] = {}  # dict preserves the created_at.desc order while de-duping
+    for row in rows:
+        created = row.get("created_at")
+        if created:
+            seen.setdefault(str(created)[:10], None)
+    return {"dates": list(seen.keys())}
+
+
 @router.get("/trends/formats")
 def list_trend_formats(
     request: Request,
@@ -61,6 +78,7 @@ def list_trend_formats(
     q: str | None = None,
     min_views: int = 0,
     posted_after: str | None = None,
+    scraped_on: str | None = None,
     all_months: bool = False,
     limit: int = 200,
 ) -> dict[str, Any]:
@@ -79,11 +97,15 @@ def list_trend_formats(
     if not formats:
         return {"formats": []}
 
+    if scraped_on:
+        # Exact scrape-batch view: keep only formats scraped on this date, and skip the
+        # month collapse so an older batch stays visible.
+        formats = [f for f in formats if str(f.get("created_at"))[:10] == scraped_on]
     # Default to this month's trends only: per dated source, keep its most recent issue_date
     # (the current monthly report) so last month's trends drop off the board once the new report
     # is ingested — without deleting them (all_months=true still returns every month). Undated
     # (weekly) sources have no issue_date and are always kept.
-    if not all_months:
+    elif not all_months:
         formats = _latest_month_per_source(formats)
 
     format_ids = [str(f["id"]) for f in formats if f.get("id")]
