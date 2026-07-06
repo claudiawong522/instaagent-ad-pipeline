@@ -29,6 +29,7 @@ from .apify_organic import (
     run_apify_actor_items,
 )
 from .config import Config
+from .drift_alert import maybe_send_drift_alert
 from .ingestion import utc_now_iso
 from .normalizers import normalize_instagram_post, normalize_tiktok_item
 from .organic_enrichment import enrich_organic_items
@@ -59,12 +60,14 @@ class TrendSourceResult:
     videos_already_ingested: int = 0  # in organic_items from a prior run — not re-scraped (metrics not refreshed)
     formats_removed: int = 0  # empty duplicate rows a rename left behind, pruned after re-link
     error: str | None = None
+    parse_method: str | None = None  # numbered | headed | llm — "llm" on a structural source = drift
 
 
 @dataclass
 class TrendIngestResult:
     sources: list[dict[str, Any]] = field(default_factory=list)
     enrichment: Any = None
+    drift_alert: Any = None  # maybe_send_drift_alert summary, when a parser looks broken
 
 
 # ── run/product bootstrap ─────────────────────────────────────────────────────────
@@ -322,9 +325,14 @@ def ingest_trends(
             prompt_template = (
                 SGE_PARSE_PROMPT if src.get("kind") == "sge_newsletter" else TREND_PARSE_PROMPT
             )
+            parse_meta: dict[str, str] = {}
             formats = _dedupe_formats(
-                parse_trend_formats(config, issue, timeout=min(timeout, 180), prompt_template=prompt_template)
+                parse_trend_formats(
+                    config, issue, timeout=min(timeout, 180),
+                    prompt_template=prompt_template, parse_meta=parse_meta,
+                )
             )
+            sr.parse_method = parse_meta.get("method")
             sr.formats = len(formats)
             sr.videos_found = sum(len(f["video_urls"]) for f in formats)
 
@@ -470,6 +478,16 @@ def ingest_trends(
             result.sources.append(sr.__dict__)
             continue
         result.sources.append(sr.__dict__)
+
+    # A source whose page layout changed (parser failed, zero video links, or a silent
+    # fall-through to the LLM) needs a hand-fix — email the owner a reminder. Best-effort
+    # and free (Gmail SMTP); dry runs stay side-effect-free.
+    if not dry_run:
+        result.drift_alert = maybe_send_drift_alert(
+            config,
+            result.sources,
+            llm_expected={s["name"] for s in sources if s.get("kind") == "sge_newsletter"},
+        )
 
     # Download MP4s + run vision enrichment for everything just ingested.
     if not dry_run and not skip_enrichment and touched_run_ids:

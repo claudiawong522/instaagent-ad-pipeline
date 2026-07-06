@@ -43,6 +43,12 @@ class Config:
     rerank_candidate_pool: int = 100
     # Browser origins allowed to call the API (CORS), comma-separated via CORS_ORIGINS.
     cors_origins: str = "http://localhost:3000"
+    # Parser-drift reminder emails (drift_alert.py), sent free over Gmail SMTP. The SMTP user
+    # is a Gmail address and the password a Gmail *app password* (myaccount.google.com/apppasswords
+    # — not the account password). Unset creds disable sending (the alert is logged instead).
+    alert_email_to: str = "instaagenttool@gmail.com"
+    alert_smtp_user: str | None = None
+    alert_smtp_password: str | None = None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -66,6 +72,9 @@ class Config:
             rerank_min_score=float(os.getenv("RERANK_MIN_SCORE", "0.5")),
             rerank_candidate_pool=int(os.getenv("RERANK_CANDIDATE_POOL", "100")),
             cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000"),
+            alert_email_to=os.getenv("ALERT_EMAIL_TO", "instaagenttool@gmail.com"),
+            alert_smtp_user=os.getenv("ALERT_SMTP_USER"),
+            alert_smtp_password=os.getenv("ALERT_SMTP_PASSWORD"),
         )
 
 

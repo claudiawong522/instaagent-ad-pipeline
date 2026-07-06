@@ -56,6 +56,10 @@ jobs:
           # JWT that unlocks the socialgrowthengineers gated newsletter; expires ~quarterly (refresh
           # via scratchpad/sge_unlock.py). If unset/expired, only that source errors; others run.
           SGE_ACCESS_TOKEN: ${{ secrets.SGE_ACCESS_TOKEN }}
+          # Gmail address + app password for the parser-drift reminder email (drift_alert.py).
+          # Free (plain Gmail SMTP); if unset, drift is only logged in the run output.
+          ALERT_SMTP_USER: ${{ secrets.ALERT_SMTP_USER }}
+          ALERT_SMTP_PASSWORD: ${{ secrets.ALERT_SMTP_PASSWORD }}
         run: |
           for src in ramdam socialbee socialgrowthengineers; do
             echo "::group::ingest-trends $src"

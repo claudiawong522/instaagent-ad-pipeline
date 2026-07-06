@@ -52,5 +52,9 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           APIFY_API_KEY: ${{ secrets.APIFY_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Gmail address + app password for the parser-drift reminder email (drift_alert.py).
+          # Free (plain Gmail SMTP); if unset, drift is only logged in the run output.
+          ALERT_SMTP_USER: ${{ secrets.ALERT_SMTP_USER }}
+          ALERT_SMTP_PASSWORD: ${{ secrets.ALERT_SMTP_PASSWORD }}
         run: |
           python -m instaagent_pipeline.cli ingest-trends --source-name newengen ${{ inputs.force && '--force' || '' }}

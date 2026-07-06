@@ -630,6 +630,7 @@ def parse_trend_formats(
     *,
     timeout: int = 120,
     prompt_template: str = TREND_PARSE_PROMPT,
+    parse_meta: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Extract [{format_name, format_description, video_urls[]}] from one trend page.
 
@@ -639,14 +640,23 @@ def parse_trend_formats(
     heading level. The heading parse only applies to standard roundups (default prompt_template):
     a custom-prompt source like SGE names sections after the app/brand, and turning those into
     format names requires the LLM rewrite (SGE_PARSE_PROMPT names by technique, never brand).
-    Pages no structural parser recognizes fall back to the LLM below."""
+    Pages no structural parser recognizes fall back to the LLM below.
+
+    parse_meta, when given, is filled with {"method": "numbered"|"headed"|"llm"} so the
+    caller can tell a structural parse from an LLM fallback (the fallback on a normally
+    structural source is the parser-drift signal drift_alert.py emails about)."""
+    if parse_meta is None:
+        parse_meta = {}
     segmented = segment_numbered_page(issue)
     if segmented is not None:
+        parse_meta["method"] = "numbered"
         return segmented
     if prompt_template is TREND_PARSE_PROMPT:
         headed = segment_headed_page(issue)
         if headed is not None:
+            parse_meta["method"] = "headed"
             return headed
+    parse_meta["method"] = "llm"
 
     if not config.openrouter_api_key:
         raise RuntimeError("OPENROUTER_API_KEY is required to parse trend pages.")
