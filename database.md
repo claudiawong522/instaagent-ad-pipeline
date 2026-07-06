@@ -255,7 +255,7 @@ Trend pipeline (migration `025`). One row per viral format scraped from a web tr
 | `ingest_note` | `text` | Nullable (migration `026`) | Why the format has no playable example video (e.g. IG/YT link not scraped, short link unresolved, source listed no link); `NULL` when it has one. Written by `ingest-trends`, shown on the empty card. |
 | `niche_constraint_model` | `text` | Nullable | OpenRouter model that wrote the constraint. |
 | `classified_at` | `timestamptz` | Nullable | When the constraint was written. |
-| `created_at` | `timestamptz` | Not null, default `now()` | Row creation timestamp. |
+| `created_at` | `timestamptz` | Not null, default `now()` | First-scrape timestamp; powers the `/trends` "Scraped" date filter (`GET /trends/scrape-dates`, `?scraped_on=`). For **dated (monthly)** sources every format of a report is pinned to the report's earliest `created_at` (`ingest-trends`), so a flaky render that finishes the report on a later pass/day doesn't split one report across two scrape dates. **Weekly** (undated) sources keep true first-seen — a new weekly trend belongs to the week it appears. |
 
 Unique constraint: `unique (source_name, format_name)` (idempotent re-ingest).
 

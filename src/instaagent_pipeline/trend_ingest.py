@@ -356,20 +356,34 @@ def ingest_trends(
             # row so the dashboard can separate this month's trends from last month's; None for
             # weekly/undated sources.
             issue_date = issue_date_from_url(url)
-            for fmt in formats:
-                row = supabase.upsert(
+            # A dated (monthly) report is one scrape batch, but its JS embeds render
+            # non-deterministically — a flaky pass captures only a subset, so the rest get
+            # first-seen on a later pass (often a different day). Left alone, created_at (first-seen)
+            # splits one report across two "scrape dates" on the board. Pin every format of the
+            # report to the batch's first-scrape created_at so the report stays one date. Undated
+            # (weekly) sources keep first-seen — a new weekly trend belongs to the week it appears.
+            batch_created_at: str | None = None
+            if issue_date:
+                prior = supabase.select(
                     "viral_formats",
-                    {
-                        "run_id": run_id,
-                        "source_name": name,
-                        "source_url": url,
-                        "content_hash": issue.content_hash,
-                        "issue_date": issue_date,
-                        "format_name": fmt["format_name"],
-                        "format_description": fmt["format_description"],
-                    },
-                    "source_name,format_name",
+                    {"select": "created_at", "source_name": f"eq.{name}",
+                     "issue_date": f"eq.{issue_date}", "order": "created_at.asc", "limit": "1"},
                 )
+                if prior:
+                    batch_created_at = prior[0].get("created_at")
+            for fmt in formats:
+                payload = {
+                    "run_id": run_id,
+                    "source_name": name,
+                    "source_url": url,
+                    "content_hash": issue.content_hash,
+                    "issue_date": issue_date,
+                    "format_name": fmt["format_name"],
+                    "format_description": fmt["format_description"],
+                }
+                if batch_created_at:
+                    payload["created_at"] = batch_created_at
+                row = supabase.upsert("viral_formats", payload, "source_name,format_name")
                 format_id = str(row.get("id") or "")
                 counts = {"tiktok": 0, "ig": 0, "youtube": 0, "short_unresolved": 0,
                           "other": 0, "links": len(fmt["video_urls"])}
