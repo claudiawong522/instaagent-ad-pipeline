@@ -43,7 +43,7 @@ TREND_PRODUCT_PREFIX = "Trend: "
 @dataclass
 class TrendSourceResult:
     source_name: str
-    status: str  # parsed | unchanged | skipped | incomplete_render | failed
+    status: str  # parsed | unchanged | skipped | incomplete_render | no_linked_formats | failed
     formats: int = 0
     videos_found: int = 0
     videos_ingested: int = 0
@@ -315,6 +315,19 @@ def ingest_trends(
             # format with no example link, so this guard is JS-only.
             if src.get("render") == "js" and formats and sr.videos_found == 0:
                 sr.status = "incomplete_render"
+                result.sources.append(sr.__dict__)
+                continue
+
+            # Keep only formats the page actually links an example video for. A format with zero
+            # links is a name-drop from the page's FAQ/prose ("strong options include Everything
+            # Hallelujah, Show You Off, FB Mom Photos…"), not a real featured trend — persisting it
+            # spawns a permanently-empty card (the newengen "15 empty trends" bug). Formats whose
+            # link merely failed to scrape DO keep their row and get an explanatory ingest_note;
+            # this only drops the ones the source never provided a video for.
+            formats = [f for f in formats if f["video_urls"]]
+            sr.formats = len(formats)
+            if not formats:
+                sr.status = "no_linked_formats"
                 result.sources.append(sr.__dict__)
                 continue
 

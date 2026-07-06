@@ -34,7 +34,6 @@ from .http_client import HttpClientError, request_json
 DEFAULT_TREND_SOURCES: list[dict[str, str]] = [
     {"name": "ramdam", "url": "https://www.ramd.am/blog/trends-tiktok"},
     {"name": "newengen", "url": "https://newengen.com/tiktok-trends/", "render": "js"},
-    {"name": "later", "url": "https://later.com/blog/tiktok-trends/"},
     {"name": "socialbee", "url": "https://socialbee.com/blog/tiktok-trends/"},
 ]
 
@@ -247,7 +246,11 @@ For each format return:
   a URL. If the article shows no example link for a format, return an empty array.
 
 Ignore navigation, ads, author bios, newsletter signups, and generic advice that is not a
-specific format. Return only real formats.
+specific format. Only extract a format from a section that actually describes it (a heading
+plus its own explanation) — do NOT extract trend names that are merely listed or mentioned in
+passing, e.g. inside an FAQ answer, a "related trends" sentence, or a roundup list ("strong
+options include X, Y, Z"). Those name-drops have no example video and are not real entries.
+Return only real formats.
 
 PAGE TEXT:
 {page_text}
