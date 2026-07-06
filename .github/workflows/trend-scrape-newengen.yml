@@ -61,4 +61,4 @@ jobs:
           ALERT_SMTP_PORT: ${{ secrets.ALERT_SMTP_PORT }}
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
         run: |
-          python -m instaagent_pipeline.cli ingest-trends --source-name newengen ${{ inputs.force && '--force' || '' }}
+          python -m instaagent_pipeline.cli ingest-trends --source-name newengen --fail-on-drift ${{ inputs.force && '--force' || '' }}

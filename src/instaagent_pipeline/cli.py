@@ -230,6 +230,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     print(json.dumps(to_jsonable(result), indent=2))
+    if getattr(args, "fail_on_drift", False) and getattr(result, "drift_alert", None):
+        print("error: trend parser drift detected (see drift_alert above)", file=sys.stderr)
+        return 3
     return 0
 
 
@@ -296,6 +299,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     trends.add_argument("--source-name", help="Only ingest this configured source (e.g. ramdam). Omit for all.")
     trends.add_argument("--force", action="store_true", help="Re-parse even if the page is unchanged since last run.")
+    trends.add_argument(
+        "--fail-on-drift", action="store_true",
+        help="Exit non-zero when a source's parser looks broken by a page change (drift_alert "
+        "in the output), so a scheduled CI run fails and GitHub's own failure email becomes "
+        "the reminder — no SMTP creds needed.",
+    )
     trends.add_argument("--timeout", type=int, default=300, help="Per-video enrichment timeout in seconds (covers the MP4 download).")
     trends.add_argument("--concurrency", type=int, default=32, help="Parallel video enrichments (I/O-bound).")
     trends.add_argument("--skip-enrichment", action="store_true", help="Ingest formats + videos only; do not download MP4s / run vision analysis.")

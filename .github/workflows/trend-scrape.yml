@@ -64,9 +64,14 @@ jobs:
           ALERT_SMTP_HOST: ${{ secrets.ALERT_SMTP_HOST }}
           ALERT_SMTP_PORT: ${{ secrets.ALERT_SMTP_PORT }}
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+        # --fail-on-drift turns a broken parser into a red run, so GitHub's own workflow-failure
+        # email is the fix-it reminder even with no SMTP secrets configured. rc accumulation keeps
+        # one drifted source from skipping the rest.
         run: |
+          rc=0
           for src in ramdam socialbee socialgrowthengineers; do
             echo "::group::ingest-trends $src"
-            python -m instaagent_pipeline.cli ingest-trends --source-name "$src" ${{ inputs.force && '--force' || '' }}
+            python -m instaagent_pipeline.cli ingest-trends --source-name "$src" --fail-on-drift ${{ inputs.force && '--force' || '' }} || rc=1
             echo "::endgroup::"
           done
+          exit $rc
