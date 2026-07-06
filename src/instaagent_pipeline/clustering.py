@@ -29,8 +29,8 @@ EXEMPLAR_COUNT = 5
 # item_type per source, ordered so paid ads cluster before organic in "all".
 ITEM_TYPES = {
     "paid": ("paid_ad",),
-    "ugc": ("ugc_item",),
-    "all": ("paid_ad", "ugc_item"),
+    "organic": ("organic_item",),
+    "all": ("paid_ad", "organic_item"),
 }
 
 EMBEDDING_SELECT_COLUMNS = "item_id,source_text,embedding"
@@ -120,7 +120,7 @@ def cluster_items(
     if supabase is None:
         raise RuntimeError("Supabase credentials are required to load clustering candidates.")
     if source not in ITEM_TYPES:
-        raise ValueError("--source must be one of paid, ugc, all.")
+        raise ValueError("--source must be one of paid, organic, all.")
     if limit < 1:
         raise ValueError("--limit must be greater than 0.")
     if min_cluster_size < 2:

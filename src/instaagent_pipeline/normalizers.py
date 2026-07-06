@@ -326,7 +326,7 @@ def epoch_to_iso(value: float) -> str:
     return datetime.fromtimestamp(seconds, tz=UTC).isoformat()
 
 
-# ── Organic: Apify TikTok (clockworks) + Instagram (data-slayer) → ugc_items ──
+# ── Organic: Apify TikTok (clockworks) + Instagram (data-slayer) → organic_items ──
 #
 # These replace TopYappers as the organic source. The Apify scrapers provide engagement
 # + creator metadata only; the analysis columns (hook, content_format, persona, ...)
@@ -428,7 +428,7 @@ def tiktok_trend_views(item: dict[str, Any]) -> int | None:
 
 
 def normalize_tiktok_trend_item(item: dict[str, Any], run_id: str, raw_payload_id: str | None) -> dict[str, Any]:
-    """novi/tiktok-trend-api (keyword-free For You feed) → ugc_items. Distinct from
+    """novi/tiktok-trend-api (keyword-free For You feed) → organic_items. Distinct from
     normalize_tiktok_item: this is TikTok's raw aweme shape (statistics.*, author.unique_id,
     cha_list), not the clockworks scraper shape. follower_count is absent from the trend
     payload, so it stays null here and is filled by backfill_tiktok_followers."""

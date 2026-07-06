@@ -1,7 +1,7 @@
 """Core search logic, independent of the web framework so it can be unit-tested.
 
 Embeds the query with Voyage, runs a pgvector KNN over the 'search' space via the
-match_item_embeddings RPC, hydrates the ranked items from paid_ads/ugc_items (+
+match_item_embeddings RPC, hydrates the ranked items from paid_ads/organic_items (+
 enrichment fields and transcripts from item_enrichments), applies secondary filters,
 and returns unified VideoResult dicts.
 """
@@ -130,13 +130,13 @@ def search_ads(
         return []
 
     paid_ids = [iid for it, iid in order if it == "paid_ad"]
-    organic_ids = [iid for it, iid in order if it == "ugc_item"]
+    organic_ids = [iid for it, iid in order if it == "organic_item"]
 
     with ThreadPoolExecutor(max_workers=4) as ex:
         f_paid = ex.submit(supabase.select_by_ids, "paid_ads", "paid_ad_row_id", paid_ids, PAID_HYDRATE_COLUMNS)
-        f_organic = ex.submit(supabase.select_by_ids, "ugc_items", "id", organic_ids, ORGANIC_HYDRATE_COLUMNS)
+        f_organic = ex.submit(supabase.select_by_ids, "organic_items", "id", organic_ids, ORGANIC_HYDRATE_COLUMNS)
         f_paid_enr = ex.submit(_enrichments, supabase, "paid_ad", paid_ids)
-        f_organic_enr = ex.submit(_enrichments, supabase, "ugc_item", organic_ids)
+        f_organic_enr = ex.submit(_enrichments, supabase, "organic_item", organic_ids)
         paid, organic, paid_enr, organic_enr = f_paid.result(), f_organic.result(), f_paid_enr.result(), f_organic_enr.result()
 
     return _assemble(
@@ -184,22 +184,22 @@ def _browse_ads(
             paid_ids.append(iid)
             order.append(("paid_ad", iid))
 
-    if item_type in (None, "ugc_item"):
+    if item_type in (None, "organic_item"):
         params = {"select": ORGANIC_HYDRATE_COLUMNS, "limit": str(pool)}
         if run_id:
             params["run_id"] = f"eq.{run_id}"
-        for row in supabase.select("ugc_items", params):
+        for row in supabase.select("organic_items", params):
             iid = row.get("id")
             if not iid:
                 continue
             iid = str(iid)
             organic[iid] = row
             organic_ids.append(iid)
-            order.append(("ugc_item", iid))
+            order.append(("organic_item", iid))
 
     with ThreadPoolExecutor(max_workers=2) as ex:
         f_paid_enr = ex.submit(_enrichments, supabase, "paid_ad", paid_ids)
-        f_organic_enr = ex.submit(_enrichments, supabase, "ugc_item", organic_ids)
+        f_organic_enr = ex.submit(_enrichments, supabase, "organic_item", organic_ids)
         paid_enr, organic_enr = f_paid_enr.result(), f_organic_enr.result()
 
     return _assemble(
@@ -312,7 +312,7 @@ def list_runs(supabase: SupabaseClient) -> list[dict[str, Any]]:
                 "product_name": product.get("name"),
                 "category": product.get("category"),
                 "target_paid_count": run.get("target_paid_count"),
-                "target_ugc_count": run.get("target_ugc_count"),
+                "target_organic_count": run.get("target_organic_count"),
                 "target_tiktok_count": run.get("target_tiktok_count"),
                 "created_at": run.get("created_at"),
             }
@@ -399,7 +399,7 @@ def _to_video_result(
             "similarity": similarity,
         }
     return {
-        "item_type": "ugc_item",
+        "item_type": "organic_item",
         "item_id": str(row.get("id")),
         "run_id": row.get("run_id"),
         "title": row.get("handle") or row.get("user_handle") or row.get("nickname"),

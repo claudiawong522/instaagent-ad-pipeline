@@ -215,7 +215,7 @@ function CampaignCard({
             running={stats?.running.includes(p.key) ?? false}
             failed={stats?.[p.failedKey] ?? false}
             error={stats?.[p.errorKey] ?? null}
-            defaultTarget={(p.key === 'facebook' ? c.target_paid_count : p.key === 'tiktok' ? c.target_tiktok_count : c.target_ugc_count) ?? 50}
+            defaultTarget={(p.key === 'facebook' ? c.target_paid_count : p.key === 'tiktok' ? c.target_tiktok_count : c.target_organic_count) ?? 50}
             onScrape={onScrape}
           />
         ))}

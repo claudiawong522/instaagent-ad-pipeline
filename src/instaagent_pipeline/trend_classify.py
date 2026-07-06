@@ -210,7 +210,7 @@ def _embed_trends(
 def _example_context(supabase: SupabaseClient, format_id: str) -> str:
     """The ai_description/transcript of a format's example videos, for the LLM."""
     videos = supabase.select(
-        "ugc_items", {"select": "id", "format_id": f"eq.{format_id}", "limit": "10"}
+        "organic_items", {"select": "id", "format_id": f"eq.{format_id}", "limit": "10"}
     )
     ids = [str(v["id"]) for v in videos if v.get("id")]
     if not ids:
@@ -219,7 +219,7 @@ def _example_context(supabase: SupabaseClient, format_id: str) -> str:
         "item_enrichments",
         {
             "select": "ai_description,transcript_text",
-            "item_type": "eq.ugc_item",
+            "item_type": "eq.organic_item",
             "item_id": f"in.({','.join(ids)})",
         },
     )

@@ -1,4 +1,4 @@
-"""Organic vision enrichment: candidate loading for ugc_items + the shared video flow."""
+"""Organic vision enrichment: candidate loading for organic_items + the shared video flow."""
 
 from __future__ import annotations
 
@@ -18,10 +18,10 @@ from .video_enrichment import (
 
 ORGANIC_KIND = ItemKind(
     label="organic",
-    table="ugc_items",
+    table="organic_items",
     id_column="id",
-    item_type="ugc_item",
-    storage_subdir="ugc",
+    item_type="organic_item",
+    storage_subdir="organic",
     detail_id_key="organic_item_id",
 )
 
@@ -58,7 +58,7 @@ def organic_enrichment_candidates(
     limit: int,
 ) -> tuple[list[EnrichmentCandidate], int]:
     rows = supabase.select(
-        "ugc_items",
+        "organic_items",
         {
             "select": "id,video_url,cover",
             "run_id": f"eq.{run_id}",

@@ -16,7 +16,7 @@ create table if not exists pipeline_runs (
   status text not null default 'created',
   config jsonb not null default '{}'::jsonb,
   target_paid_count integer not null default 1000,
-  target_ugc_count integer not null default 2500,
+  target_organic_count integer not null default 2500,
   target_tiktok_count integer not null default 2500,
   top_k integer not null default 3,
   created_at timestamptz not null default now(),
@@ -30,7 +30,7 @@ create table if not exists keywords (
   keyword_type text not null default 'seed',
   source text not null default 'manual',
   target_paid_count integer not null default 0,
-  target_ugc_count integer not null default 0,
+  target_organic_count integer not null default 0,
   target_tiktok_count integer not null default 0,
   active boolean not null default true,
   created_at timestamptz not null default now()
@@ -113,7 +113,7 @@ create table if not exists paid_ads (
 );
 
 -- Trend pipeline (see migrations/025): one row per viral format scraped from a web trend
--- page; example videos link via ugc_items.format_id. Defined before ugc_items for the FK.
+-- page; example videos link via organic_items.format_id. Defined before organic_items for the FK.
 create table if not exists viral_formats (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references pipeline_runs(id) on delete cascade,
@@ -136,7 +136,7 @@ create table if not exists viral_formats (
   unique (source_name, format_name)
 );
 
-create table if not exists ugc_items (
+create table if not exists organic_items (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references pipeline_runs(id) on delete cascade,
   raw_payload_id uuid references raw_payloads(id) on delete set null,
@@ -177,7 +177,7 @@ create table if not exists ugc_items (
 create table if not exists item_enrichments (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references pipeline_runs(id) on delete cascade,
-  item_type text not null check (item_type in ('paid_ad', 'ugc_item')),
+  item_type text not null check (item_type in ('paid_ad', 'organic_item')),
   item_id uuid not null,
   transcript_text text,
   transcript_segments jsonb,
@@ -212,8 +212,8 @@ create table if not exists item_embeddings (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references pipeline_runs(id) on delete cascade,
   -- 'viral_format' (item_id = viral_formats.id) in the 'trend' space powers product→trend
-  -- recall; see migration 027. The paid_ad/ugc_item content spaces are unaffected.
-  item_type text not null check (item_type in ('paid_ad', 'ugc_item', 'viral_format')),
+  -- recall; see migration 027. The paid_ad/organic_item content spaces are unaffected.
+  item_type text not null check (item_type in ('paid_ad', 'organic_item', 'viral_format')),
   item_id uuid not null,
   space text not null check (space in ('icp', 'format', 'hook', 'search', 'trend')),
   embedding_model text not null,
@@ -226,7 +226,7 @@ create table if not exists item_embeddings (
 create table if not exists item_clusters (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references pipeline_runs(id) on delete cascade,
-  item_type text not null check (item_type in ('paid_ad', 'ugc_item')),
+  item_type text not null check (item_type in ('paid_ad', 'organic_item')),
   item_id uuid not null,
   space text not null check (space in ('icp', 'format', 'hook')),
   cluster_label integer not null,
@@ -239,7 +239,7 @@ create table if not exists item_clusters (
 create table if not exists clusters (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references pipeline_runs(id) on delete cascade,
-  item_type text not null check (item_type in ('paid_ad', 'ugc_item')),
+  item_type text not null check (item_type in ('paid_ad', 'organic_item')),
   space text not null check (space in ('icp', 'format', 'hook')),
   cluster_label integer not null,
   name text,
@@ -280,13 +280,13 @@ create index if not exists paid_ads_id_idx on paid_ads(id);
 create index if not exists paid_ads_ad_id_idx on paid_ads(ad_id);
 create index if not exists paid_ads_brand_id_idx on paid_ads(brand_id);
 create index if not exists paid_ads_saved_to_supabase_at_idx on paid_ads(saved_to_supabase_at desc);
-create index if not exists ugc_items_run_id_idx on ugc_items(run_id);
-create index if not exists ugc_items_external_idx on ugc_items(external_id);
-create index if not exists ugc_items_video_id_idx on ugc_items(video_id);
-create index if not exists ugc_items_virality_idx on ugc_items(virality_score desc);
-create index if not exists ugc_items_saved_to_supabase_at_idx on ugc_items(saved_to_supabase_at desc);
+create index if not exists organic_items_run_id_idx on organic_items(run_id);
+create index if not exists organic_items_external_idx on organic_items(external_id);
+create index if not exists organic_items_video_id_idx on organic_items(video_id);
+create index if not exists organic_items_virality_idx on organic_items(virality_score desc);
+create index if not exists organic_items_saved_to_supabase_at_idx on organic_items(saved_to_supabase_at desc);
 create index if not exists paid_ads_enrichment_status_idx on paid_ads(run_id, enrichment_status);
-create index if not exists ugc_items_enrichment_status_idx on ugc_items(run_id, enrichment_status);
+create index if not exists organic_items_enrichment_status_idx on organic_items(run_id, enrichment_status);
 create index if not exists item_enrichments_run_idx on item_enrichments(run_id);
 create index if not exists item_enrichments_item_idx on item_enrichments(item_type, item_id);
 create index if not exists item_embeddings_run_idx on item_embeddings(run_id);
@@ -297,11 +297,11 @@ create index if not exists clusters_run_idx on clusters(run_id);
 create index if not exists clusters_lookup_idx on clusters(item_type, space);
 create index if not exists scrape_events_run_idx on scrape_events(run_id, started_at desc);
 create index if not exists viral_formats_run_idx on viral_formats(run_id, created_at desc);
-create index if not exists ugc_items_format_idx on ugc_items(format_id);
+create index if not exists organic_items_format_idx on organic_items(format_id);
 
 -- Search layer (see migrations/015): a cosine KNN index + function for query search.
 -- Enrichment (description, transcript, analysis tags) lives in item_enrichments
--- (see migrations/016); persisted media URLs live on paid_ads/ugc_items directly.
+-- (see migrations/016); persisted media URLs live on paid_ads/organic_items directly.
 create index if not exists item_embeddings_search_hnsw
   on item_embeddings using hnsw (embedding vector_cosine_ops)
   where space = 'search';

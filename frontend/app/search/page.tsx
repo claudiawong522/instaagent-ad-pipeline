@@ -15,13 +15,13 @@ import { VideoTile } from '@/components/VideoTile'
 const TYPE_OPTIONS: { label: string; value: ItemType | null }[] = [
   { label: 'All', value: null },
   { label: 'Paid ads', value: 'paid_ad' },
-  { label: 'Organic', value: 'ugc_item' },
+  { label: 'Organic', value: 'organic_item' },
 ]
 
 // Platform options are scoped to the type filter: organic lives on TikTok/Instagram (Reels),
 // paid ads on Facebook/Meta. 'All' offers every platform. Keyed by itemType ('all' when null).
-const PLATFORM_OPTIONS: Record<'all' | 'paid_ad' | 'ugc_item', { value: string; label: string }[]> = {
-  ugc_item: [
+const PLATFORM_OPTIONS: Record<'all' | 'paid_ad' | 'organic_item', { value: string; label: string }[]> = {
+  organic_item: [
     { value: 'tiktok', label: 'TikTok' },
     { value: 'instagram', label: 'Instagram (Reels)' },
   ],
@@ -69,7 +69,7 @@ function sortByPerformance(items: VideoResult[]): VideoResult[] {
   const signal = (r: VideoResult) =>
     r.item_type === 'paid_ad' ? r.days_live ?? -1 : r.virality ?? -1
   const rank = new Map<VideoResult, number>()
-  for (const type of ['paid_ad', 'ugc_item'] as const) {
+  for (const type of ['paid_ad', 'organic_item'] as const) {
     const group = items.filter((r) => r.item_type === type)
     const sorted = [...group].sort((a, b) => signal(a) - signal(b))
     sorted.forEach((r, i) => rank.set(r, group.length > 1 ? i / (group.length - 1) : 1))
@@ -117,7 +117,7 @@ export default function SearchPage() {
       const res = await searchAds({
         query: query.trim(),
         // Viral discovery is a single TikTok organic run — force organic and drop platform.
-        item_type: viralOnly ? 'ugc_item' : itemType,
+        item_type: viralOnly ? 'organic_item' : itemType,
         platform: viralOnly ? null : platform || null,
         run_id: effectiveRunId || null,
         min_views: minViews ? Number(minViews) : null,
@@ -328,7 +328,7 @@ export default function SearchPage() {
               className="h-8 w-44 text-xs md:text-xs"
             />
           )}
-          {!viralOnly && itemType !== 'ugc_item' && (
+          {!viralOnly && itemType !== 'organic_item' && (
             <Input
               type="number"
               value={minDaysLive}

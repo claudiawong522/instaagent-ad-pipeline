@@ -19,11 +19,13 @@ Lean ingestion and transcript-backfill foundation for InstaAgent's ad selection 
   - `014_item_clusters.sql`: add ICP cluster assignments and cluster labels.
   - `015_search_space_descriptions_storage.sql`: add the `search` embedding space, `ai_description`/storage URL columns, organic analysis parity columns, the `match_item_embeddings` RPC, and the `ad-videos` storage bucket.
   - `016_item_enrichments.sql`: add the polymorphic `item_enrichments` table (with backfill), and drop `paid_ad_transcripts`/`ugc_transcripts` plus migrated/unused analysis columns.
+  - `017`–`028`: search tuning, audience/format columns, enrichment status, scrape-event tracking, and the viral-format trend pipeline (see each file's header comment).
+  - `029_rename_ugc_to_organic.sql`: rename `ugc_items` → `organic_items`, item_type `'ugc_item'` → `'organic_item'`, and `target_ugc_count` → `target_organic_count`, matching the code's "organic" terminology.
 - Python CLI for:
   - creating products/runs and Claude-generated keyword allocations.
   - ingesting Apify Meta Ad Library paid ad candidates into `paid_ads` across stored keyword allocations.
-  - ingesting Apify TikTok organic candidates into `ugc_items` (with native follower counts) across stored keyword allocations.
-  - ingesting Apify Instagram search reels into `ugc_items`, with follower counts backfilled via `backfill-ig-followers`.
+  - ingesting Apify TikTok organic candidates into `organic_items` (with native follower counts) across stored keyword allocations.
+  - ingesting Apify Instagram search reels into `organic_items`, with follower counts backfilled via `backfill-ig-followers`.
   - transcribing + analyzing paid ads and organic videos via OpenRouter vision into `item_enrichments` (auto-runs after ingestion).
   - embedding items (`icp` and `search` spaces) and clustering ICP embeddings for paid ads and organic.
 
@@ -52,7 +54,7 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli init-run \
   --target-market "US skincare buyers" \
   --campaign-guidelines "Find competitor ads and organic for a gentle cleanser launch." \
   --target-paid-count 1000 \
-  --target-ugc-count 2500
+  --target-organic-count 2500
 ```
 
 Ingest Apify Meta Ad Library paid ads:
@@ -101,7 +103,7 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli embed-items \
 By default this skips items that already have vectors. After changing what gets embedded
 (e.g. a new enrichment tag field), pass `--overwrite` to re-embed in place.
 
-Scrape viral *formats* from web trend pages into `viral_formats` + `ugc_items` (on existing databases, run `supabase/migrations/025_viral_formats.sql` first). Each configured page is fetched, LLM-parsed into formats, and each example TikTok is re-scraped for live metrics + an MP4 (chains organic enrichment unless `--skip-enrichment`):
+Scrape viral *formats* from web trend pages into `viral_formats` + `organic_items` (on existing databases, run `supabase/migrations/025_viral_formats.sql` first). Each configured page is fetched, LLM-parsed into formats, and each example TikTok is re-scraped for live metrics + an MP4 (chains organic enrichment unless `--skip-enrichment`):
 
 ```bash
 PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-trends
@@ -116,7 +118,7 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli classify-formats
 
 The dashboard reads these via `GET /trends/formats` (the frontend `/trends` page). Sources default to Ramdam/Newengen/Later/SocialBee; override with the `TREND_SOURCES` env var.
 
-**Scheduled runs:** `.github/workflows/trend-scrape.yml` runs `ingest-trends` daily at 13:00 UTC on the default branch (unchanged pages are hash-skipped, and example videos already in `ugc_items` aren't re-scraped, so no-change days cost ~nothing). Requires the `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `APIFY_API_KEY`, and `OPENROUTER_API_KEY` repo secrets. Trigger manually with `gh workflow run trend-scrape.yml` (add `-f force=true` to re-parse unchanged pages).
+**Scheduled runs:** `.github/workflows/trend-scrape.yml` runs `ingest-trends` daily at 13:00 UTC on the default branch (unchanged pages are hash-skipped, and example videos already in `organic_items` aren't re-scraped, so no-change days cost ~nothing). Requires the `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `APIFY_API_KEY`, and `OPENROUTER_API_KEY` repo secrets. Trigger manually with `gh workflow run trend-scrape.yml` (add `-f force=true` to re-parse unchanged pages).
 
 Cluster ICP embeddings into `item_clusters` and `clusters` (on existing databases, run `supabase/migrations/014_item_clusters.sql` first):
 
@@ -156,7 +158,7 @@ Optional:
 
 ## Supabase Key Choice
 
-Use the service role key for this local/server-side ingestion CLI when possible. It bypasses row-level security, which makes batch writes to `products`, `pipeline_runs`, `source_queries`, `api_usage`, `raw_payloads`, `paid_ads`, `ugc_items`, `item_enrichments`, `item_embeddings`, `item_clusters`, and `clusters` straightforward.
+Use the service role key for this local/server-side ingestion CLI when possible. It bypasses row-level security, which makes batch writes to `products`, `pipeline_runs`, `source_queries`, `api_usage`, `raw_payloads`, `paid_ads`, `organic_items`, `item_enrichments`, `item_embeddings`, `item_clusters`, and `clusters` straightforward.
 
 Use the anon public key only if you intentionally enable RLS policies that allow this CLI to insert/update the needed tables. The anon key is designed for browser/client usage and should not have broad write permissions to ingestion tables.
 

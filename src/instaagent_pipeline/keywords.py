@@ -18,7 +18,7 @@ CLAUDE_BASE_URL = "https://api.anthropic.com"
 class KeywordAllocation:
     keyword_text: str
     target_paid_count: int
-    target_ugc_count: int  # reels (Instagram)
+    target_organic_count: int  # reels (Instagram)
     target_tiktok_count: int = 0
     source: str = "llm"
     keyword_type: str = "seed"
@@ -45,7 +45,7 @@ def generate_keyword_allocations(
     notes: str | None,
     campaign_guidelines: str | None,
     target_paid_count: int,
-    target_ugc_count: int,
+    target_organic_count: int,
     target_tiktok_count: int = 0,
 ) -> KeywordGenerationResult:
     if not config.claude_api_key:
@@ -89,7 +89,7 @@ def generate_keyword_allocations(
                     notes=notes,
                     campaign_guidelines=campaign_guidelines,
                     target_paid_count=target_paid_count,
-                    target_ugc_count=target_ugc_count,
+                    target_organic_count=target_organic_count,
                     target_tiktok_count=target_tiktok_count,
                 ),
             }
@@ -137,7 +137,7 @@ def generate_keyword_allocations(
         allocations = parse_keyword_allocations(
             text,
             expected_paid_total=target_paid_count,
-            expected_organic_total=target_ugc_count,
+            expected_organic_total=target_organic_count,
             expected_tiktok_total=target_tiktok_count,
         )
         complete_query(
@@ -200,7 +200,7 @@ def keyword_prompt(
     notes: str | None,
     campaign_guidelines: str | None,
     target_paid_count: int,
-    target_ugc_count: int,
+    target_organic_count: int,
     target_tiktok_count: int = 0,
 ) -> str:
     return f"""
@@ -211,7 +211,7 @@ Product notes: {notes or ""}
 Campaign guidelines: {campaign_guidelines or ""}
 
 Target paid ads: {target_paid_count}
-Target reels (Instagram): {target_ugc_count}
+Target reels (Instagram): {target_organic_count}
 Target tiktoks: {target_tiktok_count}
 
 Create 3-5 single-word search keywords for provider API discovery.
@@ -222,9 +222,9 @@ Avoid adjectives and generic descriptors (e.g. gentle, clean, fresh, natural, gl
 match unrelated trending content. Favor broad, common category-level nouns (e.g. skincare, cleanser, acne)
 over narrow niche terms (e.g. niacinamide).
 
-Allocate target_paid_count, target_ugc_count, and target_tiktok_count across the keywords.
+Allocate target_paid_count, target_organic_count, and target_tiktok_count across the keywords.
 The sum of all target_paid_count values must equal {target_paid_count}.
-The sum of all target_ugc_count values must equal {target_ugc_count}.
+The sum of all target_organic_count values must equal {target_organic_count}.
 The sum of all target_tiktok_count values must equal {target_tiktok_count}.
 Use non-negative integers only.
 
@@ -234,7 +234,7 @@ Return exactly this JSON shape:
     {{
       "keyword_text": "cleanser",
       "target_paid_count": 250,
-      "target_ugc_count": 625,
+      "target_organic_count": 625,
       "target_tiktok_count": 625
     }}
   ]
@@ -282,19 +282,19 @@ def parse_keyword_allocations(
             raise RuntimeError(f"Claude returned duplicate keyword: {keyword}")
         seen.add(normalized)
         paid_count = as_nonnegative_int(row.get("target_paid_count"), "target_paid_count")
-        organic_count = as_nonnegative_int(row.get("target_ugc_count"), "target_ugc_count")
+        organic_count = as_nonnegative_int(row.get("target_organic_count"), "target_organic_count")
         tiktok_count = as_nonnegative_int(row.get("target_tiktok_count"), "target_tiktok_count")
         allocations.append(
             KeywordAllocation(
                 keyword_text=keyword,
                 target_paid_count=paid_count,
-                target_ugc_count=organic_count,
+                target_organic_count=organic_count,
                 target_tiktok_count=tiktok_count,
             )
         )
 
     paid_total = sum(row.target_paid_count for row in allocations)
-    organic_total = sum(row.target_ugc_count for row in allocations)
+    organic_total = sum(row.target_organic_count for row in allocations)
     tiktok_total = sum(row.target_tiktok_count for row in allocations)
     if paid_total != expected_paid_total:
         raise RuntimeError(f"Claude paid allocation total {paid_total} != target {expected_paid_total}.")
@@ -337,7 +337,7 @@ def allocate_manual_keywords(
     keywords: list[str],
     *,
     target_paid_count: int,
-    target_ugc_count: int,
+    target_organic_count: int,
     target_tiktok_count: int = 0,
     keyword_type: str,
 ) -> list[KeywordAllocation]:
@@ -345,13 +345,13 @@ def allocate_manual_keywords(
     if not cleaned:
         raise RuntimeError("At least one keyword is required.")
     paid_counts = split_evenly(target_paid_count, len(cleaned))
-    organic_counts = split_evenly(target_ugc_count, len(cleaned))
+    organic_counts = split_evenly(target_organic_count, len(cleaned))
     tiktok_counts = split_evenly(target_tiktok_count, len(cleaned))
     return [
         KeywordAllocation(
             keyword_text=keyword,
             target_paid_count=paid_counts[index],
-            target_ugc_count=organic_counts[index],
+            target_organic_count=organic_counts[index],
             target_tiktok_count=tiktok_counts[index],
             source="manual",
             keyword_type=keyword_type,
@@ -406,7 +406,7 @@ def insert_keyword_allocations(
                     "source": allocation.source,
                     "active": True,
                     "target_paid_count": allocation.target_paid_count,
-                    "target_ugc_count": allocation.target_ugc_count,
+                    "target_organic_count": allocation.target_organic_count,
                     "target_tiktok_count": allocation.target_tiktok_count,
                 },
             )
@@ -418,7 +418,7 @@ def active_keyword_allocations(supabase: SupabaseClient, run_id: str) -> list[di
     rows = supabase.select(
         "keywords",
         {
-            "select": "keyword_text,target_paid_count,target_ugc_count,target_tiktok_count",
+            "select": "keyword_text,target_paid_count,target_organic_count,target_tiktok_count",
             "run_id": f"eq.{run_id}",
             "active": "eq.true",
             "order": "created_at.asc",

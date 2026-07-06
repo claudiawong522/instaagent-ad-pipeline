@@ -35,7 +35,7 @@ from .discover import DISCOVERY_PLATFORM
 # page_size mirrors the CLI: the ads actor paginates by target_count, the organic actors use 0.
 _PLATFORMS: dict[str, tuple[Any, str, bool]] = {
     "facebook": (ingest_apify_ads, "target_paid_count", True),
-    "instagram": (ingest_instagram, "target_ugc_count", False),
+    "instagram": (ingest_instagram, "target_organic_count", False),
     "tiktok": (ingest_tiktok, "target_tiktok_count", False),
 }
 
@@ -51,7 +51,7 @@ MAX_RESUME_AGE_SECONDS = 48 * 60 * 60
 
 # pipeline_runs columns every run/campaign listing reads.
 RUN_SELECT_COLUMNS = (
-    "id,status,config,target_paid_count,target_ugc_count,target_tiktok_count,created_at,product_id"
+    "id,status,config,target_paid_count,target_organic_count,target_tiktok_count,created_at,product_id"
 )
 
 
@@ -80,7 +80,7 @@ def create_campaign(
     marketing_goals: list[str],
     campaign_objective: str | None,
     target_paid_count: int,
-    target_ugc_count: int,
+    target_organic_count: int,
     target_tiktok_count: int,
 ) -> dict[str, Any]:
     """Create the product + pipeline_run and seed keywords. Mirrors cli.init_run, but stores
@@ -104,7 +104,7 @@ def create_campaign(
             "config": run_config,
             "product_id": product["id"],
             "target_paid_count": target_paid_count,
-            "target_ugc_count": target_ugc_count,
+            "target_organic_count": target_organic_count,
             "target_tiktok_count": target_tiktok_count,
         },
     )
@@ -123,7 +123,7 @@ def create_campaign(
             notes=notes,
             campaign_guidelines=campaign_objective,
             target_paid_count=target_paid_count,
-            target_ugc_count=target_ugc_count,
+            target_organic_count=target_organic_count,
             target_tiktok_count=target_tiktok_count,
         )
         keywords = insert_keyword_allocations(supabase, run_id=run["id"], allocations=result.allocations)
@@ -158,7 +158,7 @@ def list_campaigns(supabase: SupabaseClient) -> list[dict[str, Any]]:
                 "marketing_goals": cfg.get("marketing_goals") or [],
                 "campaign_objective": cfg.get("campaign_objective"),
                 "target_paid_count": run.get("target_paid_count"),
-                "target_ugc_count": run.get("target_ugc_count"),
+                "target_organic_count": run.get("target_organic_count"),
                 "target_tiktok_count": run.get("target_tiktok_count"),
                 "created_at": run.get("created_at"),
             }
@@ -260,7 +260,7 @@ def scrape_stats(supabase: SupabaseClient, run_id: str) -> dict[str, Any]:
     cols = "enrichment_status,saved_to_supabase_at"
     paid = supabase.select("paid_ads", {"select": f"{cols},video", "run_id": f"eq.{run_id}", "limit": "100000"})
     organic = supabase.select(
-        "ugc_items", {"select": f"{cols},video_url,source", "run_id": f"eq.{run_id}", "limit": "100000"}
+        "organic_items", {"select": f"{cols},video_url,source", "run_id": f"eq.{run_id}", "limit": "100000"}
     )
     fb = _breakdown(paid, "video")
     ig = _breakdown([r for r in organic if r.get("source") == "instagram"], "video_url")
@@ -418,7 +418,7 @@ def _existing_count(supabase: SupabaseClient, run_id: str, platform: str) -> int
         rows = supabase.select("paid_ads", {"select": "id", "run_id": f"eq.{run_id}", "limit": "100000"})
     else:
         rows = supabase.select(
-            "ugc_items",
+            "organic_items",
             {"select": "id", "run_id": f"eq.{run_id}", "source": f"eq.{platform}", "limit": "100000"},
         )
     return len(rows)
@@ -442,7 +442,7 @@ def _run_scrape(
     estimate = estimated_cost_usd if estimated_cost_usd is not None else estimate_cost(platform, target_count or 0)
 
     def work(supabase: SupabaseClient, state: jobs.JobState) -> None:
-        # Stage 1 — ingest: fetch from Apify, write rows to paid_ads/ugc_items.
+        # Stage 1 — ingest: fetch from Apify, write rows to paid_ads/organic_items.
         rows = active_keyword_allocations(supabase, run_id)
         valid = [r for r in rows if str(r.get("keyword_text") or "").strip()]
         # The UI always supplies the ceiling. Top up toward it: split only the GAP between

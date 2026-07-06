@@ -174,7 +174,7 @@ class _FakeSupabase:
 
     def select(self, table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         if table == "item_enrichments":
-            it = "paid_ad" if params.get("item_type") == "eq.paid_ad" else "ugc_item"
+            it = "paid_ad" if params.get("item_type") == "eq.paid_ad" else "organic_item"
             return [{"item_id": "x1", "persona": "gym goers",
                      "ai_description": "A demo.", "content_formats": ["unboxing"]}]
         if table == "item_embeddings":

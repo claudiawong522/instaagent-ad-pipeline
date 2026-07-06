@@ -1,7 +1,7 @@
 """Trends service: viral-format listing + product → trend matching, framework-independent.
 
 Listing (GET /trends/formats) returns each viral_formats row with its example videos
-(re-scraped ugc_items, source='trend') grouped under it, ranked by aggregate live views.
+(re-scraped organic_items, source='trend') grouped under it, ranked by aggregate live views.
 
 Matching (POST /trends/match) is a three-stage funnel that keeps the LLM judge's payload
 flat as the trend library grows:
@@ -34,7 +34,7 @@ _FORMAT_COLUMNS = (
     "id,source_name,source_url,issue_date,format_name,format_description,niche_constraint,"
     "versatility,fit_niches,product_requirements,created_at"
 )
-# ugc_items fields the trend cards need (storage_* are filled by enrichment's MP4 persist).
+# organic_items fields the trend cards need (storage_* are filled by enrichment's MP4 persist).
 _VIDEO_COLUMNS = (
     "id,format_id,storage_video_url,storage_thumb_url,video_url,cover,views,likes,"
     "virality_score,handle,description,enrichment_status,source_metrics,date_created"
@@ -128,7 +128,7 @@ def list_trend_formats(
         }
         if posted_after:
             video_params["date_created"] = f"gte.{posted_after}"
-        rows = supabase.select("ugc_items", video_params)
+        rows = supabase.select("organic_items", video_params)
         for row in rows:
             videos_by_format.setdefault(str(row.get("format_id")), []).append(_video_out(row))
 
@@ -334,11 +334,11 @@ def _judge(
 
 
 def _hydrate_videos(supabase: SupabaseClient, format_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
-    """Example videos per format (ugc_items, source='trend'), same card shape as the listing."""
+    """Example videos per format (organic_items, source='trend'), same card shape as the listing."""
     if not format_ids:
         return {}
     rows = supabase.select(
-        "ugc_items",
+        "organic_items",
         {
             "select": _VIDEO_COLUMNS,
             "format_id": f"in.({','.join(format_ids)})",

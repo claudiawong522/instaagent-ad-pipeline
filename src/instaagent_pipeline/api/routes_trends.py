@@ -1,7 +1,7 @@
 """Trends dashboard API — viral formats scraped from web trend pages.
 
 GET /trends/formats returns each viral_formats row with its example videos (re-scraped
-ugc_items, source='trend') grouped under it, ranked by the videos' aggregate live views.
+organic_items, source='trend') grouped under it, ranked by the videos' aggregate live views.
 POST /trends/match ranks those formats by how well a given product could reuse each one.
 """
 

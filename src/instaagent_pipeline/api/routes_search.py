@@ -13,7 +13,7 @@ router = APIRouter()
 
 class SearchRequest(BaseModel):
     query: str
-    item_type: Optional[str] = None  # 'paid_ad' | 'ugc_item' | None (both)
+    item_type: Optional[str] = None  # 'paid_ad' | 'organic_item' | None (both)
     platform: Optional[str] = None  # 'tiktok' | 'instagram' | 'meta'
     run_id: Optional[str] = None
     min_virality: Optional[float] = None  # Organic-only (normalized virality score, 0-1)
@@ -33,8 +33,8 @@ class SearchRequest(BaseModel):
 def search(req: SearchRequest, request: Request) -> dict[str, Any]:
     supabase = require_supabase(request)
     # An empty query is allowed: search_ads treats it as "browse all ads".
-    if req.item_type not in (None, "paid_ad", "ugc_item"):
-        raise HTTPException(400, "item_type must be 'paid_ad' or 'ugc_item'")
+    if req.item_type not in (None, "paid_ad", "organic_item"):
+        raise HTTPException(400, "item_type must be 'paid_ad' or 'organic_item'")
     try:
         results = search_module.search_ads(
             request.app.state.config,

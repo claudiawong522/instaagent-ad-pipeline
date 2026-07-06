@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     dry_run = getattr(args, "dry_run", False)
     dry_run_needs_supabase = args.command in {
         "enrich-paid-ads",
-        "enrich-ugc",
+        "enrich-organic",
         "enrich-audience",
         "embed-items",
         "cluster-items",
@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
             keywords=args.keyword,
             keyword_type=args.keyword_type,
             target_paid_count=args.target_paid_count,
-            target_ugc_count=args.target_ugc_count,
+            target_organic_count=args.target_organic_count,
             target_tiktok_count=args.target_tiktok_count,
             top_k=args.top_k,
             run_config=json.loads(args.config_json),
@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
                 config=config,
                 supabase=supabase,
                 run_id=args.run_id,
-                target_field="target_tiktok_count" if args.command == "ingest-tiktok" else "target_ugc_count",
+                target_field="target_tiktok_count" if args.command == "ingest-tiktok" else "target_organic_count",
                 ingest_func=ingest_func,
                 page_size=getattr(args, "page_size", None),
                 input_json=args.input_json,
@@ -155,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             input_json=args.input_json,
         )
-    elif args.command == "enrich-ugc":
+    elif args.command == "enrich-organic":
         result = enrich_organic_items(
             config=config,
             supabase=supabase,
@@ -246,7 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--keyword", action="append")
     init.add_argument("--keyword-type", default="seed")
     init.add_argument("--target-paid-count", type=int, default=1000)
-    init.add_argument("--target-ugc-count", type=int, default=2500, help="reels (Instagram) target")
+    init.add_argument("--target-organic-count", type=int, default=2500, help="reels (Instagram) target")
     init.add_argument("--target-tiktok-count", type=int, default=2500)
     init.add_argument("--top-k", type=int, default=3)
     init.add_argument("--config-json", default="{}")
@@ -260,7 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     tiktok = subparsers.add_parser(
         "ingest-tiktok",
-        help="Ingest organic content from the Apify clockworks/tiktok-scraper by keyword into ugc_items.",
+        help="Ingest organic content from the Apify clockworks/tiktok-scraper by keyword into organic_items.",
     )
     add_ingest_common_args(tiktok)
     add_enrichment_args(tiktok, "organic videos")
@@ -270,7 +270,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     instagram = subparsers.add_parser(
         "ingest-instagram",
-        help="Ingest organic reels from the Apify data-slayer/instagram-search-reels by keyword into ugc_items.",
+        help="Ingest organic reels from the Apify data-slayer/instagram-search-reels by keyword into organic_items.",
     )
     add_ingest_common_args(instagram)
     add_enrichment_args(instagram, "organic videos")
@@ -281,7 +281,7 @@ def build_parser() -> argparse.ArgumentParser:
     tiktok_trends = subparsers.add_parser(
         "ingest-tiktok-trends",
         help="Discover viral formats (keyword-free) from a country's For You feed via "
-        "novi/tiktok-trend-api into ugc_items. Followers backfilled separately.",
+        "novi/tiktok-trend-api into organic_items. Followers backfilled separately.",
     )
     add_ingest_common_args(tiktok_trends)
     add_enrichment_args(tiktok_trends, "organic videos")
@@ -291,7 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
     trends = subparsers.add_parser(
         "ingest-trends",
         help="Scrape viral formats from configured web trend pages (TREND_SOURCES) into "
-        "viral_formats + ugc_items, re-scraping each example TikTok video for live metrics. "
+        "viral_formats + organic_items, re-scraping each example TikTok video for live metrics. "
         "Chains organic enrichment (MP4 download + analysis) unless --skip-enrichment.",
     )
     trends.add_argument("--source-name", help="Only ingest this configured source (e.g. ramdam). Omit for all.")
@@ -347,7 +347,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     enrich_organic = subparsers.add_parser(
-        "enrich-ugc",
+        "enrich-organic",
         help="Transcribe and analyze organic videos via OpenRouter into item_enrichments.",
     )
     enrich_organic.add_argument("--run-id", required=True)
@@ -366,7 +366,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate icp/search embeddings for analyzed items via Voyage AI into item_embeddings.",
     )
     embed.add_argument("--run-id", required=True)
-    embed.add_argument("--source", choices=["paid", "ugc", "all"], default="all")
+    embed.add_argument("--source", choices=["paid", "organic", "all"], default="all")
     embed.add_argument(
         "--space",
         choices=[*ALL_SPACES, "all"],
@@ -395,7 +395,7 @@ def build_parser() -> argparse.ArgumentParser:
         "from stored ai_description+transcript (text-only, no video). Requires migration 018.",
     )
     audience.add_argument("--run-id", required=True)
-    audience.add_argument("--source", choices=["paid", "ugc", "all"], default="all")
+    audience.add_argument("--source", choices=["paid", "organic", "all"], default="all")
     audience.add_argument("--limit", type=int, default=1000, help="Maximum items to fetch per source.")
     audience.add_argument("--overwrite", action="store_true", help="Re-enrich rows that already have target_generation.")
     audience.add_argument("--timeout", type=int, default=60)
@@ -406,7 +406,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Cluster icp embeddings per source via HDBSCAN and label clusters via OpenRouter.",
     )
     cluster.add_argument("--run-id", required=True)
-    cluster.add_argument("--source", choices=["paid", "ugc", "all"], default="all")
+    cluster.add_argument("--source", choices=["paid", "organic", "all"], default="all")
     cluster.add_argument(
         "--min-cluster-size",
         type=int,

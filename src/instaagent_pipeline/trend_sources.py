@@ -4,7 +4,7 @@ Fetches each configured trend page (Ramdam, Newengen, ...), strips it to text wh
 preserving the TikTok/Reel links (these live in href/cite/src attributes, not visible
 text, so a naive .get_text() would drop them), then asks the LLM to extract each viral
 *format* and its example video URLs. The CLI (ingest-trends) turns those into
-viral_formats rows + re-scraped ugc_items.
+viral_formats rows + re-scraped organic_items.
 """
 
 from __future__ import annotations

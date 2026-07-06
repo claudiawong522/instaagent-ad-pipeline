@@ -3,7 +3,7 @@
 TikTok  -> clockworks/tiktok-scraper        (keyword search; followers native)
 Instagram -> data-slayer/instagram-search-reels (keyword search; followers backfilled)
 
-Both write to ugc_items. Rows without a usable downloadable video are dropped. The
+Both write to organic_items. Rows without a usable downloadable video are dropped. The
 analysis columns are filled later by the organic vision enrichment.
 """
 
@@ -67,7 +67,7 @@ def _ingest_apify_organic(
         request_params={"actor": actor_id, "keyword": keyword, "actor_input": actor_input},
         # Drop rows without a downloadable video (the no-video rule).
         prepare_items=lambda items: [item for item in items if has_video(item)],
-        destination_table="ugc_items",
+        destination_table="organic_items",
         normalizer=normalizer,
         conflict_columns="run_id,external_id",
         target_count=target_count,
@@ -124,7 +124,7 @@ def ingest_tiktok_trends(
     extra_params: dict[str, Any] | None = None,
 ) -> IngestResult:
     """Keyword-free viral discovery: novi/tiktok-trend-api returns a country's For You
-    feed (no search term). Writes to ugc_items like the other organic sources; follower
+    feed (no search term). Writes to organic_items like the other organic sources; follower
     counts are absent from the payload and filled later by backfill_tiktok_followers.
 
     min_views drops low-view feed-filler at ingest — the For You feed isn't a pure viral
@@ -201,7 +201,7 @@ def _backfill_followers(
     if supabase is None:
         raise RuntimeError(f"Supabase credentials are required for the {source} follower backfill.")
     rows = supabase.select(
-        "ugc_items",
+        "organic_items",
         {
             "select": "id,user_handle",
             "run_id": f"eq.{run_id}",
@@ -227,7 +227,7 @@ def _backfill_followers(
         if count is None:
             continue
         for row_id in by_user.get(username, []):
-            supabase.update_by_id("ugc_items", row_id, {"followers": count})
+            supabase.update_by_id("organic_items", row_id, {"followers": count})
             updated += 1
     return {"usernames": len(usernames), "resolved": len(followers_map), "updated": updated}
 
@@ -344,7 +344,7 @@ def recompute_tiktok_virality(
     if supabase is None:
         raise RuntimeError("Supabase credentials are required to recompute virality.")
     rows = supabase.select(
-        "ugc_items",
+        "organic_items",
         {
             "select": "id,views,likes,comments,shares,followers,virality_score,virality_tier",
             "run_id": f"eq.{run_id}",
@@ -363,6 +363,6 @@ def recompute_tiktok_virality(
         )
         if score == row.get("virality_score") and tier == row.get("virality_tier"):
             continue
-        supabase.update_by_id("ugc_items", str(row["id"]), {"virality_score": score, "virality_tier": tier})
+        supabase.update_by_id("organic_items", str(row["id"]), {"virality_score": score, "virality_tier": tier})
         updated += 1
     return {"scanned": len(rows), "updated": updated}

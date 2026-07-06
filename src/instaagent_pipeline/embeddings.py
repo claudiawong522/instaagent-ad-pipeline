@@ -23,7 +23,7 @@ ALL_SPACES = ("icp", "search")
 # Columns the space builders read, selected from item_enrichments. The icp builder
 # reads persona + target_demographic; the search builder reads ai_description, the
 # SEARCH_TAG_FIELDS tag block, and the full transcript_text. item_id is the polymorphic
-# key (= paid_ads.paid_ad_row_id or ugc_items.id).
+# key (= paid_ads.paid_ad_row_id or organic_items.id).
 # Base columns that always exist. target_generation (migration 018) and content_formats
 # (migration 020) are newer columns: selected when present and skipped via the 400-fallback
 # in _select_enrichment_rows when the migration hasn't been applied yet, so embedding never
@@ -75,8 +75,8 @@ def embed_items(
         raise RuntimeError("Supabase credentials are required to load embedding candidates.")
     if limit < 1:
         raise ValueError("--limit must be greater than 0.")
-    if source not in {"paid", "ugc", "all"}:
-        raise ValueError("--source must be one of paid, ugc, all.")
+    if source not in {"paid", "organic", "all"}:
+        raise ValueError("--source must be one of paid, organic, all.")
     target_spaces = spaces or ALL_SPACES
     unknown = [space for space in target_spaces if space not in SPACE_TEXT_BUILDERS]
     if unknown:
@@ -96,9 +96,9 @@ def embed_items(
     if source in {"paid", "all"}:
         rows = _select_enrichment_rows(supabase, run_id=run_id, item_type="paid_ad", limit=limit)
         collect_candidates(rows, item_type="paid_ad", id_column="item_id", spaces=target_spaces, existing=existing, result=result, out=candidates)
-    if source in {"ugc", "all"}:
-        rows = _select_enrichment_rows(supabase, run_id=run_id, item_type="ugc_item", limit=limit)
-        collect_candidates(rows, item_type="ugc_item", id_column="item_id", spaces=target_spaces, existing=existing, result=result, out=candidates)
+    if source in {"organic", "all"}:
+        rows = _select_enrichment_rows(supabase, run_id=run_id, item_type="organic_item", limit=limit)
+        collect_candidates(rows, item_type="organic_item", id_column="item_id", spaces=target_spaces, existing=existing, result=result, out=candidates)
 
     result.candidates = len(candidates)
     if dry_run:

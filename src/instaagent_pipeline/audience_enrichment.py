@@ -108,12 +108,12 @@ def enrich_audience(
 ) -> AudienceResult:
     if supabase is None:
         raise RuntimeError("Supabase credentials are required for audience enrichment.")
-    if source not in {"paid", "ugc", "all"}:
-        raise ValueError("--source must be one of paid, ugc, all.")
+    if source not in {"paid", "organic", "all"}:
+        raise ValueError("--source must be one of paid, organic, all.")
     if not config.openrouter_api_key:
         raise RuntimeError("OPENROUTER_API_KEY is required for audience enrichment.")
 
-    item_types = {"paid": ["paid_ad"], "ugc": ["ugc_item"], "all": ["paid_ad", "ugc_item"]}[source]
+    item_types = {"paid": ["paid_ad"], "organic": ["organic_item"], "all": ["paid_ad", "organic_item"]}[source]
     result = AudienceResult()
     rows: list[dict[str, Any]] = []
     for item_type in item_types:

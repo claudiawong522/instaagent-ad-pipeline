@@ -2,7 +2,7 @@
 
 Unlike a campaign scrape (product- and keyword-scoped), discovery pulls TikTok's For You
 feed with no search term to study winning *formats* regardless of product. It writes to
-ugc_items under a single sentinel "Viral Discovery" pipeline_run (pipeline_runs.product_id
+organic_items under a single sentinel "Viral Discovery" pipeline_run (pipeline_runs.product_id
 is NOT NULL, so the run needs a product). One Discover click runs the full chain in a
 background thread so the items become searchable and correctly scored:
 

@@ -31,7 +31,7 @@ def init_run(
     keywords: list[str] | None,
     keyword_type: str,
     target_paid_count: int,
-    target_ugc_count: int,
+    target_organic_count: int,
     target_tiktok_count: int,
     top_k: int,
     run_config: dict[str, Any],
@@ -52,7 +52,7 @@ def init_run(
         "status": "created",
         "config": run_config,
         "target_paid_count": target_paid_count,
-        "target_ugc_count": target_ugc_count,
+        "target_organic_count": target_organic_count,
         "target_tiktok_count": target_tiktok_count,
         "top_k": top_k,
     }
@@ -62,7 +62,7 @@ def init_run(
             return allocate_manual_keywords(
                 keywords,
                 target_paid_count=target_paid_count,
-                target_ugc_count=target_ugc_count,
+                target_organic_count=target_organic_count,
                 target_tiktok_count=target_tiktok_count,
                 keyword_type=keyword_type,
             )
@@ -77,7 +77,7 @@ def init_run(
             notes=notes,
             campaign_guidelines=campaign_guidelines,
             target_paid_count=target_paid_count,
-            target_ugc_count=target_ugc_count,
+            target_organic_count=target_organic_count,
             target_tiktok_count=target_tiktok_count,
         ).allocations
 

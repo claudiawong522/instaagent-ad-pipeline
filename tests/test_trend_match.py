@@ -39,7 +39,7 @@ class FakeSupabase:
     def select(self, table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         if table == "viral_formats":
             return self._formats
-        if table == "ugc_items":
+        if table == "organic_items":
             return [
                 {
                     "id": "v1",
