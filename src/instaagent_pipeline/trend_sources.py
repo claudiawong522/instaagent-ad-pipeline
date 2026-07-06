@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -19,6 +20,8 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
 
 from .ad_enrichment import (
     OPENROUTER_BASE_URL,
@@ -274,7 +277,11 @@ repeatable content idea, e.g. "old-photo before/after reveal" or "aura points sc
 
 From the page text below, extract every distinct viral format the article describes.
 For each format return:
-- format_name: a short, specific name for the format (5 words max).
+- format_name: the trend's own heading/title from the page, verbatim and trimmed, when it has
+  one — e.g. a "Trend #7: Toy Story 5 "There Was a Time"" heading → use the exact title
+  "Toy Story 5 "There Was a Time"". Do NOT shorten, paraphrase, or drop a parenthetical (e.g.
+  keep "You Look Like the 4th of July (Makes Me Want a Hot Dog Real Bad)" in full). Only invent a
+  short name (≤6 words) when the section genuinely has no title of its own.
 - format_description: 1-3 sentences describing the format/structure — the hook, the
   beats, what makes it work. Use the article's explanation; do not invent.
 - video_urls: the example TikTok/Instagram/YouTube-Short video URLs the article ties to
@@ -288,6 +295,12 @@ passing, e.g. inside an FAQ answer, a "related trends" sentence, or a roundup li
 options include X, Y, Z"). Those name-drops have no example video and are not real entries.
 Return only real formats.
 
+Many roundups NUMBER their trends ("Trend #1", "Trend #2", … or "1.", "2."). When the page does,
+extract EXACTLY ONE format per number: never merge two numbered trends into a single format, and
+never skip a number that has its own titled section (even if its example video failed to load —
+return it with an empty video_urls array). Each numbered trend's example video is the embed inside
+THAT trend's own section; do not borrow a neighboring trend's video.
+
 PAGE TEXT:
 {page_text}
 
@@ -300,9 +313,94 @@ Candidate video URLs (only assign URLs from this list):
 # drop the lower formats' videos. ~60k chars (~15k tokens) fits these pages with headroom.
 _MAX_PAGE_CHARS = 60000
 
+_TREND_NUMBER_RE = re.compile(r"Trend\s*#?\s*(\d+)", re.I)
+_TREND_HEADING_RE = re.compile(r"Trend\s*#?\s*(\d+)\s*:?[ \t]*([^\n]*)", re.I)
+# Where a trend section's explanation ends and its embed/CTA boilerplate begins.
+_SECTION_STOP_RE = re.compile(r"\b(How to do it|Related videos|Watch (?:more|now))\b", re.I)
+
+
+def max_trend_number(text: str) -> int:
+    """The highest 'Trend #N' the page numbers itself with (0 if unnumbered). Numbered roundups
+    (e.g. newengen) label every trend, so this is the authoritative trend count — used to flag a
+    parse/render that came back with fewer formats than the page actually lists."""
+    return max((int(m.group(1)) for m in _TREND_NUMBER_RE.finditer(text)), default=0)
+
+
+def _video_id_for_match(url: str) -> str | None:
+    """The bare id that a candidate video URL prints inside the page text — a TikTok aweme id or an
+    Instagram shortcode — so a candidate can be located in the section it belongs to."""
+    m = _TIKTOK_ID_RE.search(url) or _REFERER_ID_RE.search(url)
+    if m:
+        return m.group(1)
+    m = _IG_SHORTCODE_RE.search(url)
+    return m.group(1) if m else None
+
+
+_TIKTOK_ID_RE = re.compile(r"/video/(\d+)")
+_REFERER_ID_RE = re.compile(r"referer_video_id=(\d+)")
+_IG_SHORTCODE_RE = re.compile(r"instagram\.com/(?:reel|reels|p)/([\w-]+)", re.I)
+
+
+def segment_numbered_page(issue: "TrendIssue") -> list[dict[str, Any]] | None:
+    """Deterministic parse for a page that numbers its trends (`Trend #1 … #N`): one format per
+    numbered heading — the heading's title as the name, the section's opening text as the
+    description, and every candidate video whose id first appears inside that heading's text span.
+    Returns None when the page isn't numbered (fewer than 2 headings) so unnumbered sources
+    (socialbee, ramdam) fall back to the LLM parse.
+
+    This replaces the LLM guesswork that merged adjacent numbered trends into one card and truncated
+    their titles (e.g. "You Look Like the 4th of July (…)" → "You Look Like 4th July"). A numbered
+    trend whose example video was removed or never rendered still returns here with an empty
+    video_urls (the zero-link filter in ingest then drops it, as for any video-less format)."""
+    text = issue.text
+    marks: list[tuple[int, int, int, str]] = []  # (start, end, number, title)
+    seen: set[int] = set()
+    for m in _TREND_HEADING_RE.finditer(text):
+        n = int(m.group(1))
+        if n in seen:  # embeds can echo the "Trend #N" label further down; keep the first
+            continue
+        seen.add(n)
+        marks.append((m.start(), m.end(), n, m.group(2).strip()))
+    if len(marks) < 2:
+        return None
+
+    # Earliest position (and a canonical URL) for each candidate video id; its section is wherever
+    # it first appears in the rendered text.
+    id_pos: dict[str, int] = {}
+    id_url: dict[str, str] = {}
+    for u in issue.candidate_urls:
+        vid = _video_id_for_match(u)
+        if not vid:
+            continue
+        p = text.find(vid)
+        if p == -1:
+            continue
+        if vid not in id_pos or p < id_pos[vid]:
+            id_pos[vid] = p
+        if vid not in id_url or ("/@" in u and "/@" not in id_url[vid]):
+            id_url[vid] = u  # prefer the canonical @user/video/<id> form for storage
+
+    out: list[dict[str, Any]] = []
+    for i, (_hs, he, n, title) in enumerate(marks):
+        end = marks[i + 1][0] if i + 1 < len(marks) else len(text)
+        body = text[he:end]
+        stop = _SECTION_STOP_RE.search(body)
+        desc = re.sub(r"\s+", " ", body[: stop.start()] if stop else body[:500]).strip() or None
+        urls = [id_url[vid] for vid, p in id_pos.items() if he <= p < end]
+        out.append({"format_name": title or f"Trend {n}", "format_description": desc, "video_urls": urls})
+    return out
+
 
 def parse_trend_formats(config: Config, issue: TrendIssue, *, timeout: int = 120) -> list[dict[str, Any]]:
-    """Extract [{format_name, format_description, video_urls[]}] from one trend page."""
+    """Extract [{format_name, format_description, video_urls[]}] from one trend page.
+
+    Pages that number their trends (`Trend #1 … #N`, e.g. newengen) are segmented deterministically
+    — no LLM — so adjacent trends never merge and titles stay verbatim. Unnumbered pages fall back
+    to the LLM parse below."""
+    segmented = segment_numbered_page(issue)
+    if segmented is not None:
+        return segmented
+
     if not config.openrouter_api_key:
         raise RuntimeError("OPENROUTER_API_KEY is required to parse trend pages.")
     prompt = TREND_PARSE_PROMPT.format(
@@ -347,5 +445,15 @@ def parse_trend_formats(config: Config, issue: TrendIssue, *, timeout: int = 120
                 "format_description": str(fmt.get("format_description") or "").strip() or None,
                 "video_urls": urls,
             }
+        )
+    # Numbered roundups list N trends explicitly; fewer formats than that means a numbered trend
+    # was merged into another or its section didn't render — surface it (a re-run accumulates the
+    # rest; see the trend-scraping skill §8).
+    expected = max_trend_number(issue.text)
+    if expected and len(out) < expected:
+        logger.warning(
+            "%s: page numbers %d trends but parse extracted %d — %d missing (merged/unrendered); "
+            "re-run ingest to accumulate the rest",
+            issue.source_name, expected, len(out), expected - len(out),
         )
     return out
