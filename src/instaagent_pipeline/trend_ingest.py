@@ -155,6 +155,46 @@ def _ig_shortcode(url: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _video_key(url: str) -> str:
+    """A canonical identity for an example video, so the same TikTok/Reel referenced by
+    two formats collapses to one key regardless of query strings or trailing slashes."""
+    u = url.split("?", 1)[0].rstrip("/").lower()
+    vid = _tiktok_video_id(u)
+    if vid:
+        return f"tt:{vid}"
+    code = _ig_shortcode(u)
+    if code:
+        return f"ig:{code.lower()}"
+    return u
+
+
+def _dedupe_formats(formats: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse formats that share an example video into one. The trend blogs — and the LLM
+    reading them — sometimes emit the same trend under two or three names ("Sorry I can't" /
+    "Hands are full"). Left alone, those become duplicate cards fighting over the single
+    ugc_items row per (run, video): the video attaches to one and its siblings render empty.
+    Merging up front means one card per trend, with its video. Formats with no example video
+    have nothing to key on and are kept as-is."""
+    kept: list[dict[str, Any]] = []
+    key_to_format: dict[str, dict[str, Any]] = {}
+    for fmt in formats:
+        keys = {_video_key(u) for u in fmt.get("video_urls", [])}
+        match = next((key_to_format[k] for k in keys if k in key_to_format), None)
+        if match is None:
+            kept.append(fmt)
+            for k in keys:
+                key_to_format.setdefault(k, fmt)
+        else:
+            existing = set(match["video_urls"])
+            for u in fmt.get("video_urls", []):
+                if u not in existing:
+                    match["video_urls"].append(u)
+                    existing.add(u)
+            for k in keys:
+                key_to_format.setdefault(k, match)
+    return kept
+
+
 def _resolve_tiktok_short(url: str, cache: dict[str, str]) -> str:
     """vm./vt.tiktok.com and /t/ links 30x-redirect to the canonical /video/<id> URL.
     Follow the redirect so the id can be extracted; fall back to the original on error."""
@@ -214,7 +254,7 @@ def ingest_trends(
                     result.sources.append(sr.__dict__)
                     continue
 
-            formats = parse_trend_formats(config, issue, timeout=min(timeout, 180))
+            formats = _dedupe_formats(parse_trend_formats(config, issue, timeout=min(timeout, 180)))
             sr.formats = len(formats)
             sr.videos_found = sum(len(f["video_urls"]) for f in formats)
 
