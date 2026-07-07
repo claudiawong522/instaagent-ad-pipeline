@@ -74,24 +74,24 @@ A few free/low-cost accounts to plug in (keys go in your `.env` file):
 
 ## 🌍 Deploy your own dashboard
 
-InstaAgent is **fully self-hosted** — three pieces, all yours, wired only to each other. Nothing points at a shared instance.
+InstaAgent is **fully self-hosted** — your database, your keys, one deploy. The dashboard and its backend API live in a **single Vercel project**: the Next.js UI plus the Python pipeline running as serverless functions. No separate server to run.
 
 1. **Database** — your Supabase project (paste `supabase/schema.sql` once).
-2. **Backend API** — the service that reads and writes *your* DB. Run it anywhere that hosts Python (Render, Railway, Fly, a VM):
-   ```bash
-   PYTHONPATH=src uvicorn instaagent_pipeline.api.app:app --port 8000
-   ```
-   It uses the service-role key from your `.env` — keep it server-side only, never in the frontend.
-3. **Dashboard** — deploy `frontend/` to your own Vercel. Set one env var so the UI talks to *your* backend:
-   ```
-   NEXT_PUBLIC_API_URL=https://your-backend-url
-   ```
+2. **Deploy** — import this repo into Vercel. Add your Supabase + provider keys as project **Environment Variables**. The service-role key stays server-side — it's never prefixed `NEXT_PUBLIC_`, so it can't reach the browser. Vercel builds the UI and the `/api` functions together.
+3. **Auto-deploy** — every push to `main` ships production via GitHub Actions (`.github/workflows/deploy-vercel.yml`); set the `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, and `VERCEL_TOKEN` repo secrets.
 
-The dashboard never touches Supabase directly — it only reads through your backend, so your data never leaves your own stack.
+The dashboard never touches Supabase directly — the browser calls the same-origin `/api`, which reads through your backend, so your data never leaves your own stack.
+
+**Local dev** runs the two pieces as separate processes (Next's dev server can't run the Python functions):
+```bash
+PYTHONPATH=src uvicorn instaagent_pipeline.api.app:app --port 8000   # backend
+npm run dev                                                          # dashboard → http://localhost:3000
+```
+with `NEXT_PUBLIC_API_URL=http://localhost:8000` in `.env.local` (in production it's unset and the UI uses same-origin `/api`).
 
 ## 📚 Going deeper
 
-Building on top of it? See **`AGENTS.md`** (how it's structured), **`database.md`** (the data), and **`frontend/`** (the dashboard app).
+Building on top of it? See **`AGENTS.md`** (how it's structured), **`database.md`** (the data), and the dashboard app at the repo root (**`app/`**, **`components/`**, **`lib/`**).
 
 <div align="center">
 

@@ -14,8 +14,14 @@ Primary areas:
 - `database.md`: human-readable database/table documentation.
 - `docs/archive/`: superseded plans and one-off notes (`PLAN.md`, `api-endpoints.md`, …); historical context only — do not treat items there as implemented.
 - `experiments/`: standalone analysis/visualization scripts; not part of the package.
+- `app/`, `components/`, `lib/`: the Next.js dashboard (at the repo root so it shares one Vercel project with the API).
+- `api/index.py` + `vercel.json`: Vercel Python entry — mounts the FastAPI app (`src/instaagent_pipeline/api/app.py`) as serverless functions under `/api` (13-min `maxDuration`).
 
 Runtime dependencies are listed in `pyproject.toml`; `numpy` and `scikit-learn` are required for clustering.
+
+## Deployment
+
+Frontend + backend deploy as a **single Vercel project**: the Next.js UI and the FastAPI backend (as Python serverless functions). Push to `main` auto-deploys production via `.github/workflows/deploy-vercel.yml`. Secrets (Supabase + provider keys) are Vercel Environment Variables, server-side only. The scrape pipeline runs inline within the request (no background threads — serverless kills them on response); a single scrape must finish within the 13-min function limit. Locally the two run as separate processes (`uvicorn … :8000` + `npm run dev`), since Next's dev server can't serve the Python functions.
 
 
 ## Secrets
