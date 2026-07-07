@@ -26,12 +26,11 @@
 
 
 ## THINGS TO BEWARE
-- if url form of newsletter changes, github actions scheduled scrape will fail, this requires a manual fix
-  e.g. right now the month slug is hardcoded to the no-year form (july-tiktok-trends). Older months used <month>-2026-tiktok-trends. If newengen reverts, the fetch silently 404s and you get zero newengen trends with no error. Harden the URL builder to try both forms.
+- if url form of newsletter changes, github actions scheduled scrape will fail, this requires a manual fix, an email notifies instaagenttool@gmail.com
+  e.g. right now the month slug is hardcoded to the no-year form (july-tiktok-trends). Older months used <month>-2026-tiktok-trends. If newengen reverts, the fetch silently 404s and you get zero newengen trends with no error. 
 
 
-## THINGS TO DO NOW
-- if format of newsletter changes, send an email and notify email
+
 
 
 
