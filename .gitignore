@@ -228,3 +228,5 @@ experiments/embeddings.html
 experiments/embeddings.png
 experiments/paid_experiment.png
 experiments/strategy_data.js
+.vercel
+.env*
