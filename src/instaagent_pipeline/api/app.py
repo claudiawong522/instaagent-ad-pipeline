@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -20,7 +21,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Self-heal: re-run any scrape whose worker was killed (e.g. by this very reload) so its
     # items don't sit stuck at "processing" forever. Runs on server startup (not import, so
     # importing the module — e.g. in tests — spawns no threads); best-effort.
-    if app.state.supabase is not None:
+    # Skipped on Vercel: there each invocation is isolated and short-lived, scrapes run inline
+    # (see campaigns.trigger_scrape), and background resume threads would be killed on return —
+    # so orphan-resume only makes sense for a persistent local server.
+    if app.state.supabase is not None and not os.getenv("VERCEL"):
         try:
             resumed = resume_orphaned_jobs(app.state.config, app.state.supabase)
             if resumed:

@@ -337,7 +337,12 @@ def trigger_scrape(
     target_count: int | None = None,
     estimated_cost_usd: float | None = None,
 ) -> dict[str, Any]:
-    """Kick off the Apify scrape for one platform in a background thread; return immediately.
+    """Run the Apify scrape for one platform inline (within the request), then return.
+
+    Serverless-native: on Vercel each function invocation runs to completion up to maxDuration,
+    so the whole scrape happens here — a background thread would be killed the moment the response
+    returns. run_job writes progress to Supabase as it goes, so the UI's scrape-stats/-events
+    polling shows live progress while this request is in flight; try_claim is released in run_job.
 
     target_count, if given, is the new TOTAL to fetch for this platform; it's split across the
     run's keywords. None falls back to each keyword's stored allocation (the create-time target).
@@ -347,9 +352,7 @@ def trigger_scrape(
         raise ValueError(f"unknown platform {platform!r}; expected one of {sorted(_PLATFORMS)}")
     if not jobs.try_claim(run_id, platform):
         return {"started": False, "platform": platform, "reason": "already running"}
-    threading.Thread(
-        target=_run_scrape, args=(config, run_id, platform, target_count, estimated_cost_usd), daemon=True
-    ).start()
+    _run_scrape(config, run_id, platform, target_count, estimated_cost_usd)
     return {"started": True, "platform": platform}
 
 
