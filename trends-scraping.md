@@ -16,17 +16,20 @@ Instead of guessing what's viral, it lets marketing blogs do the trend-spotting,
 
 5. **Save + show.** Everything lands in the database and shows up on the `/trends` page, sorted by most views.
 
-## The 3 sources & how often they update
+## The 4 sources & how often they update
 
 | Source | URL | Cadence |
 |--------|-----|---------|
 | **ramdam** | ramd.am/blog/trends-tiktok | **Weekly** — evergreen URL, updated in place |
 | **socialbee** | socialbee.com/blog/tiktok-trends | **Weekly** — evergreen URL, updated in place |
 | **newengen** | newengen.com/insights/`<month>`-tiktok-trends | **Monthly** — a *new* URL each month (deep-dive report) |
+| **socialgrowthengineers** | socialgrowthengineers.com `<weekly viral-hits post>` | **Weekly** — email-gated; URL auto-discovered from the sitemap |
 
 These cadences are what the code assumes, not something the pipeline verifies. The pipeline hashes each page and **skips re-parsing anything unchanged since the last run**, so running `ingest-trends` more often than a source actually updates just no-ops on the unchanged ones.
 
 ⚠️ **newengen needs manual upkeep:** it publishes a *fresh URL* every month (`june-tiktok-trends` → `july-tiktok-trends` → …), so the hardcoded URL in `TREND_SOURCES` goes stale and must be pointed at the new month's report each time.
+
+⚠️ **socialgrowthengineers is email-gated (`kind: "sge_newsletter"`).** Two things differ from the other sources: (1) the weekly "viral hits" post has *no stable URL* (`8-viral-hits-you-missed-this-week-10` → …), so the backend **auto-discovers the newest post from the sitemap** (the `\d+-viral-hits-you-missed-this-week-\d+` slug with the max `<lastmod>`) — no manual URL upkeep. (2) The body is served only to a verified subscriber, so the fetch sends the **`SGE_ACCESS_TOKEN`** JWT as a cookie. That token is obtained by subscribing an email once (`scratchpad/sge_unlock.py`) and **expires ~quarterly** — when it lapses the source starts erroring (`token expired`); re-run the unlock and update `SGE_ACCESS_TOKEN` (in `.env` and the GitHub Actions secret).
 
 ## The one idea to remember
 

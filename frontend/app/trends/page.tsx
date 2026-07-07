@@ -27,6 +27,9 @@ const TREND_SOURCE_URLS: { name: string; url: string; cadence: string }[] = [
   { name: 'ramdam', url: 'https://www.ramd.am/blog/trends-tiktok', cadence: 'Updated weekly' },
   { name: 'newengen', url: newengenInsightsUrl(), cadence: 'Updated monthly' },
   { name: 'socialbee', url: 'https://socialbee.com/blog/tiktok-trends/', cadence: 'Updated weekly' },
+  // SGE's weekly "viral hits" post is email-gated; the backend discovers the newest post each run,
+  // so we just link to the site root here (no stable per-week URL to mirror).
+  { name: 'socialgrowthengineers', url: 'https://www.socialgrowthengineers.com', cadence: 'Updated weekly' },
 ]
 
 // The DB keys sources by their one-word slug; give multi-word names their spacing back for

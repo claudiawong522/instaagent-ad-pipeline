@@ -24,6 +24,11 @@ class Config:
     # default_trend_sources() when unset. Each page is fetched, stripped to text, and parsed
     # by the LLM into formats. None means "use the built-in defaults".
     trend_sources_json: str | None = None
+    # JWT that unlocks Social Growth Engineers' email-gated newsletter posts (kind:"sge_newsletter").
+    # Obtained once by subscribing an email (scratchpad/sge_unlock.py); sent as the
+    # newsletter_access_token cookie on read-only content fetches. Expires ~quarterly — re-run the
+    # unlock to refresh. None disables the SGE newsletter source.
+    sge_access_token: str | None = None
     # Relevance floor for the search-space KNN. Cosine scores scale with query length
     # (bare keywords land ~0.2 lower than multi-word queries against the verbose
     # descriptions), so the floor is set just above the true-nonsense band (~0.24):
@@ -70,6 +75,7 @@ class Config:
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-flash-latest"),
             enrichment_provider=os.getenv("ENRICHMENT_PROVIDER", "openrouter"),
             trend_sources_json=os.getenv("TREND_SOURCES"),
+            sge_access_token=os.getenv("SGE_ACCESS_TOKEN"),
             voyage_api_key=os.getenv("VOYAGE_API_KEY"),
             embedding_model=os.getenv("EMBEDDING_MODEL", "voyage-4-lite"),
             search_min_similarity=float(os.getenv("SEARCH_MIN_SIMILARITY", "0.30")),
