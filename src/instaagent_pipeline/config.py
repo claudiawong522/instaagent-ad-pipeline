@@ -48,6 +48,11 @@ class Config:
     rerank_candidate_pool: int = 100
     # Browser origins allowed to call the API (CORS), comma-separated via CORS_ORIGINS.
     cors_origins: str = "http://localhost:3000"
+    # Optional shared-secret that gates the API. When set (API_AUTH_TOKEN), every request must
+    # carry `Authorization: Bearer <token>` (except /health and CORS preflight). It's a bot/scanner
+    # speed bump, NOT a real boundary: the SPA sends it via NEXT_PUBLIC_API_TOKEN, so it's visible
+    # in the browser. Unset (default) leaves the API open, so local dev and tests are unaffected.
+    api_auth_token: str = ""
     # Parser-drift reminder emails (drift_alert.py), sent free over SMTP. Default is Gmail
     # (user = Gmail address, password = app password from myaccount.google.com/apppasswords);
     # any free relay works via ALERT_SMTP_HOST/PORT (e.g. Brevo's smtp-relay.brevo.com:587,
@@ -83,6 +88,7 @@ class Config:
             rerank_min_score=float(os.getenv("RERANK_MIN_SCORE", "0.5")),
             rerank_candidate_pool=int(os.getenv("RERANK_CANDIDATE_POOL", "100")),
             cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000"),
+            api_auth_token=os.getenv("API_AUTH_TOKEN") or "",
             alert_email_to=os.getenv("ALERT_EMAIL_TO", "instaagenttool@gmail.com"),
             # `or` fallbacks (not getenv defaults): CI passes unset secrets as empty strings.
             alert_smtp_host=os.getenv("ALERT_SMTP_HOST") or "smtp.gmail.com",

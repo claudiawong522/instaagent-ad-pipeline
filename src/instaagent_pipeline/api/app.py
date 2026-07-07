@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+import secrets
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from ..config import Config
 from ..supabase_client import SupabaseClient
@@ -37,6 +39,21 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     config = Config.from_env()
     app = FastAPI(title="InstaAgent Ad Search API", lifespan=_lifespan)
+
+    # Optional shared-secret gate (bot/scanner speed bump; see Config.api_auth_token). Registered
+    # before CORS so CORS stays outermost — preflight and the 401 both keep their CORS headers.
+    token = config.api_auth_token
+    if token:
+        expected = f"Bearer {token}"
+
+        @app.middleware("http")
+        async def require_token(request: Request, call_next):
+            # Let CORS preflight and the health check through unauthenticated.
+            if request.method != "OPTIONS" and request.url.path != "/health":
+                if not secrets.compare_digest(request.headers.get("authorization", ""), expected):
+                    return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+            return await call_next(request)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[o.strip() for o in config.cors_origins.split(",") if o.strip()],

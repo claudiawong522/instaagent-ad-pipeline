@@ -16,10 +16,16 @@ import type {
 } from './types'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+// Shared-secret the backend requires when API_AUTH_TOKEN is set (bot speed bump). Visible in the
+// browser bundle by design — it only blocks anonymous/direct hits, not app users.
+const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
+    },
     ...options,
   })
   if (!res.ok) {
