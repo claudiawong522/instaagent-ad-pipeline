@@ -520,12 +520,14 @@ def _run_scrape(
 
 
 def orphaned_events(supabase: SupabaseClient, run_id: str | None = None) -> list[dict[str, Any]]:
-    """scrape_events whose worker was killed before it could finish: status still 'running',
-    older than STALE_AFTER_SECONDS, and not in this process's live _running set. These are the
-    jobs that leave items stuck at "processing" with no error and never recover on their own."""
+    """scrape_events whose worker didn't finish the post-ingest work: status 'running' (hard-killed,
+    e.g. a `--reload` restart) or 'failed' (the worker hit an exception mid-enrichment and closed the
+    event), older than STALE_AFTER_SECONDS, and not in this process's live _running set. Both leave
+    items stuck at "processing" and never recover on their own. _resume re-runs the idempotent
+    enrich→embed stages (no re-scrape) and marks the event 'done', so a succeeded resume won't recur."""
     params: dict[str, str] = {
         "select": "id,run_id,platform,started_at",
-        "status": "eq.running",
+        "status": "in.(running,failed)",
         "order": "started_at.desc",
         "limit": "200",
     }
@@ -596,9 +598,10 @@ def _resume(config: Config, event: dict[str, Any]) -> None:
 
 
 def resume_orphaned_jobs(config: Config, supabase: SupabaseClient) -> int:
-    """Re-run scrape jobs whose worker was killed (e.g. a backend reload), in background threads.
-    Called once at startup so a restart self-heals instead of leaving items stuck at "processing"
-    forever. Skips jobs older than MAX_RESUME_AGE_SECONDS (abandoned, not worth re-spending on).
+    """Re-run scrape jobs whose worker didn't finish — hard-killed ('running') or failed mid-enrichment
+    ('failed') — in background threads. Called once at startup so a restart self-heals instead of
+    leaving items stuck at "processing" forever. Skips jobs older than MAX_RESUME_AGE_SECONDS
+    (abandoned, not worth re-spending on).
     Returns how many were resumed."""
     resume_after = (datetime.now(timezone.utc) - timedelta(seconds=MAX_RESUME_AGE_SECONDS)).isoformat()
     resumed = 0

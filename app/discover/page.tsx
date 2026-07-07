@@ -189,8 +189,9 @@ function DiscoveryRunCard({
   const processing = stats?.tiktok_processing ?? 0
   // The discovery scrape ran out of Apify/OpenRouter credits — refill and re-run to finish.
   const creditError = running ? null : stats?.tiktok_scrape_error ?? null
-  // Items pulled but stuck unprocessed with nothing running = the job was killed mid-enrichment.
-  // The backend auto-resumes leftovers on its next restart; until then, show the truth, not "Done".
+  // Items pulled but stuck unprocessed with nothing running = the scrape stopped mid-enrichment
+  // (hard-killed or failed). The backend auto-resumes leftovers on its next restart; until then,
+  // show the truth, not "Done".
   const interrupted = !running && !creditError && processing > 0
   const state: 'running' | 'error' | 'interrupted' | 'done' =
     running ? 'running' : creditError ? 'error' : interrupted ? 'interrupted' : 'done'
@@ -241,9 +242,9 @@ function DiscoveryRunCard({
 
       {interrupted && (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
-          {processing} item{processing === 1 ? '' : 's'} pulled but not yet made searchable — the job was
-          killed before finishing. The server re-runs the leftover work when it next restarts; this panel
-          will update once it does.
+          {processing} item{processing === 1 ? '' : 's'} pulled but not yet made searchable — the scrape
+          stopped before finishing. The backend finishes the leftovers automatically the next time it
+          restarts (restart the server — reloading this page won&apos;t trigger it).
         </div>
       )}
 
