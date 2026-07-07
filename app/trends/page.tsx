@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { listTrendFormats, listTrendScrapeDates, matchProduct } from '@/lib/api'
 import type { MatchedFormat, ViralFormat, TrendVideo } from '@/lib/types'
-import { fmtDate, formatNum } from '@/lib/format'
+import { fmtDate, formatNum, safeHref } from '@/lib/format'
 import { HelpPopover } from '@/components/HelpPopover'
 import { ViralityHelp } from '@/components/ViralityHelp'
 import { VideoTile } from '@/components/VideoTile'
@@ -406,9 +406,9 @@ function TrendVideoCard({ video: v }: { video: TrendVideo }) {
         {v.date_created && <span>{fmtDate(v.date_created)}</span>}
       </div>
       {v.handle && <span className="truncate text-[11px] text-muted-foreground">@{v.handle}</span>}
-      {v.original_url && (
+      {safeHref(v.original_url) && (
         <a
-          href={v.original_url}
+          href={safeHref(v.original_url)}
           target="_blank"
           rel="noreferrer"
           className="text-[11px] text-primary hover:underline"

@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { searchAds, listRuns } from '@/lib/api'
 import type { ItemType, RunSummary, VideoResult } from '@/lib/types'
-import { formatNum, fmtDate } from '@/lib/format'
+import { formatNum, fmtDate, safeHref } from '@/lib/format'
 import { ViralityHelp } from '@/components/ViralityHelp'
 import { VideoTile } from '@/components/VideoTile'
 
@@ -472,7 +472,7 @@ function VideoCard({ result: r }: { result: VideoResult }) {
         <Badge variant={r.item_type === 'paid_ad' ? 'default' : 'outline'}>
           {r.item_type === 'paid_ad' ? 'Paid' : 'Organic'}
         </Badge>
-        {r.content_formats.map((f) => (
+        {(r.content_formats ?? []).map((f) => (
           <Badge key={`fmt-${f}`} variant="outline">{f.replace(/_/g, ' ')}</Badge>
         ))}
         {typeof r.similarity === 'number' && (
@@ -481,12 +481,12 @@ function VideoCard({ result: r }: { result: VideoResult }) {
         {r.price_positioning && <Badge variant="outline" className="capitalize">{r.price_positioning.replace(/_/g, ' ')}</Badge>}
         {r.target_generation && <Badge variant="outline" className="capitalize">{r.target_generation.replace(/_/g, ' ')}</Badge>}
       </div>
-      {(r.age_brackets.length > 0 || r.languages.length > 0) && (
+      {((r.age_brackets?.length ?? 0) > 0 || (r.languages?.length ?? 0) > 0) && (
         <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
-          {r.age_brackets.map((a) => (
+          {(r.age_brackets ?? []).map((a) => (
             <span key={`age-${a}`} className="rounded bg-muted px-1.5 py-0.5">{a}</span>
           ))}
-          {r.languages.map((l) => (
+          {(r.languages ?? []).map((l) => (
             <span key={`lang-${l}`} className="rounded bg-muted px-1.5 py-0.5">{l}</span>
           ))}
         </div>
@@ -512,9 +512,9 @@ function VideoCard({ result: r }: { result: VideoResult }) {
       {r.ai_description && (
         <p className="line-clamp-4 text-xs text-muted-foreground">{r.ai_description}</p>
       )}
-      {r.original_url && (
+      {safeHref(r.original_url) && (
         <a
-          href={r.original_url}
+          href={safeHref(r.original_url)}
           target="_blank"
           rel="noreferrer"
           className="mt-auto text-xs text-primary hover:underline"

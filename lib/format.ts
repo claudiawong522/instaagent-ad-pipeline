@@ -40,6 +40,18 @@ export function timeAgo(iso: string | null | undefined): string | null {
   return `${days}d ago`
 }
 
+/** A URL safe to put in an href: only http(s), else undefined. Blocks scraped `javascript:`/`data:`
+ *  URLs, which React renders verbatim (it only warns in dev). */
+export function safeHref(url: string | null | undefined): string | undefined {
+  if (!url) return undefined
+  try {
+    const scheme = new URL(url, window.location.origin).protocol
+    return scheme === 'http:' || scheme === 'https:' ? url : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Short date, e.g. "Jun 23, 2026"; "—" when missing/malformed. */
 export function fmtDate(iso: string | null | undefined): string {
   if (!iso) return '—'
