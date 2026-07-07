@@ -6,11 +6,11 @@
 
 InstaAgent studies the ads and videos already winning in your market, then hands you the patterns worth copying.
 
-![Status](https://img.shields.io/badge/status-live-brightgreen?style=for-the-badge)
+![Self-hosted](https://img.shields.io/badge/self--hosted-bring%20your%20own%20DB-brightgreen?style=for-the-badge)
 ![For](https://img.shields.io/badge/for-marketers%20%26%20founders-blue?style=for-the-badge)
 ![Powered by](https://img.shields.io/badge/powered%20by-AI-8b5cf6?style=for-the-badge)
 
-### 🌐 [**Try the live demo →**](#)  *(link coming after launch)*
+**Run your own instance** — on your Supabase and your API keys. No shared or hosted database; your data stays yours.
 
 </div>
 
@@ -71,6 +71,23 @@ A few free/low-cost accounts to plug in (keys go in your `.env` file):
 | **OpenRouter** · **Claude** · **Voyage** | The AI that watches and understands each video |
 
 > 🔒 Your keys stay in `.env`, which is never committed. Keep them private.
+
+## 🌍 Deploy your own dashboard
+
+InstaAgent is **fully self-hosted** — three pieces, all yours, wired only to each other. Nothing points at a shared instance.
+
+1. **Database** — your Supabase project (paste `supabase/schema.sql` once).
+2. **Backend API** — the service that reads and writes *your* DB. Run it anywhere that hosts Python (Render, Railway, Fly, a VM):
+   ```bash
+   PYTHONPATH=src uvicorn instaagent_pipeline.api.app:app --port 8000
+   ```
+   It uses the service-role key from your `.env` — keep it server-side only, never in the frontend.
+3. **Dashboard** — deploy `frontend/` to your own Vercel. Set one env var so the UI talks to *your* backend:
+   ```
+   NEXT_PUBLIC_API_URL=https://your-backend-url
+   ```
+
+The dashboard never touches Supabase directly — it only reads through your backend, so your data never leaves your own stack.
 
 ## 📚 Going deeper
 
