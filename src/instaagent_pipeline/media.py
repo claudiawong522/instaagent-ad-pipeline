@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+import re
+import socket
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 from .http_client import HttpClientError, ssl_context
 from .supabase_client import SupabaseClient
@@ -13,6 +16,10 @@ from .supabase_client import SupabaseClient
 logger = logging.getLogger(__name__)
 
 STORAGE_BUCKET = "ad-videos"
+
+# Storage object keys are built from provider-supplied ids; keep only filename-safe chars so a
+# crafted id (e.g. "../other-run/x") can't relocate the object outside its run/subdir prefix.
+_UNSAFE_KEY_RE = re.compile(r"[^A-Za-z0-9_-]")
 
 # OpenRouter forwards arbitrary video to Gemini only as base64 data URLs, so the
 # video bytes are fetched in memory per ad; nothing is written to disk.
@@ -36,6 +43,44 @@ except Exception:  # pragma: no cover - optional image deps absent
 def is_probable_video_url(url: str) -> bool:
     parsed = urlparse(url)
     return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+
+
+def _safe_key_segment(value: str) -> str:
+    """A filename-safe slug for a Storage object key, so provider ids can't traverse the bucket."""
+    return _UNSAFE_KEY_RE.sub("_", value) or "item"
+
+
+def _assert_public_host(url: str) -> None:
+    """SSRF guard: reject a URL whose host resolves to a private/loopback/link-local/reserved
+    address (e.g. the cloud metadata IP 169.254.169.254 or an internal service). Applied to the
+    initial URL and — via the redirect handler below — to every redirect target. Not proof against
+    DNS rebinding, but blocks the direct cases of pointing a scraped media URL at internal hosts."""
+    host = urlparse(url).hostname
+    if not host:
+        raise HttpClientError(f"Refusing to fetch URL with no host: {url}")
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError as exc:
+        raise HttpClientError(f"Could not resolve host for {url}: {exc}") from exc
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            raise HttpClientError(f"Refusing to fetch internal address {ip} for {url}")
+
+
+class _SSRFGuardRedirectHandler(HTTPRedirectHandler):
+    """Re-validate the target of every 3xx redirect so a public URL can't bounce to an internal one."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _assert_public_host(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def thumbnail_to_web_jpeg(data: bytes) -> bytes | None:
@@ -72,9 +117,10 @@ def persist_media(
     public URLs on the item row. Resilient: upload failures are logged, not raised, so
     enrichment still proceeds. Shared by paid + organic enrichment."""
     updates: dict[str, str] = {}
+    safe_id = _safe_key_segment(item_id)
     try:
         updates["storage_video_url"] = supabase.upload_object(
-            STORAGE_BUCKET, f"{run_id}/{subdir}/{item_id}.mp4", video_bytes, "video/mp4", timeout=timeout
+            STORAGE_BUCKET, f"{run_id}/{subdir}/{safe_id}.mp4", video_bytes, "video/mp4", timeout=timeout
         )
     except (HttpClientError, RuntimeError) as exc:
         logger.warning("Video persist failed for %s %s: %s", item_table, item_id, exc)
@@ -84,7 +130,7 @@ def persist_media(
             jpeg_bytes = thumbnail_to_web_jpeg(thumb_bytes)
             if jpeg_bytes:
                 updates["storage_thumb_url"] = supabase.upload_object(
-                    STORAGE_BUCKET, f"{run_id}/{subdir}/{item_id}.jpg", jpeg_bytes, "image/jpeg", timeout=timeout
+                    STORAGE_BUCKET, f"{run_id}/{subdir}/{safe_id}.jpg", jpeg_bytes, "image/jpeg", timeout=timeout
                 )
         except (HttpClientError, RuntimeError) as exc:
             logger.warning("Thumbnail persist failed for %s %s: %s", item_table, item_id, exc)
@@ -97,9 +143,11 @@ def persist_media(
 
 
 def fetch_video_bytes(url: str, *, timeout: int) -> bytes:
+    _assert_public_host(url)
     request = Request(url, headers={"User-Agent": "instaagent-ad-pipeline/0.1"})
+    opener = build_opener(_SSRFGuardRedirectHandler(), HTTPSHandler(context=ssl_context()))
     try:
-        with urlopen(request, timeout=timeout, context=ssl_context()) as response:
+        with opener.open(request, timeout=timeout) as response:
             content_type = (response.headers.get("Content-Type") or "").lower()
             data = response.read(INLINE_VIDEO_MAX_BYTES + 1)
     except HTTPError as exc:

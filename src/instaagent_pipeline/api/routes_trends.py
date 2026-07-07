@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..http_client import HttpClientError
 from . import trends as trends_module
@@ -21,8 +21,9 @@ router = APIRouter()
 
 
 class MatchRequest(BaseModel):
-    product: str
-    limit: int | None = None
+    # Bounded so an unauthenticated caller can't drive an arbitrarily large (billed) LLM prompt.
+    product: str = Field(..., max_length=2000)
+    limit: int | None = Field(default=None, ge=1, le=200)
 
 
 @router.get("/trends/scrape-dates")
@@ -44,16 +45,21 @@ def list_trend_formats(
     all_months: bool = False,
     limit: int = 200,
 ) -> dict[str, Any]:
-    formats = trends_module.list_trend_formats(
-        require_supabase(request),
-        source_name=source_name,
-        q=q,
-        min_views=min_views,
-        posted_after=posted_after,
-        scraped_on=scraped_on,
-        all_months=all_months,
-        limit=limit,
-    )
+    try:
+        formats = trends_module.list_trend_formats(
+            require_supabase(request),
+            source_name=source_name,
+            q=q,
+            min_views=min_views,
+            posted_after=posted_after,
+            scraped_on=scraped_on,
+            all_months=all_months,
+            limit=limit,
+        )
+    except HttpClientError as exc:
+        # A malformed filter value (e.g. posted_after=abc) makes PostgREST 400; surface that as a
+        # 400, not an opaque 500.
+        raise HTTPException(400, f"Invalid filter: {exc}") from exc
     return {"formats": formats}
 
 

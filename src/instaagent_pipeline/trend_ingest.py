@@ -156,7 +156,9 @@ def _relink_existing_videos(
             supabase.update_by_id("organic_items", str(row["id"]), {"format_id": target})
 
 
-def _prune_empty_formats(supabase: SupabaseClient, source_name: str) -> int:
+def _prune_empty_formats(
+    supabase: SupabaseClient, source_name: str, keep_ids: frozenset[str] = frozenset()
+) -> int:
     """Delete this source's viral_formats rows that have no example video (0 linked organic_items),
     evaluated AFTER the current render's videos are re-linked. An empty row is a trend the page
     renamed between renders — its video just moved to the new-name row, leaving the old name
@@ -166,13 +168,17 @@ def _prune_empty_formats(supabase: SupabaseClient, source_name: str) -> int:
     render: the JS page loads a random subset of its trend embeds each fetch, so a trend absent
     from this render still has its video and is NOT empty, so it survives here. Only genuinely
     video-less rows are dropped, so a partial render can never delete a real trend (the earlier
-    hash-based prune did exactly that — it deleted every row from a different page version)."""
+    hash-based prune did exactly that — it deleted every row from a different page version).
+
+    keep_ids are the formats this render actually processed: they have a real example link that
+    merely failed to scrape (private/deleted/region-locked) and carry an explanatory ingest_note,
+    so they must survive even while empty — otherwise the note is written then instantly deleted."""
     rows = supabase.select("viral_formats", {"select": "id", "source_name": f"eq.{source_name}"})
     if not rows:
         return 0
     ids = [str(r["id"]) for r in rows]
     have = _formats_with_videos(supabase, ids)
-    empty = [i for i in ids if i not in have]
+    empty = [i for i in ids if i not in have and i not in keep_ids]
     for fid in empty:
         supabase.delete("viral_formats", {"id": f"eq.{fid}"})
     return len(empty)
@@ -470,7 +476,7 @@ def ingest_trends(
             _annotate_formats(supabase, fmt_counts)
             # Drop empty rows a rename left behind (video re-linked to the new-name row). Safe
             # under partial renders: trends this render missed keep their video and survive.
-            sr.formats_removed = _prune_empty_formats(supabase, name)
+            sr.formats_removed = _prune_empty_formats(supabase, name, frozenset(fmt_counts))
             _record_scrape_event(
                 supabase, run_id, len(tiktok_urls) + len(ig_urls), sr.videos_ingested
             )
