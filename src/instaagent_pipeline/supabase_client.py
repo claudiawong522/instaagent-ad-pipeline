@@ -164,6 +164,10 @@ class SupabaseClient:
                 "Authorization": f"Bearer {self.key}",
                 "Content-Type": content_type,
                 "x-upsert": "true",
+                # Content-addressed media never changes once uploaded, so let Supabase's
+                # CDN cache it forever. Without this the default is `no-cache`, forcing every
+                # play (and every `<video>` range request) to cold-fetch the slow origin.
+                "Cache-Control": "public, max-age=31536000, immutable",
             },
         )
         try:
