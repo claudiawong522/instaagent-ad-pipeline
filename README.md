@@ -1,48 +1,53 @@
-# InstaAgent Ad Pipeline
+<div align="center">
 
-[![CI](https://github.com/claudiawong522/instaagent-ad-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/claudiawong522/instaagent-ad-pipeline/actions/workflows/ci.yml)
+# 🎯 InstaAgent
 
-Finds winning ad creative for a product. Scrapes competitor paid ads and organic video, enriches each with vision AI, then clusters and surfaces the results in a dashboard.
+### Find the ads that actually work — before you spend a dollar.
 
-**Live demo → _(add Vercel URL after deploy)_**
+InstaAgent studies the ads and videos already winning in your market, then hands you the patterns worth copying.
+
+![Status](https://img.shields.io/badge/status-live-brightgreen?style=for-the-badge)
+![For](https://img.shields.io/badge/for-marketers%20%26%20founders-blue?style=for-the-badge)
+![Powered by](https://img.shields.io/badge/powered%20by-AI-8b5cf6?style=for-the-badge)
+
+### 🌐 [**Try the live demo →**](#)  *(link coming after launch)*
+
+</div>
 
 ---
 
-## What it does
+## 💡 Why use it
+
+Launching a product? Don't guess what creative will land. InstaAgent finds what's **already working** for your competitors and shows you why.
+
+- 🔍 **See the winners** — the paid ads and organic videos pulling attention in your niche, including which ones have run the longest (the real sign an ad is profitable).
+- 🎬 **Understand the hook** — every video is watched and broken down for you: the message, the format, the angle.
+- 🧩 **Spot the patterns** — similar creative is grouped together, so themes that keep winning jump out.
+- 🔥 **Ride the trends** — a daily feed of viral video *formats* pulled from the top trend trackers.
+- 🖥️ **Browse it all** — a clean dashboard to search, explore, and get inspired.
+
+## ✨ How it works
 
 ```
-scrape → enrich → embed → cluster → dashboard
+   🕵️  Find          🎬  Analyze          🧩  Group          📊  Explore
+competitor ads   →   watch &        →   cluster by     →   in your
+& viral video        break down          audience           dashboard
 ```
 
-- **Scrape** — paid ads from the Meta Ad Library (via Apify) plus organic TikTok & Instagram video.
-- **Enrich** — transcribe and analyze every video with vision AI.
-- **Embed & cluster** — group creative by ICP so patterns are searchable.
-- **Trends** — a daily job pulls viral video *formats* from marketing trend pages.
-- **Dashboard** — a Next.js app to search, discover, and browse trends.
+You give it your product and market. It does the rest.
 
-## Stack
-
-| Layer | Tech |
-|-------|------|
-| Pipeline | Python CLI |
-| Data | Supabase (Postgres + pgvector) |
-| AI | Claude · OpenRouter vision · Voyage embeddings |
-| Sources | Apify (Meta Ad Library, TikTok, Instagram) |
-| Frontend | Next.js 14 + Tailwind → Vercel |
-
-## Quickstart
+## 🚀 Get started
 
 ```bash
-# 1. install
+# 1. Install
 python3 -m pip install -e .
 
-# 2. configure — copy .env.example to .env and fill in secrets
+# 2. Add your keys — copy the example file and fill it in
 cp .env.example .env
 
-# 3. set up the database
-# run supabase/schema.sql in the Supabase SQL editor
+# 3. Set up your database (paste supabase/schema.sql into Supabase)
 
-# 4. run the pipeline
+# 4. Tell it about your product, then let it work
 PYTHONPATH=src python3 -m instaagent_pipeline.cli init-run \
   --product-name "QE cleanser" --category "skincare" \
   --target-market "US skincare buyers" \
@@ -51,21 +56,28 @@ PYTHONPATH=src python3 -m instaagent_pipeline.cli init-run \
 
 PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-apify-ads --run-id "<run_id>"
 PYTHONPATH=src python3 -m instaagent_pipeline.cli ingest-tiktok    --run-id "<run_id>"
-PYTHONPATH=src python3 -m instaagent_pipeline.cli embed-items      --run-id "<run_id>"
-PYTHONPATH=src python3 -m instaagent_pipeline.cli cluster-items    --run-id "<run_id>"
 ```
 
-Ingestion auto-runs vision enrichment. Add `--dry-run` to any command to preview without writing.
+That's it — the videos get analyzed automatically, and your results show up in the dashboard. Add `--dry-run` to any step to preview without saving.
 
-## Environment
+## 🔑 What you'll need
 
-Required: `SUPABASE_URL` · `SUPABASE_SERVICE_ROLE_KEY` · `CLAUDE_API_KEY` · `APIFY_API_KEY` · `OPENROUTER_API_KEY` · `VOYAGE_API_KEY`
+A few free/low-cost accounts to plug in (keys go in your `.env` file):
 
-The service role key is **server-side only** — it bypasses row-level security, so never ship it to the browser. `.env` is gitignored; don't commit keys.
+| Service | What it's for |
+|---------|---------------|
+| **Supabase** | Stores your results |
+| **Apify** | Pulls the ads and videos |
+| **OpenRouter** · **Claude** · **Voyage** | The AI that watches and understands each video |
 
-## More
+> 🔒 Your keys stay in `.env`, which is never committed. Keep them private.
 
-- **`AGENTS.md`** — project shape and implementation notes.
-- **`database.md`** — schema and table docs.
-- **`supabase/migrations/`** — run in numeric order on existing databases before search/clustering work.
-- **`frontend/`** — the dashboard (`npm run dev`).
+## 📚 Going deeper
+
+Building on top of it? See **`AGENTS.md`** (how it's structured), **`database.md`** (the data), and **`frontend/`** (the dashboard app).
+
+<div align="center">
+
+Made for marketers who'd rather copy a proven winner than gamble on a hunch. 💸
+
+</div>
