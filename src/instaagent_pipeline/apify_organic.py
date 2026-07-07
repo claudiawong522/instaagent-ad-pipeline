@@ -3,7 +3,7 @@
 TikTok  -> clockworks/tiktok-scraper        (keyword search; followers native)
 Instagram -> data-slayer/instagram-search-reels (keyword search; followers backfilled)
 
-Both write to ugc_items. Rows without a usable downloadable video are dropped. The
+Both write to organic_items. Rows without a usable downloadable video are dropped. The
 analysis columns are filled later by the organic vision enrichment.
 """
 
@@ -12,22 +12,21 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from .apify_ads import APIFY_API_BASE_URL, APIFY_RUN_WAIT_SECONDS, apify_data, wait_for_apify_run
+from .apify_client import ingest_actor_items, run_apify_actor_items
 from .config import Config
-from .http_client import HttpClientError, request_json
-from .ingestion import IngestResult, log_api_usage, log_failed_query, start_query, write_items
+from .ingestion import IngestResult
 from .normalizers import (
     normalize_instagram_reel,
     normalize_tiktok_item,
     normalize_tiktok_trend_item,
-    recompute_virality,
     result_items,
     tiktok_download_url,
     tiktok_trend_video_url,
     tiktok_trend_views,
 )
+from .virality import recompute_virality
 from .supabase_client import SupabaseClient
 
 TIKTOK_ACTOR_ID = "clockworks~tiktok-scraper"
@@ -38,41 +37,9 @@ INSTAGRAM_ACTOR_ID = "data-slayer~instagram-search-reels"
 INSTAGRAM_PROVIDER = "apify:data-slayer/instagram-search-reels"
 IG_PROFILE_ACTOR_ID = "apify~instagram-profile-scraper"
 IG_PROFILE_PROVIDER = "apify:apify/instagram-profile-scraper"
+IG_URL_ACTOR_ID = "apify~instagram-scraper"  # by-URL (directUrls) scrape, for trend example reels
+IG_URL_PROVIDER = "apify:apify/instagram-scraper"
 INSTAGRAM_PAGE_SIZE = 50  # data-slayer returns ~50-100 reels per page
-
-
-def run_apify_actor_items(
-    *,
-    api_key: str,
-    actor_id: str,
-    actor_input: dict[str, Any],
-    target_count: int,
-) -> tuple[list[dict[str, Any]], int, dict[str, str], dict[str, Any]]:
-    endpoint = f"/acts/{actor_id}/runs"
-    run_response = request_json(
-        "POST",
-        f"{APIFY_API_BASE_URL}{endpoint}",
-        params={"token": api_key, "waitForFinish": APIFY_RUN_WAIT_SECONDS},
-        body=actor_input,
-        timeout=APIFY_RUN_WAIT_SECONDS + 30,
-    )
-    run = wait_for_apify_run(api_key, apify_data(run_response.body))
-    dataset_id = run.get("defaultDatasetId")
-    if not dataset_id:
-        raise RuntimeError(f"Apify run {run.get('id')} did not return a defaultDatasetId.")
-    dataset_response = request_json(
-        "GET",
-        f"{APIFY_API_BASE_URL}/datasets/{dataset_id}/items",
-        params={"token": api_key, "format": "json", "clean": "1", "limit": target_count},
-        timeout=180,
-    )
-    metadata = {
-        "actor_run_id": run.get("id"),
-        "actor_run_status": run.get("status"),
-        "actor_default_dataset_id": dataset_id,
-        "actor_usage_total_usd": run.get("usageTotalUsd"),
-    }
-    return result_items(dataset_response.body), dataset_response.status, dataset_response.headers, metadata
 
 
 def _ingest_apify_organic(
@@ -86,90 +53,27 @@ def _ingest_apify_organic(
     actor_id: str,
     actor_input: dict[str, Any],
     normalizer: Any,
-    has_video: Any,
+    has_video: Callable[[dict[str, Any]], bool],
     dry_run: bool,
     input_json: Path | None,
 ) -> IngestResult:
-    endpoint = f"/acts/{actor_id}/runs"
-    request_params = {"actor": actor_id, "keyword": keyword, "actor_input": actor_input}
-    source_query_id = start_query(
+    return ingest_actor_items(
+        config=config,
         supabase=supabase,
-        dry_run=dry_run,
         run_id=run_id,
         provider=provider,
-        endpoint=endpoint,
-        method="POST",
-        request_params=request_params,
-    )
-    response_headers: dict[str, str] = {}
-    response_status: int | None = None
-    run_metadata: dict[str, Any] = {}
-    try:
-        if input_json:
-            items = result_items(json.loads(input_json.read_text()))
-        else:
-            if not config.apify_api_key:
-                raise RuntimeError("APIFY_API_KEY is required unless --input-json is used.")
-            items, response_status, response_headers, run_metadata = run_apify_actor_items(
-                api_key=config.apify_api_key,
-                actor_id=actor_id,
-                actor_input=actor_input,
-                target_count=target_count,
-            )
+        actor_id=actor_id,
+        actor_input=actor_input,
+        request_params={"actor": actor_id, "keyword": keyword, "actor_input": actor_input},
         # Drop rows without a downloadable video (the no-video rule).
-        items = [item for item in items if has_video(item)][:target_count]
-        log_api_usage(
-            supabase=supabase,
-            dry_run=dry_run,
-            run_id=run_id,
-            provider=provider,
-            endpoint=endpoint,
-            status=response_status,
-            response_count=len(items),
-            headers=response_headers,
-            metadata={"actor": actor_id, **run_metadata},
-        )
-        return write_items(
-            supabase=supabase,
-            dry_run=dry_run,
-            run_id=run_id,
-            provider=provider,
-            endpoint=endpoint,
-            method="POST",
-            request_params=request_params,
-            source_query_id=source_query_id,
-            destination_table="ugc_items",
-            items=items,
-            normalizer=normalizer,
-            conflict_columns="run_id,external_id",
-            response_status=response_status,
-        )
-    except (HttpClientError, RuntimeError) as exc:
-        if isinstance(exc, HttpClientError) and response_status is None and not input_json:
-            log_api_usage(
-                supabase=supabase,
-                dry_run=dry_run,
-                run_id=run_id,
-                provider=provider,
-                endpoint=endpoint,
-                status=exc.status,
-                response_count=None,
-                headers={},
-                metadata={"actor": actor_id},
-            )
-        log_failed_query(
-            supabase=supabase,
-            dry_run=dry_run,
-            run_id=run_id,
-            provider=provider,
-            endpoint=endpoint,
-            method="POST",
-            request_params=request_params,
-            source_query_id=source_query_id,
-            http_status=getattr(exc, "status", None),
-            error_message=str(exc),
-        )
-        raise
+        prepare_items=lambda items: [item for item in items if has_video(item)],
+        destination_table="organic_items",
+        normalizer=normalizer,
+        conflict_columns="run_id,external_id",
+        target_count=target_count,
+        dry_run=dry_run,
+        input_json=input_json,
+    )
 
 
 def ingest_tiktok(
@@ -220,7 +124,7 @@ def ingest_tiktok_trends(
     extra_params: dict[str, Any] | None = None,
 ) -> IngestResult:
     """Keyword-free viral discovery: novi/tiktok-trend-api returns a country's For You
-    feed (no search term). Writes to ugc_items like the other organic sources; follower
+    feed (no search term). Writes to organic_items like the other organic sources; follower
     counts are absent from the payload and filled later by backfill_tiktok_followers.
 
     min_views drops low-view feed-filler at ingest — the For You feed isn't a pure viral
@@ -283,25 +187,25 @@ def ingest_instagram(
     )
 
 
-def backfill_instagram_followers(
+def _backfill_followers(
     *,
-    config: Config,
     supabase: SupabaseClient | None,
     run_id: str,
-    limit: int = 500,
-    dry_run: bool = False,
-    input_json: Path | None = None,
+    source: str,
+    fetch: Callable[[list[str]], dict[str, int]],
+    limit: int,
+    dry_run: bool,
 ) -> dict[str, Any]:
-    """Fill the IG follower counts that discovery scrapers omit, via a deduped
-    per-creator profile scrape (apify/instagram-profile-scraper)."""
+    """Shared follower backfill: find the run's null-follower rows for `source`, dedupe
+    them per creator, resolve counts via `fetch`, and write them back."""
     if supabase is None:
-        raise RuntimeError("Supabase credentials are required for the IG follower backfill.")
+        raise RuntimeError(f"Supabase credentials are required for the {source} follower backfill.")
     rows = supabase.select(
-        "ugc_items",
+        "organic_items",
         {
             "select": "id,user_handle",
             "run_id": f"eq.{run_id}",
-            "source": "eq.instagram",
+            "source": f"eq.{source}",
             "followers": "is.null",
             "limit": str(limit),
         },
@@ -317,15 +221,36 @@ def backfill_instagram_followers(
     if dry_run:
         return {"usernames": len(usernames), "updated": 0, "dry_run": True}
 
-    followers_map = fetch_instagram_followers(config, usernames, input_json=input_json)
+    followers_map = fetch(usernames)
     updated = 0
     for username, count in followers_map.items():
         if count is None:
             continue
         for row_id in by_user.get(username, []):
-            supabase.update_by_id("ugc_items", row_id, {"followers": count})
+            supabase.update_by_id("organic_items", row_id, {"followers": count})
             updated += 1
     return {"usernames": len(usernames), "resolved": len(followers_map), "updated": updated}
+
+
+def backfill_instagram_followers(
+    *,
+    config: Config,
+    supabase: SupabaseClient | None,
+    run_id: str,
+    limit: int = 500,
+    dry_run: bool = False,
+    input_json: Path | None = None,
+) -> dict[str, Any]:
+    """Fill the IG follower counts that discovery scrapers omit, via a deduped
+    per-creator profile scrape (apify/instagram-profile-scraper)."""
+    return _backfill_followers(
+        supabase=supabase,
+        run_id=run_id,
+        source="instagram",
+        fetch=lambda usernames: fetch_instagram_followers(config, usernames, input_json=input_json),
+        limit=limit,
+        dry_run=dry_run,
+    )
 
 
 def fetch_instagram_followers(
@@ -367,38 +292,14 @@ def backfill_tiktok_followers(
 ) -> dict[str, Any]:
     """Fill the TikTok follower counts that the trend API omits, via a deduped per-creator
     profile scrape (clockworks/tiktok-scraper in profiles mode). Mirrors the IG backfill."""
-    if supabase is None:
-        raise RuntimeError("Supabase credentials are required for the TikTok follower backfill.")
-    rows = supabase.select(
-        "ugc_items",
-        {
-            "select": "id,user_handle",
-            "run_id": f"eq.{run_id}",
-            "source": "eq.tiktok",
-            "followers": "is.null",
-            "limit": str(limit),
-        },
+    return _backfill_followers(
+        supabase=supabase,
+        run_id=run_id,
+        source="tiktok",
+        fetch=lambda usernames: fetch_tiktok_followers(config, usernames, input_json=input_json),
+        limit=limit,
+        dry_run=dry_run,
     )
-    by_user: dict[str, list[str]] = {}
-    for row in rows:
-        username = str(row.get("user_handle") or "").strip()
-        if username and row.get("id"):
-            by_user.setdefault(username, []).append(str(row["id"]))
-    usernames = list(by_user)
-    if not usernames:
-        return {"usernames": 0, "updated": 0}
-    if dry_run:
-        return {"usernames": len(usernames), "updated": 0, "dry_run": True}
-
-    followers_map = fetch_tiktok_followers(config, usernames, input_json=input_json)
-    updated = 0
-    for username, count in followers_map.items():
-        if count is None:
-            continue
-        for row_id in by_user.get(username, []):
-            supabase.update_by_id("ugc_items", row_id, {"followers": count})
-            updated += 1
-    return {"usernames": len(usernames), "resolved": len(followers_map), "updated": updated}
 
 
 def fetch_tiktok_followers(
@@ -439,13 +340,14 @@ def recompute_tiktok_virality(
     """Re-score a run's TikTok items now that follower counts are known. Trend-API items are
     first scored engagement-only (no followers in the payload), which under-scores mega-viral
     hits whose reach dwarfs their follower base. Once backfill_tiktok_followers fills `followers`,
-    this switches them onto the reach-blended score. Re-runnable; only writes rows that change."""
+    this switches them onto the full reach + velocity + engagement blend (velocity needs
+    date_created, also selected here). Re-runnable; only writes rows that change."""
     if supabase is None:
         raise RuntimeError("Supabase credentials are required to recompute virality.")
     rows = supabase.select(
-        "ugc_items",
+        "organic_items",
         {
-            "select": "id,views,likes,comments,shares,followers,virality_score,virality_tier",
+            "select": "id,views,likes,comments,shares,followers,date_created,virality_score,virality_tier",
             "run_id": f"eq.{run_id}",
             "source": "eq.tiktok",
             "limit": str(limit),
@@ -459,9 +361,10 @@ def recompute_tiktok_virality(
             comments=row.get("comments"),
             shares=row.get("shares"),
             followers=row.get("followers"),
+            date_created=row.get("date_created"),
         )
         if score == row.get("virality_score") and tier == row.get("virality_tier"):
             continue
-        supabase.update_by_id("ugc_items", str(row["id"]), {"virality_score": score, "virality_tier": tier})
+        supabase.update_by_id("organic_items", str(row["id"]), {"virality_score": score, "virality_tier": tier})
         updated += 1
     return {"scanned": len(rows), "updated": updated}

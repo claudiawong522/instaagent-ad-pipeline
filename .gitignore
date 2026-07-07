@@ -17,7 +17,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-/lib/
+# /lib/ intentionally NOT ignored: it's the frontend's source dir (now at repo root),
+# not a Python build artifact (this project builds into dist/ + *.egg-info, never /lib/).
 /lib64/
 parts/
 sdist/
@@ -223,7 +224,21 @@ __marimo__/
 # Local database backups
 supabase/products_backup.json
 
-# Generated visualization artifacts (regenerate via web/embed_viz.py / paid_cluster_experiment.py)
-web/embeddings.html
-web/embeddings.png
-web/paid_experiment.png
+# Generated visualization artifacts (regenerate via experiments/ scripts)
+experiments/embeddings.html
+experiments/embeddings.png
+experiments/paid_experiment.png
+experiments/strategy_data.js
+.vercel
+.env*
+
+# Next.js / Node (frontend, now at repo root)
+/node_modules
+/.next/
+/out/
+/build
+/coverage
+next-env.d.ts
+*.tsbuildinfo
+.pnp
+.pnp.js

@@ -21,9 +21,14 @@ class Config:
     enrichment_provider: str = "openrouter"
     # Web trend pages to scrape viral formats from (trend_sources.py). JSON list of
     # {"name": ..., "url": ...} via the TREND_SOURCES env var; falls back to
-    # DEFAULT_TREND_SOURCES when unset. Each page is fetched, stripped to text, and parsed
+    # default_trend_sources() when unset. Each page is fetched, stripped to text, and parsed
     # by the LLM into formats. None means "use the built-in defaults".
     trend_sources_json: str | None = None
+    # JWT that unlocks Social Growth Engineers' email-gated newsletter posts (kind:"sge_newsletter").
+    # Obtained once by subscribing an email (scratchpad/sge_unlock.py); sent as the
+    # newsletter_access_token cookie on read-only content fetches. Expires ~quarterly — re-run the
+    # unlock to refresh. None disables the SGE newsletter source.
+    sge_access_token: str | None = None
     # Relevance floor for the search-space KNN. Cosine scores scale with query length
     # (bare keywords land ~0.2 lower than multi-word queries against the verbose
     # descriptions), so the floor is set just above the true-nonsense band (~0.24):
@@ -41,16 +46,19 @@ class Config:
     # queries — at ~93 items, 50/space silently capped "skincare" recall. 100 covers the
     # current corpus fully and is a sane ceiling as it grows (rerank-2.5 is cheap).
     rerank_candidate_pool: int = 100
-    # Model used to expand a short query into a multi-concept query before embedding
-    # (fixes short-query cosine dilution). Reuses the OpenRouter stack.
-    query_expansion_model: str = "google/gemini-3-flash-preview"
-    # Whether to run query expansion at all. OFF by default: an A/B over the niche query
-    # set (genz/comedy/before-and-after/skincare/oily skin) showed expansion changed zero
-    # results — the enriched icp space + reranker already surface the right candidates, and
-    # the candidate pool (100/space) covers the whole corpus — while adding ~2.6s/search.
-    # Re-enable (QUERY_EXPANSION_ENABLED=1) once the corpus outgrows the candidate pool,
-    # where expansion's recall benefit returns.
-    query_expansion_enabled: bool = False
+    # Browser origins allowed to call the API (CORS), comma-separated via CORS_ORIGINS.
+    cors_origins: str = "http://localhost:3000"
+    # Parser-drift reminder emails (drift_alert.py), sent free over SMTP. Default is Gmail
+    # (user = Gmail address, password = app password from myaccount.google.com/apppasswords);
+    # any free relay works via ALERT_SMTP_HOST/PORT (e.g. Brevo's smtp-relay.brevo.com:587,
+    # where the login isn't the sender — set ALERT_EMAIL_FROM to the verified sender address).
+    # Port 465 speaks SSL, anything else STARTTLS. Unset creds disable sending (logged instead).
+    alert_email_to: str = "instaagenttool@gmail.com"
+    alert_smtp_host: str = "smtp.gmail.com"
+    alert_smtp_port: int = 465
+    alert_smtp_user: str | None = None
+    alert_smtp_password: str | None = None
+    alert_email_from: str | None = None  # defaults to alert_smtp_user when unset
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -67,14 +75,21 @@ class Config:
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-flash-latest"),
             enrichment_provider=os.getenv("ENRICHMENT_PROVIDER", "openrouter"),
             trend_sources_json=os.getenv("TREND_SOURCES"),
+            sge_access_token=os.getenv("SGE_ACCESS_TOKEN"),
             voyage_api_key=os.getenv("VOYAGE_API_KEY"),
             embedding_model=os.getenv("EMBEDDING_MODEL", "voyage-4-lite"),
             search_min_similarity=float(os.getenv("SEARCH_MIN_SIMILARITY", "0.30")),
             rerank_model=os.getenv("RERANK_MODEL", "rerank-2.5"),
             rerank_min_score=float(os.getenv("RERANK_MIN_SCORE", "0.5")),
             rerank_candidate_pool=int(os.getenv("RERANK_CANDIDATE_POOL", "100")),
-            query_expansion_model=os.getenv("QUERY_EXPANSION_MODEL", "google/gemini-3-flash-preview"),
-            query_expansion_enabled=os.getenv("QUERY_EXPANSION_ENABLED", "0").strip().lower() in ("1", "true", "yes"),
+            cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000"),
+            alert_email_to=os.getenv("ALERT_EMAIL_TO", "instaagenttool@gmail.com"),
+            # `or` fallbacks (not getenv defaults): CI passes unset secrets as empty strings.
+            alert_smtp_host=os.getenv("ALERT_SMTP_HOST") or "smtp.gmail.com",
+            alert_smtp_port=int(os.getenv("ALERT_SMTP_PORT") or "465"),
+            alert_smtp_user=os.getenv("ALERT_SMTP_USER"),
+            alert_smtp_password=os.getenv("ALERT_SMTP_PASSWORD"),
+            alert_email_from=os.getenv("ALERT_EMAIL_FROM"),
         )
 
 

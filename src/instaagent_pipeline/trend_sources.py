@@ -2,40 +2,106 @@
 
 Fetches each configured trend page (Ramdam, Newengen, ...), strips it to text while
 preserving the TikTok/Reel links (these live in href/cite/src attributes, not visible
-text, so a naive .get_text() would drop them), then asks the LLM to extract each viral
-*format* and its example video URLs. The CLI (ingest-trends) turns those into
-viral_formats rows + re-scraped ugc_items.
+text, so a naive .get_text() would drop them), then extracts each viral *format* and its
+example video URLs — structurally when the page's markup allows it (numbered "Trend #N"
+sections, or heading-delimited sections), via the LLM only as a fallback. The CLI
+(ingest-trends) turns those into viral_formats rows + re-scraped organic_items.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
+from collections import Counter
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
-from .ad_enrichment import (
-    OPENROUTER_BASE_URL,
-    OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
-    parse_enrichment_response,
-)
+from .apify_client import run_apify_actor_items
 from .config import Config
-from .http_client import HttpClientError, request_json
+from .http_client import HttpClientError
+from .openrouter import openrouter_json_call
+
+logger = logging.getLogger(__name__)
+
+_MONTH_SLUGS = (
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+)
+
+
+def _newengen_insights_url(today: date | None = None) -> str:
+    """Newengen's monthly deep-dive at /insights/<month>-tiktok-trends/ — the report with one
+    section per trend, each with its own embedded example video (~9-11 trends). The weekly
+    /tiktok-trends/ hub only features ~3 and name-drops the rest in FAQ prose (which yielded
+    empty cards). The month slug rolls over, so derive it from today's date rather than
+    hard-coding a month that silently goes stale. Newengen publishes each month's report before
+    the month begins, so the current month is reliably live. (Month names are hard-coded rather
+    than strftime('%B') so the slug never depends on the server locale.)"""
+    return f"https://newengen.com/insights/{_MONTH_SLUGS[(today or date.today()).month - 1]}-tiktok-trends/"
+
+
+def _newengen_url_candidates(today: date | None = None) -> list[str]:
+    """The slug forms newengen has used for its monthly report, in probe order: the current bare
+    `<month>-tiktok-trends` and the older `<month>-<year>-tiktok-trends` (used Jan–Apr 2026)."""
+    d = today or date.today()
+    return [
+        _newengen_insights_url(d),
+        f"https://newengen.com/insights/{_MONTH_SLUGS[d.month - 1]}-{d.year}-tiktok-trends/",
+    ]
+
+
+def resolve_newengen_url(today: date | None = None, timeout: int = 10) -> str:
+    """First newengen monthly-report URL that actually exists (HTTP < 400), so a change in the
+    month slug (year vs no-year) can't silently 404 the whole source. Falls back to the bare form
+    when nothing is reachable (offline / both down), preserving the prior behavior."""
+    candidates = _newengen_url_candidates(today)
+    for url in candidates:
+        try:
+            resp = requests.get(
+                url, headers=_FETCH_HEADERS, timeout=timeout, allow_redirects=True, stream=True
+            )
+            status = resp.status_code
+            resp.close()
+            if status < 400:
+                return url
+        except requests.RequestException:
+            continue
+    return candidates[0]
+
+
+def issue_date_from_url(url: str, today: date | None = None) -> str | None:
+    """The report month of a monthly trend URL (…/<month>-tiktok-trends/…) as an ISO date (the
+    1st of that month), used to stamp viral_formats.issue_date so the dashboard can tell June's
+    trends from July's. Returns None for weekly/undated sources (no month in the URL). Handles both
+    slug forms (`<month>-tiktok-trends` and the older `<month>-<year>-tiktok-trends`); the current
+    year is used — safe because the slug tracks the current month."""
+    m = re.search(r"/([a-z]+)(?:-\d{4})?-tiktok-trends", url, re.I)
+    if not m or m.group(1).lower() not in _MONTH_SLUGS:
+        return None
+    month = _MONTH_SLUGS.index(m.group(1).lower()) + 1
+    return date((today or date.today()).year, month, 1).isoformat()
+
 
 # Public web trend pages, no auth. Override via the TREND_SOURCES env var (JSON list of
-# {"name", "url", optional "render"}). These are weekly-updated TikTok/Reel trend roundups.
-# render:"js" pages inject their example-video links client-side (no <a> in the static HTML),
-# so they must be fetched through a headless browser (Apify) instead of plain requests.
-DEFAULT_TREND_SOURCES: list[dict[str, str]] = [
-    {"name": "ramdam", "url": "https://www.ramd.am/blog/trends-tiktok"},
-    {"name": "newengen", "url": "https://newengen.com/tiktok-trends/", "render": "js"},
-    {"name": "later", "url": "https://later.com/blog/tiktok-trends/"},
-    {"name": "socialbee", "url": "https://socialbee.com/blog/tiktok-trends/"},
-]
+# {"name", "url", optional "render"}). render:"js" pages inject their example-video links
+# client-side (no <a> in the static HTML), so they must be fetched through a headless browser
+# (Apify) instead of plain requests. Built fresh per call so newengen's month slug stays current.
+def default_trend_sources() -> list[dict[str, str]]:
+    return [
+        {"name": "ramdam", "url": "https://www.ramd.am/blog/trends-tiktok"},
+        {"name": "newengen", "url": resolve_newengen_url(), "render": "js"},
+        {"name": "socialbee", "url": "https://socialbee.com/blog/tiktok-trends/"},
+        # SGE's weekly "viral hits" newsletter — url is just the site root; the newest post is
+        # discovered from the sitemap and its gated body fetched with SGE_ACCESS_TOKEN.
+        {"name": "socialgrowthengineers", "url": SGE_BASE_URL, "kind": "sge_newsletter"},
+    ]
 
 # Patterns that identify a link as an actual example *video post* (not a tag, sound,
 # profile, or hashtag page, which TikTok also links and we must not treat as examples).
@@ -64,25 +130,30 @@ class TrendIssue:
     content_hash: str
     text: str
     candidate_urls: list[str] = field(default_factory=list)
+    # Raw page HTML, kept alongside the flattened text because heading structure (which
+    # segment_headed_page needs) doesn't survive html_to_text.
+    html: str | None = None
 
 
-def resolve_trend_sources(config: Config) -> list[dict[str, str]]:
+def resolve_trend_sources(config: Config) -> list[dict[str, Any]]:
     """The configured trend pages, falling back to the built-in defaults."""
     if not config.trend_sources_json:
-        return DEFAULT_TREND_SOURCES
+        return default_trend_sources()
     try:
         parsed = json.loads(config.trend_sources_json)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"TREND_SOURCES is not valid JSON: {exc}") from exc
-    sources = [
-        {
-            "name": str(s["name"]).strip(),
-            "url": str(s["url"]).strip(),
-            **({"render": str(s["render"]).strip()} if s.get("render") else {}),
-        }
-        for s in parsed
-        if isinstance(s, dict) and s.get("name") and s.get("url")
-    ]
+    sources: list[dict[str, Any]] = []
+    for s in parsed:
+        if not (isinstance(s, dict) and s.get("name") and s.get("url")):
+            continue
+        entry: dict[str, Any] = {"name": str(s["name"]).strip(), "url": str(s["url"]).strip()}
+        if s.get("render"):
+            entry["render"] = str(s["render"]).strip()
+        # Non-default fetch path selector, e.g. kind="sge_newsletter"; carried through untouched.
+        if s.get("kind"):
+            entry["kind"] = str(s["kind"]).strip()
+        sources.append(entry)
     if not sources:
         raise RuntimeError("TREND_SOURCES parsed to an empty source list.")
     return sources
@@ -90,6 +161,20 @@ def resolve_trend_sources(config: Config) -> list[dict[str, str]]:
 
 def _is_video_url(url: str) -> bool:
     return any(pat.search(url) for pat in VIDEO_URL_PATTERNS)
+
+
+def _is_carousel_recommendation(url: str) -> bool:
+    """True when a TikTok share/video link is an embed's auto-injected "you might also like"
+    recommendation rather than the article's chosen example. A TikTok embed injects a carousel
+    of unrelated videos next to the real one; each carousel link is a share/video/<other-id>
+    URL stamped with referer_video_id=<the actually-embedded video>. When the link's own path
+    id differs from that referer, it belongs to the recommendation strip — harvesting it dumps
+    random high-view videos onto the wrong format (see newengen's "Wow, Ok")."""
+    m = re.search(r"tiktok\.com/share/video/(\d+)", url, re.I)
+    if not m:
+        return False
+    ref = parse_qs(urlparse(url).query).get("referer_video_id", [None])[0]
+    return bool(ref) and ref != m.group(1)
 
 
 def html_to_text(html: str) -> tuple[str, list[str]]:
@@ -106,7 +191,7 @@ def html_to_text(html: str) -> tuple[str, list[str]]:
     candidates: list[str] = []
 
     def _add(url: str | None) -> None:
-        if url and _is_video_url(url) and url not in candidates:
+        if url and _is_video_url(url) and not _is_carousel_recommendation(url) and url not in candidates:
             candidates.append(url)
 
     # Inline anchor hrefs next to their text so the model sees which link belongs where.
@@ -147,9 +232,6 @@ def _fetch_rendered_html(url: str, apify_api_key: str | None) -> str:
     """Render a JS-only page in Apify's headless browser and return its raw rendered HTML."""
     if not apify_api_key:
         raise RuntimeError(f"APIFY_API_KEY is required to render JS trend page {url}.")
-    # Imported here (not at module top) to avoid a heavier import chain for static sources.
-    from .apify_organic import run_apify_actor_items
-
     items, _, _, _ = run_apify_actor_items(
         api_key=apify_api_key,
         actor_id=_RENDER_ACTOR_ID,
@@ -160,8 +242,15 @@ def _fetch_rendered_html(url: str, apify_api_key: str | None) -> str:
             "maxCrawlDepth": 0,
             "saveHtml": True,
             "htmlTransformer": "none",
-            "waitForSelectorOnLoadTimeoutSecs": 15,
-            "maxScrollHeightPixels": 50000,
+            # The monthly report lazy-loads a TikTok embed per trend as it scrolls into view;
+            # each embed's script then injects the canonical link we harvest. Too little scroll
+            # or wait and the lower trends never render (a partial render silently drops them).
+            # Scroll the full page and give the embeds generous time to initialize before capturing
+            # HTML — a single render was observed to capture only ~half the embeds, so the waits are
+            # deliberately long to raise per-pass coverage (the windowed cron then fills any gaps).
+            "waitForSelectorOnLoadTimeoutSecs": 45,
+            "maxScrollHeightPixels": 250000,
+            "dynamicContentWaitSecs": 45,
         },
         target_count=1,
     )
@@ -192,6 +281,87 @@ def fetch_trend_page(
         content_hash=content_hash,
         text=text,
         candidate_urls=candidates,
+        html=html,
+    )
+
+
+# ── Social Growth Engineers: email-gated weekly newsletter ─────────────────────────
+
+# SGE's "viral hits" roundup is a weekly post (~8 formats + TikTok/Reel links) behind a soft email
+# gate. Two SGE-specific wrinkles, handled below; everything after fetch reuses the normal
+# html_to_text + parse_trend_formats path. A source opts in with {"kind": "sge_newsletter"}.
+#   1. URL rolls over weekly with no stable "latest" — so we discover the newest post from the
+#      sitemap (the viral-hits slug with the max <lastmod>).
+#   2. The body is served by /api/posts/<slug>/content only to a verified subscriber — so we send
+#      the newsletter_access_token JWT (config.sge_access_token) as a cookie on the read-only fetch.
+SGE_BASE_URL = "https://www.socialgrowthengineers.com"
+_SGE_VIRAL_HITS_SLUG = re.compile(r"^\d+-viral-hits-you-missed-this-week-\d+$")
+_SGE_SITEMAP_URL_RE = re.compile(
+    r"<loc>\s*" + re.escape(SGE_BASE_URL) + r"/([^<\s]+?)\s*</loc>\s*(?:<lastmod>\s*([^<\s]*)\s*</lastmod>)?",
+    re.I,
+)
+
+
+def _sge_get(url: str, timeout: int, *, cookies: dict[str, str] | None = None, accept_json: bool = False):
+    headers = dict(_FETCH_HEADERS)
+    if accept_json:
+        headers["Accept"] = "application/json"
+    try:
+        resp = requests.get(url, headers=headers, cookies=cookies, timeout=timeout)
+    except requests.RequestException as exc:
+        raise HttpClientError(f"Network error fetching SGE {url}: {exc}") from exc
+    if resp.status_code >= 400:
+        raise HttpClientError(f"HTTP {resp.status_code} fetching SGE {url}", status=resp.status_code)
+    return resp
+
+
+def discover_sge_latest_post(base_url: str = SGE_BASE_URL, timeout: int = 30) -> str:
+    """The slug of SGE's newest 'viral hits' post, via the sitemap. The weekly slug carries a
+    non-monotonic sequence number across parallel series (7-/8-/9-…-this-week-N), so we rank by
+    <lastmod>, not the number. Raises if none is found (sitemap moved / series renamed)."""
+    index_xml = _sge_get(f"{base_url.rstrip('/')}/sitemap.xml", timeout).text
+    best: tuple[str, str] | None = None  # (lastmod, slug)
+    for child in re.findall(r"<loc>\s*([^<\s]+sitemap[^<\s]*\.xml)\s*</loc>", index_xml, re.I):
+        for slug, lastmod in _SGE_SITEMAP_URL_RE.findall(_sge_get(child, timeout).text):
+            if _SGE_VIRAL_HITS_SLUG.match(slug) and (best is None or lastmod > best[0]):
+                best = (lastmod, slug)
+    if best is None:
+        raise HttpClientError("No SGE 'viral hits' post found in sitemap.")
+    return best[1]
+
+
+def fetch_sge_newsletter(
+    source_name: str,
+    base_url: str,
+    *,
+    access_token: str | None,
+    timeout: int = 30,
+) -> TrendIssue:
+    """Discover SGE's latest viral-hits post, fetch its gated body with the subscriber token, and
+    return a TrendIssue for the normal LLM parse. source_url is the real post URL so cards link out."""
+    if not access_token:
+        raise RuntimeError(
+            "SGE_ACCESS_TOKEN is required for the sge_newsletter source (run scratchpad/sge_unlock.py)."
+        )
+    base = base_url.rstrip("/")
+    slug = discover_sge_latest_post(base, timeout)
+    data = _sge_get(
+        f"{base}/api/posts/{slug}/content",
+        timeout,
+        cookies={"newsletter_access_token": access_token},
+        accept_json=True,
+    ).json()
+    if not data.get("hasAccess"):
+        raise HttpClientError(f"SGE content still gated for {slug} — token expired? Re-run sge_unlock.py.")
+    body = data.get("content") or ""
+    text, candidates = html_to_text(body)
+    return TrendIssue(
+        source_name=source_name,
+        source_url=f"{base}/{slug}",
+        content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        text=text,
+        candidate_urls=candidates,
+        html=body,
     )
 
 
@@ -224,7 +394,11 @@ repeatable content idea, e.g. "old-photo before/after reveal" or "aura points sc
 
 From the page text below, extract every distinct viral format the article describes.
 For each format return:
-- format_name: a short, specific name for the format (5 words max).
+- format_name: the trend's own heading/title from the page, verbatim and trimmed, when it has
+  one — e.g. a "Trend #7: Toy Story 5 "There Was a Time"" heading → use the exact title
+  "Toy Story 5 "There Was a Time"". Do NOT shorten, paraphrase, or drop a parenthetical (e.g.
+  keep "You Look Like the 4th of July (Makes Me Want a Hot Dog Real Bad)" in full). Only invent a
+  short name (≤6 words) when the section genuinely has no title of its own.
 - format_description: 1-3 sentences describing the format/structure — the hook, the
   beats, what makes it work. Use the article's explanation; do not invent.
 - video_urls: the example TikTok/Instagram/YouTube-Short video URLs the article ties to
@@ -232,7 +406,46 @@ For each format return:
   a URL. If the article shows no example link for a format, return an empty array.
 
 Ignore navigation, ads, author bios, newsletter signups, and generic advice that is not a
-specific format. Return only real formats.
+specific format. Only extract a format from a section that actually describes it (a heading
+plus its own explanation) — do NOT extract trend names that are merely listed or mentioned in
+passing, e.g. inside an FAQ answer, a "related trends" sentence, or a roundup list ("strong
+options include X, Y, Z"). Those name-drops have no example video and are not real entries.
+Return only real formats.
+
+Many roundups NUMBER their trends ("Trend #1", "Trend #2", … or "1.", "2."). When the page does,
+extract EXACTLY ONE format per number: never merge two numbered trends into a single format, and
+never skip a number that has its own titled section (even if its example video failed to load —
+return it with an empty video_urls array). Each numbered trend's example video is the embed inside
+THAT trend's own section; do not borrow a neighboring trend's video.
+
+PAGE TEXT:
+{page_text}
+
+Candidate video URLs (only assign URLs from this list):
+{candidate_urls}
+""".strip()
+
+SGE_PARSE_PROMPT = """
+You read Social Growth Engineers' weekly "viral hits" newsletter. Each section is headed by an
+APP or BRAND name (e.g. "Teuida", "Creed", "Stella") and describes the viral video FORMAT that app
+used to get views this week.
+
+Extract each viral format. Name it by the CONTENT FORMAT / technique — NEVER by the app or brand.
+Example: if the "Creed" section describes "a large centered quote over a dark background, the
+creator's face partly in frame, no talking", the format_name is like "Centered quote over dark
+background" — NOT "Creed".
+
+For each format return:
+- format_name: a short, specific name for the repeatable format/technique (5 words max). It must
+  describe the format, NOT name a brand, app, or creator.
+- format_description: 1-3 sentences describing the format/structure — the hook, the beats, what
+  makes it work. Mention the app only as context if useful. Use the newsletter's explanation; do
+  not invent.
+- video_urls: the example TikTok/Instagram/YouTube-Short video URLs tied to THIS format. Only use
+  URLs from the "Candidate video URLs" list — never invent or guess a URL. If a section shows no
+  example link, return an empty array.
+
+Ignore the intro, sign-off, and generic advice. Return only real formats.
 
 PAGE TEXT:
 {page_text}
@@ -246,32 +459,219 @@ Candidate video URLs (only assign URLs from this list):
 # drop the lower formats' videos. ~60k chars (~15k tokens) fits these pages with headroom.
 _MAX_PAGE_CHARS = 60000
 
+_TREND_NUMBER_RE = re.compile(r"Trend\s*#?\s*(\d+)", re.I)
+_TREND_HEADING_RE = re.compile(r"Trend\s*#?\s*(\d+)\s*:?[ \t]*([^\n]*)", re.I)
+# Where a trend section's explanation ends and its embed/CTA boilerplate begins.
+_SECTION_STOP_RE = re.compile(r"\b(How to do it|Related videos|Watch (?:more|now))\b", re.I)
 
-def parse_trend_formats(config: Config, issue: TrendIssue, *, timeout: int = 120) -> list[dict[str, Any]]:
-    """Extract [{format_name, format_description, video_urls[]}] from one trend page."""
+
+def max_trend_number(text: str) -> int:
+    """The highest 'Trend #N' the page numbers itself with (0 if unnumbered). Numbered roundups
+    (e.g. newengen) label every trend, so this is the authoritative trend count — used to flag a
+    parse/render that came back with fewer formats than the page actually lists."""
+    return max((int(m.group(1)) for m in _TREND_NUMBER_RE.finditer(text)), default=0)
+
+
+def _video_id_for_match(url: str) -> str | None:
+    """The bare id that a candidate video URL prints inside the page text — a TikTok aweme id or an
+    Instagram shortcode — so a candidate can be located in the section it belongs to."""
+    m = _TIKTOK_ID_RE.search(url) or _REFERER_ID_RE.search(url)
+    if m:
+        return m.group(1)
+    m = _IG_SHORTCODE_RE.search(url)
+    return m.group(1) if m else None
+
+
+_TIKTOK_ID_RE = re.compile(r"/video/(\d+)")
+_REFERER_ID_RE = re.compile(r"referer_video_id=(\d+)")
+_IG_SHORTCODE_RE = re.compile(r"instagram\.com/(?:reel|reels|p)/([\w-]+)", re.I)
+
+
+def segment_numbered_page(issue: "TrendIssue") -> list[dict[str, Any]] | None:
+    """Deterministic parse for a page that numbers its trends (`Trend #1 … #N`): one format per
+    numbered heading — the heading's title as the name, the section's opening text as the
+    description, and every candidate video whose id first appears inside that heading's text span.
+    Returns None when the page isn't numbered (fewer than 2 headings) so unnumbered sources
+    (socialbee, ramdam) fall back to the LLM parse.
+
+    This replaces the LLM guesswork that merged adjacent numbered trends into one card and truncated
+    their titles (e.g. "You Look Like the 4th of July (…)" → "You Look Like 4th July"). A numbered
+    trend whose example video was removed or never rendered still returns here with an empty
+    video_urls (the zero-link filter in ingest then drops it, as for any video-less format)."""
+    text = issue.text
+    marks: list[tuple[int, int, int, str]] = []  # (start, end, number, title)
+    seen: set[int] = set()
+    for m in _TREND_HEADING_RE.finditer(text):
+        n = int(m.group(1))
+        if n in seen:  # embeds can echo the "Trend #N" label further down; keep the first
+            continue
+        seen.add(n)
+        marks.append((m.start(), m.end(), n, m.group(2).strip()))
+    if len(marks) < 2:
+        return None
+
+    # Earliest position (and a canonical URL) for each candidate video id; its section is wherever
+    # it first appears in the rendered text.
+    id_pos: dict[str, int] = {}
+    id_url: dict[str, str] = {}
+    for u in issue.candidate_urls:
+        vid = _video_id_for_match(u)
+        if not vid:
+            continue
+        p = text.find(vid)
+        if p == -1:
+            continue
+        if vid not in id_pos or p < id_pos[vid]:
+            id_pos[vid] = p
+        if vid not in id_url or ("/@" in u and "/@" not in id_url[vid]):
+            id_url[vid] = u  # prefer the canonical @user/video/<id> form for storage
+
+    out: list[dict[str, Any]] = []
+    for i, (_hs, he, n, title) in enumerate(marks):
+        end = marks[i + 1][0] if i + 1 < len(marks) else len(text)
+        body = text[he:end]
+        stop = _SECTION_STOP_RE.search(body)
+        desc = re.sub(r"\s+", " ", body[: stop.start()] if stop else body[:500]).strip() or None
+        urls = [id_url[vid] for vid, p in id_pos.items() if he <= p < end]
+        out.append({"format_name": title or f"Trend {n}", "format_description": desc, "video_urls": urls})
+    return out
+
+
+_HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5")
+
+
+def segment_headed_page(issue: "TrendIssue") -> list[dict[str, Any]] | None:
+    """Deterministic parse for a page whose trends are heading-delimited: one format per heading
+    at the level that "owns" the example videos — the level of the nearest heading above each
+    video link. That level is auto-detected per page rather than configured per source (h4 on
+    ramdam, h3 on socialbee — and ramdam's 2025 redesign moved it from h3 to h4, so a hard-coded
+    level would silently rot). A sweep of both sources' archives (2024-2026, ~28 pages) showed
+    100% of example videos sit under their trend's own heading, zero orphans.
+
+    A video attaches to the most recent owner-level heading; a HIGHER-level heading (e.g.
+    socialbee's h2 month divider) closes the open section, so a video can never leak across a
+    divider into the previous trend. Sub-headings inside a section don't close it. Sections with
+    no video are kept (ingest's zero-link filter drops name-drops/nav junk, same as the LLM
+    path). Returns None — falling back to the LLM — when fewer than 2 sections own a video,
+    i.e. the structure is too ambiguous to trust."""
+    if not issue.html:
+        return None
+    soup = BeautifulSoup(issue.html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "nav", "footer", "header"]):
+        tag.decompose()
+
+    # Flat document-order stream of what matters: headings, paragraph text, example-video links.
+    events: list[tuple[str, int, str]] = []
+    for el in soup.find_all(list(_HEADING_TAGS) + ["p", "li", "a", "blockquote", "iframe"]):
+        if el.name in _HEADING_TAGS:
+            title = el.get_text(" ", strip=True)
+            if title:
+                events.append(("head", int(el.name[1]), title))
+        elif el.name in ("p", "li"):
+            txt = el.get_text(" ", strip=True)
+            if txt:
+                events.append(("text", 0, txt))
+        else:
+            url = (el.get("href") or el.get("cite") or el.get("src") or "").strip()
+            if url and _is_video_url(url) and not _is_carousel_recommendation(url):
+                events.append(("video", 0, url))
+
+    # Vote for the owning level: each video link counts toward its nearest preceding heading.
+    owner_votes: Counter = Counter()
+    level: int | None = None
+    for kind, lvl, _val in events:
+        if kind == "head":
+            level = lvl
+        elif kind == "video" and level is not None:
+            owner_votes[level] += 1
+    if not owner_votes:
+        return None
+    owner = owner_votes.most_common(1)[0][0]
+
+    out: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for kind, lvl, val in events:
+        if kind == "head":
+            if lvl == owner:
+                current = {"format_name": val, "format_description": None,
+                           "video_urls": [], "_keys": set(), "_desc_done": False}
+                out.append(current)
+            elif lvl < owner:
+                current = None
+            continue
+        if current is None:
+            continue
+        if kind == "text" and not current["_desc_done"]:
+            stop = _SECTION_STOP_RE.search(val)
+            if stop:
+                val = val[: stop.start()].strip()
+                current["_desc_done"] = True
+            joined = f"{current['format_description']} {val}".strip() if current["format_description"] else val
+            current["format_description"] = re.sub(r"\s+", " ", joined)[:500] or None
+            if len(joined) >= 500:
+                current["_desc_done"] = True
+        elif kind == "video":
+            key = val.split("?", 1)[0].rstrip("/").lower()
+            if key not in current["_keys"]:  # same video often appears as blockquote cite + anchor
+                current["_keys"].add(key)
+                current["video_urls"].append(val)
+
+    for fmt in out:
+        fmt.pop("_keys")
+        fmt.pop("_desc_done")
+    if sum(1 for f in out if f["video_urls"]) < 2:
+        return None
+    return out
+
+
+def parse_trend_formats(
+    config: Config,
+    issue: TrendIssue,
+    *,
+    timeout: int = 120,
+    prompt_template: str = TREND_PARSE_PROMPT,
+    parse_meta: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Extract [{format_name, format_description, video_urls[]}] from one trend page.
+
+    Structural parses run first — no LLM, so adjacent trends never merge and titles stay
+    verbatim: pages that number their trends (`Trend #1 … #N`, e.g. newengen) split on the
+    numbering; otherwise heading-delimited pages (ramdam, socialbee) split on the video-owning
+    heading level. The heading parse only applies to standard roundups (default prompt_template):
+    a custom-prompt source like SGE names sections after the app/brand, and turning those into
+    format names requires the LLM rewrite (SGE_PARSE_PROMPT names by technique, never brand).
+    Pages no structural parser recognizes fall back to the LLM below.
+
+    parse_meta, when given, is filled with {"method": "numbered"|"headed"|"llm"} so the
+    caller can tell a structural parse from an LLM fallback (the fallback on a normally
+    structural source is the parser-drift signal drift_alert.py emails about)."""
+    if parse_meta is None:
+        parse_meta = {}
+    segmented = segment_numbered_page(issue)
+    if segmented is not None:
+        parse_meta["method"] = "numbered"
+        return segmented
+    if prompt_template is TREND_PARSE_PROMPT:
+        headed = segment_headed_page(issue)
+        if headed is not None:
+            parse_meta["method"] = "headed"
+            return headed
+    parse_meta["method"] = "llm"
+
     if not config.openrouter_api_key:
         raise RuntimeError("OPENROUTER_API_KEY is required to parse trend pages.")
-    prompt = TREND_PARSE_PROMPT.format(
+    prompt = prompt_template.format(
         page_text=issue.text[:_MAX_PAGE_CHARS],
         candidate_urls="\n".join(issue.candidate_urls) or "(none found)",
     )
-    response = request_json(
-        "POST",
-        f"{OPENROUTER_BASE_URL}{OPENROUTER_CHAT_COMPLETIONS_ENDPOINT}",
-        headers={"Authorization": f"Bearer {config.openrouter_api_key}"},
-        body={
-            "model": config.openrouter_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": "trend_formats", "strict": True, "schema": TREND_PARSE_SCHEMA},
-            },
-        },
+    analysis = openrouter_json_call(
+        config,
+        prompt=prompt,
+        schema=TREND_PARSE_SCHEMA,
+        schema_name="trend_formats",
         timeout=timeout,
+        empty_error="OpenRouter returned no trend-format analysis.",
     )
-    analysis = parse_enrichment_response(response.body)
-    if not isinstance(analysis, dict):
-        raise RuntimeError("OpenRouter returned no trend-format analysis.")
     formats = analysis.get("formats")
     if not isinstance(formats, list):
         return []
@@ -293,5 +693,15 @@ def parse_trend_formats(config: Config, issue: TrendIssue, *, timeout: int = 120
                 "format_description": str(fmt.get("format_description") or "").strip() or None,
                 "video_urls": urls,
             }
+        )
+    # Numbered roundups list N trends explicitly; fewer formats than that means a numbered trend
+    # was merged into another or its section didn't render — surface it (a re-run accumulates the
+    # rest; see the trend-scraping skill §8).
+    expected = max_trend_number(issue.text)
+    if expected and len(out) < expected:
+        logger.warning(
+            "%s: page numbers %d trends but parse extracted %d — %d missing (merged/unrendered); "
+            "re-run ingest to accumulate the rest",
+            issue.source_name, expected, len(out), expected - len(out),
         )
     return out

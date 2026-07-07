@@ -1,0 +1,527 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Search, Loader2, X, Sparkles } from 'lucide-react'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
+import { searchAds, listRuns } from '@/lib/api'
+import type { ItemType, RunSummary, VideoResult } from '@/lib/types'
+import { formatNum, fmtDate, safeHref } from '@/lib/format'
+import { ViralityHelp } from '@/components/ViralityHelp'
+import { VideoTile } from '@/components/VideoTile'
+
+const TYPE_OPTIONS: { label: string; value: ItemType | null }[] = [
+  { label: 'All', value: null },
+  { label: 'Paid ads', value: 'paid_ad' },
+  { label: 'Organic', value: 'organic_item' },
+]
+
+// Platform options are scoped to the type filter: organic lives on TikTok/Instagram (Reels),
+// paid ads on Facebook/Meta. 'All' offers every platform. Keyed by itemType ('all' when null).
+const PLATFORM_OPTIONS: Record<'all' | 'paid_ad' | 'organic_item', { value: string; label: string }[]> = {
+  organic_item: [
+    { value: 'tiktok', label: 'TikTok' },
+    { value: 'instagram', label: 'Instagram (Reels)' },
+  ],
+  paid_ad: [
+    { value: 'facebook', label: 'Facebook' },
+    { value: 'instagram', label: 'Instagram' },
+    { value: 'meta', label: 'Meta' },
+  ],
+  all: [
+    { value: 'tiktok', label: 'TikTok' },
+    { value: 'instagram', label: 'Instagram' },
+    { value: 'facebook', label: 'Facebook' },
+    { value: 'meta', label: 'Meta' },
+  ],
+}
+
+// Enum values mirror src/instaagent_pipeline/audience_enrichment.py (AGE_BRACKETS,
+// PRICE_TIERS, CONTENT_FORMATS). Languages are free-form on the backend; these are the common set.
+const AGE_BRACKETS = ['13-17', '18-24', '25-34', '35-44', '45-54', '55+']
+const LANGUAGES = ['English', 'Spanish', 'Portuguese', 'French', 'German', 'Hindi', 'Arabic', 'Chinese', 'Japanese', 'Korean']
+// Production formats — multi-value/overlapping (a video can be several at once).
+const CONTENT_FORMATS = ['talking_head', 'ugc', 'product_montage', 'voiceover', 'meme', 'grwm',
+  'unboxing', 'tutorial', 'testimonial', 'before_after', 'skit', 'listicle', 'asmr']
+const PRICE_TIERS = [
+  { label: 'Any price', value: '' },
+  { label: 'Budget', value: 'budget' },
+  { label: 'Mid', value: 'mid' },
+  { label: 'Premium', value: 'premium' },
+  { label: 'Luxury', value: 'luxury' },
+]
+
+function toggleInSet(set: Set<string>, value: string): Set<string> {
+  const next = new Set(set)
+  if (next.has(value)) next.delete(value)
+  else next.add(value)
+  return next
+}
+
+// Each ad type has its own winning signal: organic → virality, paid → days live.
+// Those scales aren't comparable, so for a mixed list we rank each ad among its
+// own type (0–1) and interleave by that rank — the strongest organic and strongest
+// paid rise together. With the type filter set to one type, this is just a plain
+// descending sort by that type's signal.
+function sortByPerformance(items: VideoResult[]): VideoResult[] {
+  const signal = (r: VideoResult) =>
+    r.item_type === 'paid_ad' ? r.days_live ?? -1 : r.virality ?? -1
+  const rank = new Map<VideoResult, number>()
+  for (const type of ['paid_ad', 'organic_item'] as const) {
+    const group = items.filter((r) => r.item_type === type)
+    const sorted = [...group].sort((a, b) => signal(a) - signal(b))
+    sorted.forEach((r, i) => rank.set(r, group.length > 1 ? i / (group.length - 1) : 1))
+  }
+  return [...items].sort((a, b) => (rank.get(b) ?? 0) - (rank.get(a) ?? 0))
+}
+
+export default function SearchPage() {
+  const [query, setQuery] = useState('')
+  const [itemType, setItemType] = useState<ItemType | null>(null)
+  const [platform, setPlatform] = useState<string>('')
+  const [runId, setRunId] = useState<string>('')
+  const [viralOnly, setViralOnly] = useState(false)
+  const [minDate, setMinDate] = useState<string>('')
+  const [minViews, setMinViews] = useState<string>('')
+  const [minVirality, setMinVirality] = useState<string>('')
+  const [minDaysLive, setMinDaysLive] = useState<string>('')
+  const [priceTier, setPriceTier] = useState<string>('')
+  const [ageBrackets, setAgeBrackets] = useState<Set<string>>(new Set())
+  const [languages, setLanguages] = useState<Set<string>>(new Set())
+  const [contentFormats, setContentFormats] = useState<Set<string>>(new Set())
+  const [runs, setRuns] = useState<RunSummary[]>([])
+  const [results, setResults] = useState<VideoResult[]>([])
+  const [sortMode, setSortMode] = useState<'relevance' | 'performance'>('relevance')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [searched, setSearched] = useState(false)
+
+  useEffect(() => {
+    listRuns()
+      .then((r) => setRuns(r.runs))
+      .catch(() => setRuns([]))
+  }, [])
+
+  // Deep-link support: /search?q=... (e.g. the example chips on the home page) pre-fills the
+  // box and runs the search immediately. Read once on mount; runs with the param value directly
+  // since `query` state isn't updated until the next render.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get('q')
+    if (q) {
+      setQuery(q)
+      runSearch(q)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // The keyword-free Viral Discovery run, if any. The "Viral discovery" toggle scopes results
+  // to it (takes precedence over the campaign dropdown).
+  const discoveryRun = runs.find((r) => r.discovery)
+  const effectiveRunId = viralOnly && discoveryRun ? discoveryRun.run_id : runId
+
+  async function runSearch(overrideQuery?: string) {
+    const q = (overrideQuery ?? query).trim()
+    setLoading(true)
+    setError(null)
+    setSearched(true)
+    try {
+      const res = await searchAds({
+        query: q,
+        // Viral discovery is a single TikTok organic run — force organic and drop platform.
+        item_type: viralOnly ? 'organic_item' : itemType,
+        platform: viralOnly ? null : platform || null,
+        run_id: effectiveRunId || null,
+        min_views: minViews ? Number(minViews) : null,
+        min_virality: minVirality ? Number(minVirality) : null,
+        min_days_live: minDaysLive ? Number(minDaysLive) : null,
+        min_date: viralOnly && minDate ? minDate : null,
+        price_tier: priceTier || null,
+        age_brackets: ageBrackets.size ? Array.from(ageBrackets) : null,
+        languages: languages.size ? Array.from(languages) : null,
+        content_formats: contentFormats.size ? Array.from(contentFormats) : null,
+      })
+      setResults(res.results)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Search failed')
+      setResults([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Switching type re-scopes the platform options; drop a selection that no longer
+  // belongs (e.g. TikTok picked under Organic, then switching to Paid ads).
+  function selectType(value: ItemType | null) {
+    setItemType(value)
+    if (!PLATFORM_OPTIONS[value ?? 'all'].some((o) => o.value === platform)) {
+      setPlatform('')
+    }
+  }
+
+  function clearFilters() {
+    setItemType(null)
+    setPlatform('')
+    setRunId('')
+    setViralOnly(false)
+    setMinDate('')
+    setMinViews('')
+    setMinVirality('')
+    setMinDaysLive('')
+    setPriceTier('')
+    setAgeBrackets(new Set())
+    setLanguages(new Set())
+    setContentFormats(new Set())
+  }
+
+  const filtersActive =
+    itemType !== null ||
+    platform !== '' ||
+    runId !== '' ||
+    viralOnly ||
+    (viralOnly && minDate !== '') ||
+    minViews !== '' ||
+    minVirality !== '' ||
+    minDaysLive !== '' ||
+    priceTier !== '' ||
+    ageBrackets.size > 0 ||
+    languages.size > 0 ||
+    contentFormats.size > 0
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Ad Search</h1>
+        <p className="text-sm text-muted-foreground">
+          Search the video database by keyword — semantic match over what each video actually shows.
+        </p>
+      </div>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          runSearch()
+        }}
+        className="space-y-3"
+      >
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="e.g. cleanser, acne extraction, ASMR pump, before after…"
+              className="pl-9"
+            />
+          </div>
+          <Button type="submit" disabled={loading}>
+            {loading ? <Loader2 className="size-4 animate-spin" /> : query.trim() ? 'Search' : 'Show all'}
+          </Button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Type / campaign / platform are meaningless in Viral discovery (it's one TikTok-only
+              organic run), so they're hidden while it's on. */}
+          {!viralOnly && (
+            <div className="inline-flex items-stretch overflow-hidden rounded-md border border-border">
+              {TYPE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.label}
+                  type="button"
+                  onClick={() => selectType(opt.value)}
+                  className={cn(
+                    'inline-flex items-center px-3 py-1.5 text-xs font-medium transition-colors',
+                    itemType === opt.value
+                      ? 'bg-accent text-accent-foreground'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {discoveryRun && (
+            <button
+              type="button"
+              onClick={() => setViralOnly((v) => !v)}
+              title="Show only the keyword-free Viral Discovery formats"
+              className={cn(
+                'inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs font-medium transition-colors',
+                viralOnly
+                  ? 'border-[#9d1555] bg-[#fdedf4] text-[#9d1555]'
+                  : 'border-border text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Sparkles className="size-3.5" /> Viral discovery
+            </button>
+          )}
+
+          {viralOnly && (
+            <label
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs text-muted-foreground"
+              title="Only show videos posted on or after this date"
+            >
+              Posted since
+              <input
+                type="date"
+                value={minDate}
+                onChange={(e) => setMinDate(e.target.value)}
+                className="bg-transparent text-foreground outline-none"
+              />
+            </label>
+          )}
+
+          {!viralOnly && (
+            <select
+              value={runId}
+              onChange={(e) => setRunId(e.target.value)}
+              className="h-8 max-w-[220px] rounded-md border border-border bg-background px-2 text-xs"
+            >
+              <option value="">All campaigns</option>
+              {runs
+                .filter((r) => !r.discovery)
+                .map((r) => (
+                  <option key={r.run_id} value={r.run_id}>
+                    {r.campaign_name || r.product_name || r.run_id.slice(0, 8)}
+                  </option>
+                ))}
+            </select>
+          )}
+
+          {!viralOnly && (
+            <select
+              value={platform}
+              onChange={(e) => setPlatform(e.target.value)}
+              className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+            >
+              <option value="">Any platform</option>
+              {PLATFORM_OPTIONS[itemType ?? 'all'].map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          )}
+
+          <select
+            value={priceTier}
+            onChange={(e) => setPriceTier(e.target.value)}
+            className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+          >
+            {PRICE_TIERS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+
+          {/* Performance filters are type-scoped: views/virality are organic-only, days-live is paid-only.
+              Viral discovery is organic, so it shows the organic filters and hides days-live. */}
+          {(viralOnly || itemType !== 'paid_ad') && (
+            <Input
+              type="number"
+              value={minViews}
+              onChange={(e) => setMinViews(e.target.value)}
+              placeholder="Min views (organic)"
+              className="h-8 w-36 text-xs md:text-xs"
+            />
+          )}
+          {(viralOnly || itemType !== 'paid_ad') && (
+            <Input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={minVirality}
+              onChange={(e) => setMinVirality(e.target.value)}
+              placeholder="Min virality 0–1 (organic)"
+              className="h-8 w-44 text-xs md:text-xs"
+            />
+          )}
+          {!viralOnly && itemType !== 'organic_item' && (
+            <Input
+              type="number"
+              value={minDaysLive}
+              onChange={(e) => setMinDaysLive(e.target.value)}
+              placeholder="Min days live (paid)"
+              className="h-8 w-40 text-xs md:text-xs"
+            />
+          )}
+
+          {filtersActive && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="flex h-8 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground hover:text-foreground"
+            >
+              <X className="size-3.5" /> Clear filters
+            </button>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <ChipFilter label="Format" options={CONTENT_FORMATS} selected={contentFormats} onToggle={(v) => setContentFormats((s) => toggleInSet(s, v))} />
+          <ChipFilter label="Age" options={AGE_BRACKETS} selected={ageBrackets} onToggle={(v) => setAgeBrackets((s) => toggleInSet(s, v))} />
+          <ChipFilter label="Language" options={LANGUAGES} selected={languages} onToggle={(v) => setLanguages((s) => toggleInSet(s, v))} />
+        </div>
+      </form>
+
+      {error && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      )}
+
+      {loading && (
+        <div className="flex items-center justify-center py-20 text-muted-foreground">
+          <Loader2 className="mr-2 size-5 animate-spin" /> Searching…
+        </div>
+      )}
+
+      {!loading && !searched && !error && (
+        <div className="py-20 text-center text-sm text-muted-foreground">
+          Search by keyword, or press <span className="font-medium text-foreground">Show all</span> to browse the whole database.
+        </div>
+      )}
+
+      {!loading && searched && results.length === 0 && !error && (
+        <div className="py-20 text-center text-sm text-muted-foreground">
+          No videos found. Try a broader keyword, or check that items have been enriched + embedded.
+        </div>
+      )}
+
+      {!loading && results.length > 0 && (
+        <>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">{results.length} results</p>
+            <select
+              value={sortMode}
+              onChange={(e) => setSortMode(e.target.value as 'relevance' | 'performance')}
+              className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+            >
+              <option value="relevance">Sort: Relevance</option>
+              <option value="performance">Sort: Top performing</option>
+            </select>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {(sortMode === 'performance' ? sortByPerformance(results) : results).map((r) => (
+              <VideoCard key={`${r.item_type}:${r.item_id}`} result={r} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function ChipFilter({
+  label,
+  options,
+  selected,
+  onToggle,
+}: {
+  label: string
+  options: string[]
+  selected: Set<string>
+  onToggle: (value: string) => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      {options.map((opt) => {
+        const active = selected.has(opt)
+        return (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => onToggle(opt)}
+            className={cn(
+              'rounded-full border px-2.5 py-0.5 text-xs transition-colors',
+              active
+                ? 'border-accent bg-accent text-accent-foreground'
+                : 'border-border text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {opt.replace(/_/g, ' ')}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function VideoCard({ result: r }: { result: VideoResult }) {
+  return (
+    <VideoTile
+      videoUrl={r.video_url}
+      thumbUrl={r.thumb_url}
+      fallback="no video"
+      className="rounded-lg border border-border bg-card"
+      videoClassName="rounded-t-lg"
+      fallbackClassName="text-xs"
+      bodyClassName="flex-1 gap-2 p-3"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate text-sm font-medium">{r.title || 'untitled'}</span>
+        {r.platform && <Badge variant="secondary" className="capitalize">{r.platform}</Badge>}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        <Badge variant={r.item_type === 'paid_ad' ? 'default' : 'outline'}>
+          {r.item_type === 'paid_ad' ? 'Paid' : 'Organic'}
+        </Badge>
+        {(r.content_formats ?? []).map((f) => (
+          <Badge key={`fmt-${f}`} variant="outline">{f.replace(/_/g, ' ')}</Badge>
+        ))}
+        {typeof r.similarity === 'number' && (
+          <Badge variant="outline">{Math.round(r.similarity * 100)}% relevance</Badge>
+        )}
+        {r.price_positioning && <Badge variant="outline" className="capitalize">{r.price_positioning.replace(/_/g, ' ')}</Badge>}
+        {r.target_generation && <Badge variant="outline" className="capitalize">{r.target_generation.replace(/_/g, ' ')}</Badge>}
+      </div>
+      {((r.age_brackets?.length ?? 0) > 0 || (r.languages?.length ?? 0) > 0) && (
+        <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
+          {(r.age_brackets ?? []).map((a) => (
+            <span key={`age-${a}`} className="rounded bg-muted px-1.5 py-0.5">{a}</span>
+          ))}
+          {(r.languages ?? []).map((l) => (
+            <span key={`lang-${l}`} className="rounded bg-muted px-1.5 py-0.5">{l}</span>
+          ))}
+        </div>
+      )}
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+        {r.views != null && <span>{formatNum(r.views)} views</span>}
+        {r.followers != null && <span>{formatNum(r.followers)} followers</span>}
+        {r.likes != null && <span>{formatNum(r.likes)} likes</span>}
+        {r.virality != null && (
+          <span className="inline-flex items-center">
+            vir {r.virality.toFixed(2)}
+            <ViralityHelp />
+          </span>
+        )}
+        {r.days_live != null && <span>{Math.round(r.days_live)}d live</span>}
+        {r.date_created && <span>posted {fmtDate(r.date_created)}</span>}
+      </div>
+      {r.hook && (
+        <p className="line-clamp-3 text-xs">
+          <span className="font-medium">Hook:</span> {r.hook}
+        </p>
+      )}
+      {r.ai_description && (
+        <p className="line-clamp-4 text-xs text-muted-foreground">{r.ai_description}</p>
+      )}
+      {safeHref(r.original_url) && (
+        <a
+          href={safeHref(r.original_url)}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-auto text-xs text-primary hover:underline"
+        >
+          Open original ↗
+        </a>
+      )}
+    </VideoTile>
+  )
+}

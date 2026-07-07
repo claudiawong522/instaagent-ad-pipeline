@@ -1,0 +1,67 @@
+name: Trend scrape (newengen monthly)
+
+# newengen publishes ONE TikTok-trends report per month at /insights/<month>-tiktok-trends/,
+# dropped ~the 29th of the prior month and then frozen. The page is JS-rendered and flaky —
+# each render captures a random subset of trends, so its text (and content-hash) changes on
+# every fetch, defeating the content-hash skip gate. Scraping it daily therefore re-parses the
+# same frozen report ~30x/month and churns duplicate/renamed viral_formats rows.
+#
+# So run it only in the first few days of each month: a handful of passes to accumulate all
+# trends across flaky renders, then idle for the rest of the month. The month slug follows the
+# calendar month and the report is published before the month begins, so days 1-5 reliably hit
+# a live, published report.
+#
+# Scheduled workflows run on the default branch only.
+on:
+  schedule:
+    - cron: "0 13 1-5 * *" # first 5 days of each month, 13:00 UTC ≈ 9am ET
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Re-parse the page even if unchanged since last run"
+        type: boolean
+        default: false
+
+concurrency:
+  group: trend-scrape-newengen
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    name: ingest-trends (newengen)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # `requests` is imported directly but not yet a declared dependency (same as ci.yml).
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install requests
+
+      - name: Run ingest-trends (newengen)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          APIFY_API_KEY: ${{ secrets.APIFY_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Voyage key for the trend embeddings classify-formats writes (chained after ingest).
+          # If unset, formats are still tagged but not embedded — not recallable until re-embedded.
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          # SMTP creds for the parser-drift reminder email (drift_alert.py) — free relay
+          # (Gmail app password by default; Brevo etc. via the HOST/PORT/FROM overrides).
+          # If unset, drift is only logged in the run output.
+          ALERT_SMTP_USER: ${{ secrets.ALERT_SMTP_USER }}
+          ALERT_SMTP_PASSWORD: ${{ secrets.ALERT_SMTP_PASSWORD }}
+          ALERT_SMTP_HOST: ${{ secrets.ALERT_SMTP_HOST }}
+          ALERT_SMTP_PORT: ${{ secrets.ALERT_SMTP_PORT }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+        run: |
+          python -m instaagent_pipeline.cli ingest-trends --source-name newengen --fail-on-drift ${{ inputs.force && '--force' || '' }}

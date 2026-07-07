@@ -1,65 +1,37 @@
-# Future Add-Ons
+## ADD ONS
+ 1. search competitor specific ads/product ugc
+    - e.g. type "Athletic Greens" and get back all their live Meta ads plus creator UGC for the product
+ 2. for database search, implement prompt expansion so that search is more comprehensive and not affected by short prompts
+    - e.g. a search for "gym" also matches clips tagged "workout", "fitness", "training" instead of only literal "gym"
+ 3. compare `apple_yang/instagram-transcripts-scraper` actor as a possible alternative
+    - e.g. run the same 10 reels through both actors and diff transcript accuracy + cost per run
+ 4. human review UI - add approval/rejection, notes
+    - e.g. a reviewer clicks ✓/✗ on each scraped ad and leaves "hook is too slow" before it enters the library
+ 5. add keyword approval, rejection, regeneration before scraping from campaign
+    - e.g. campaign suggests "protein powder, bcaa, creatine" — user drops "bcaa" and hits regenerate for fresh terms
+ 6. change newsletter scraping to email scraping for more timely trends
+    - e.g. read trends straight from the TikTok-trends email inbox the day it arrives instead of waiting for the web archive
+ 7. include youtube shorts in addition to tiktoks and reels
+    - e.g. a trending sound surfaces from a YouTube Short even when no TikTok/Reel example exists yet
+ 8. re-generate keywords on campaign edit, so new scrapes could reference different keywords, thus more varying results
+    - e.g. editing a campaign's audience from "students" to "new parents" regenerates keywords so the next scrape pulls different clips
+ 9. search bar for trends can input campaign
+    - e.g. pick "Summer Hydration" campaign in the trends search and only see trends relevant to that campaign
+ 10. one trend can have multiple ideas
+    - e.g. the "get ready with me" trend spawns three ad ideas: skincare, coffee, and commute
+ 11. keyword virality graph (constraint: urls expire)
+    - e.g. a line chart showing a keyword's view count climbing over the past 2 weeks (caveat: source URLs 404 after expiry)
+ 12. support tiktok slideshow posts (tiktok.com/@user/photo/<id>) as trend examples — socialbee sometimes links them as a trend's only example, and they're currently invisible (VIDEO_URL_PATTERNS doesn't match /photo/), so those trends get dropped as video-less; needs the pattern + confirming the Apify TikTok actor returns something scrapeable for photo posts
+    - e.g. a trend whose only example is tiktok.com/@user/photo/123 currently vanishes; after the fix it shows up as a slideshow card
 
-These are good ideas intentionally deferred to keep the first version lean.
 
-## Competitor Mode
+## THINGS TO BEWARE
+- if url form of newsletter changes, github actions scheduled scrape will fail, this requires a manual fix, an email notifies instaagenttool@gmail.com
+  e.g. right now the month slug is hardcoded to the no-year form (july-tiktok-trends). Older months used <month>-2026-tiktok-trends. If newengen reverts, the fetch silently 404s and you get zero newengen trends with no error. 
 
-- Use Meta Ad Library page URLs or page IDs with Apify `apify/facebook-ads-scraper` to pull ads for known competitor brands.
-- Useful for customer-specific competitor research.
-- Deferred because the first version should prove the keyword-led category workflow first.
 
-## Transcription Optimizations
 
-- If the broader Apify transcript actor has poor Instagram reliability or cost, compare Apify `apple_yang/instagram-transcripts-scraper` as an Instagram-only alternative. It accepts one public Instagram video URL and returns `text` plus timestamped `segments`.
-- If Apify confirms array input is stable for `tictechid/anoxvanzi-transcriber`, batch multiple known URLs into one actor run to reduce per-run base charges.
 
-## Account-Size-Normalized Organic Virality
 
-- Normalize organic performance by creator follower count or historical baseline.
-- Useful once source data quality around follower counts is confirmed.
 
-## Human Review UI
-
-- Add approval/rejection, notes, cluster renaming, customer fit tags, and final sales-pack curation.
-
-## Creative Cloning Packs
-
-- Generate scripts, shot lists, asset requirements, creator directions, and prompt-ready clone specs from selected winners.
-
-## Keyword Quality Tuning
-
-- Add keyword approval, rejection, regeneration, and per-provider keyword variants.
-- Add competitor/domain lookup when exact brand or competitor terms matter.
-
-## Visual Analysis
-
-- Add OCR, frame sampling, scene detection, visual style embeddings, product-shot detection, and before/after detection.
-
-## Compliance/IP Review
-
-- Flag risky medical/beauty claims, direct competitor copying, creator likeness reuse, trademark risk, and platform policy issues.
-
-## Static Image Ads
-
-- The Meta Ad Library scrape URL currently hard-codes `media_type=video` (`apify_ads.py`), so photo-only ads never enter the pipeline.
-- To include them: parameterize `media_type` (CLI `--media-type`, default `all`), and extend `enrich-paid-ads` to send the ad image + caption through the same OpenRouter descriptor schema when there is no video (transcript fields null).
-- Embeddings need no changes — `embed-items` works off descriptor columns regardless of media type, and same-schema distillation keeps image and video ads clustering by creative pattern instead of input modality.
-- Deferred because every scraped ad so far is a video ad and InstaAgent clones video creatives first.
-
-## Trend pipeline: email sources, Instagram videos, per-video tags
-
-The viral-format trend pipeline (`ingest-trends` → `viral_formats` + `ugc_items`, `/trends` dashboard) currently only ingests **web** trend pages and re-scrapes **TikTok** example videos. Deferred:
-
-- **Email newsletter source.** Add an IMAP + Gmail app-password fetcher (e.g. Social Growth Engineers' Trend Radar) that emits the same `{source_name, source_url, content_hash, text, candidate_urls}` "issue" shape into the existing `TREND_PARSE_PROMPT` path. Needs a `source_type` column (`email`|`web`) and a per-source idempotency key (email `message_id`). Parked at user request — web-first.
-- **Instagram / YouTube example videos.** `_rescrape_and_write` (`trend_ingest.py`) only re-scrapes TikTok URLs (via `clockworks/tiktok-scraper` `postURLs`); IG Reels / Shorts links are counted in `videos_skipped` but not fetched. To support IG, wire a directUrl-capable Apify actor (verify `apify/instagram-scraper` `directUrls`) and a normalizer mapping back to `format_id`. TikTok dominates these pages, so this was deferred.
-- **Short links.** `vm.tiktok.com/…` links carry no `/video/<id>`, so they can't be pre-mapped to a format and are skipped. Resolve them (follow the redirect) before mapping, or match returned items by `webVideoUrl`.
-- **Video-level constraint tagging.** The free-form `niche_constraint` is per-format. If format-level proves too coarse, add per-video niche tags + a video filter on the dashboard (the user's stated fallback).
-- **Scheduling.** `ingest-trends` is manual; a cron/routine could auto-pull weekly. JS-rendered pages (none of the current sources) would need an Apify `website-content-crawler` fallback in `trend_sources.fetch_trend_page`.
-
-## Re-seed keywords on campaign edit
-
-- The inline campaign editor (`PATCH /campaigns/{run_id}`) updates the product + campaign config (name/goals/objective) but does **not** regenerate keyword allocations. Keywords are seeded once at create time from the objective.
-- So editing the objective/product after creation won't change which keywords the scrapers search.
-- To support it: on edit, diff the objective and re-run `generate_keyword_allocations` + `insert_keyword_allocations`, deduping against existing keywords so a re-run doesn't pile up duplicates (and deciding what to do with keywords from already-scraped runs).
-- Deferred because it's a meaningfully bigger change (dedup + cost implications) than the in-place detail edit the UI needed.
 

@@ -12,8 +12,8 @@ Primary areas:
 - `supabase/schema.sql`: canonical Supabase schema for a clean project.
 - `supabase/migrations/`: incremental database migrations for existing Supabase projects. Verify a live database against these before building search/clustering on top of old data.
 - `database.md`: human-readable database/table documentation.
-- `api-endpoints.md`: provider endpoint and mapping notes.
-- `PLAN.md`: broader future plan; do not treat every item there as implemented.
+- `docs/archive/`: superseded plans and one-off notes (`PLAN.md`, `api-endpoints.md`, …); historical context only — do not treat items there as implemented.
+- `experiments/`: standalone analysis/visualization scripts; not part of the package.
 
 Runtime dependencies are listed in `pyproject.toml`; `numpy` and `scikit-learn` are required for clustering.
 
@@ -25,7 +25,12 @@ The Supabase service role key is server-side only and bypasses row-level securit
 
 ## Implementation Notes
 
-- Prefer existing helpers in `ingestion.py`, `normalizers.py`, and `supabase_client.py`.
+- Prefer existing helpers in `ingestion.py` (incl. the `logged_query` bookkeeping context
+  manager), `normalizers.py`, and `supabase_client.py`. Shared infrastructure lives in
+  dedicated modules — `openrouter.py` (LLM call envelope/parsing), `media.py` (video/thumbnail
+  fetch + Storage persist), `apify_client.py` (actor run/poll/ingest), `video_enrichment.py`
+  (the paid+organic vision flow, parametrized by `ItemKind`) — don't re-hand-roll these in
+  feature modules.
 - Preserve raw payload storage before normalized upserts.
 - Paid ad upserts depend on `(run_id, id)` uniqueness; organic upserts depend on `(run_id, external_id)` uniqueness.
 - Provider-specific fields that do not deserve first-class columns should live in `source_metrics`.

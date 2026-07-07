@@ -1,0 +1,9 @@
+# Runtime deps for the Vercel Python function (api/index.py). Mirrors the core
+# dependencies in pyproject.toml, minus uvicorn (Vercel provides the ASGI server).
+numpy>=1.26
+scikit-learn>=1.4
+fastapi>=0.110
+pillow>=10.3
+pillow-heif>=0.16
+beautifulsoup4>=4.12
+requests>=2.31

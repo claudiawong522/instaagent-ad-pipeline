@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import math
 from datetime import UTC, datetime
 from typing import Any
+
+from .virality import recompute_virality
 
 
 APIFY_AD_FIRST_CLASS_KEYS = {
@@ -325,80 +326,12 @@ def epoch_to_iso(value: float) -> str:
     return datetime.fromtimestamp(seconds, tz=UTC).isoformat()
 
 
-def days_since_timestamp(value: str | None) -> int | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return max((datetime.now(UTC) - parsed).days, 0)
-
-
-# ── Organic: Apify TikTok (clockworks) + Instagram (data-slayer) → ugc_items ──
+# ── Organic: Apify TikTok (clockworks) + Instagram (data-slayer) → organic_items ──
 #
 # These replace TopYappers as the organic source. The Apify scrapers provide engagement
 # + creator metadata only; the analysis columns (hook, content_format, persona, ...)
 # are filled later by the organic vision enrichment, so they are left null here. virality
-# is recomputed from reach + engagement since these providers do not supply a virality score.
-
-
-# Values at which each raw ratio reaches the top of its 0-1 log curve. REACH_CAP=100
-# means "seen by 100x your followers" is maximally viral; ENGAGEMENT_CAP=0.30 means a
-# 30% interaction rate is the engagement ceiling. Both are heavy-tailed, hence log.
-REACH_CAP = 100.0
-ENGAGEMENT_CAP = 0.30
-
-
-def _log_norm(ratio: float, cap: float) -> float:
-    """Map a non-negative ratio onto [0, 1] via a log curve where `cap` -> 1.0.
-
-    log spreads heavy tails so e.g. reach 10x vs 500x don't both flatten near 1 the
-    way a plain ratio/(ratio+1) squash would.
-    """
-    if ratio <= 0:
-        return 0.0
-    return min(math.log1p(ratio) / math.log1p(cap), 1.0)
-
-
-def recompute_virality(
-    *,
-    views: int | None,
-    likes: int | None,
-    comments: int | None,
-    shares: int | None,
-    followers: int | None = None,
-) -> tuple[float | None, str | None]:
-    """Normalized 0-1 virality blending reach amplification with engagement rate.
-
-    Both signals pass through the SAME log normalizer (`_log_norm`) so neither is
-    scaled while the other is clamped:
-      reach      = views / followers          (cap REACH_CAP)
-      engagement = interactions / views       (cap ENGAGEMENT_CAP)
-    Final score = 0.6*reach + 0.4*engagement, in [0, 1]. When follower count is
-    unknown the score degrades to engagement-only. Stands in for TopYappers'
-    virality_score (TikTok/IG don't supply one).
-    """
-    if not views or views <= 0:
-        return None, None
-    engagement_rate = ((likes or 0) + (comments or 0) + (shares or 0)) / views
-    engagement_norm = _log_norm(engagement_rate, ENGAGEMENT_CAP)
-    if followers and followers > 0:
-        reach_norm = _log_norm(views / followers, REACH_CAP)
-        score = round(0.6 * reach_norm + 0.4 * engagement_norm, 3)
-    else:
-        score = round(engagement_norm, 3)
-    if score >= 0.6:
-        tier = "high"
-    elif score >= 0.35:
-        tier = "medium"
-    elif score > 0:
-        tier = "low"
-    else:
-        tier = None
-    return score, tier
+# scoring lives in virality.py.
 
 
 def tiktok_download_url(item: dict[str, Any]) -> str | None:
@@ -436,8 +369,10 @@ def normalize_tiktok_item(item: dict[str, Any], run_id: str, raw_payload_id: str
     comments = as_int(item.get("commentCount"))
     shares = as_int(item.get("shareCount"))
     followers = as_int(author.get("fans"))
+    date_created = as_timestamp(first_present(item, "createTimeISO", "createTime"))
     score, tier = recompute_virality(
-        views=views, likes=likes, comments=comments, shares=shares, followers=followers
+        views=views, likes=likes, comments=comments, shares=shares,
+        followers=followers, date_created=date_created,
     )
     music_name = music_meta.get("musicName") or music_meta.get("musicAuthor")
     return {
@@ -461,7 +396,7 @@ def normalize_tiktok_item(item: dict[str, Any], run_id: str, raw_payload_id: str
         "comments": comments,
         "shares": shares,
         "music": {"title": music_name} if music_name else None,
-        "date_created": as_timestamp(first_present(item, "createTimeISO", "createTime")),
+        "date_created": date_created,
         "virality_score": score,
         "virality_tier": tier,
         "source_metrics": source_metrics_from_unmapped(
@@ -495,7 +430,7 @@ def tiktok_trend_views(item: dict[str, Any]) -> int | None:
 
 
 def normalize_tiktok_trend_item(item: dict[str, Any], run_id: str, raw_payload_id: str | None) -> dict[str, Any]:
-    """novi/tiktok-trend-api (keyword-free For You feed) → ugc_items. Distinct from
+    """novi/tiktok-trend-api (keyword-free For You feed) → organic_items. Distinct from
     normalize_tiktok_item: this is TikTok's raw aweme shape (statistics.*, author.unique_id,
     cha_list), not the clockworks scraper shape. follower_count is absent from the trend
     payload, so it stays null here and is filled by backfill_tiktok_followers."""
@@ -507,8 +442,10 @@ def normalize_tiktok_trend_item(item: dict[str, Any], run_id: str, raw_payload_i
     likes = as_int(stats.get("digg_count"))
     comments = as_int(stats.get("comment_count"))
     shares = as_int(stats.get("share_count"))
+    date_created = as_timestamp(item.get("create_time"))
     score, tier = recompute_virality(
-        views=views, likes=likes, comments=comments, shares=shares, followers=None
+        views=views, likes=likes, comments=comments, shares=shares,
+        followers=None, date_created=date_created,
     )
     handle = author.get("unique_id")
     aweme_id = stringify_if_needed(item.get("aweme_id"))
@@ -540,7 +477,7 @@ def normalize_tiktok_trend_item(item: dict[str, Any], run_id: str, raw_payload_i
         "comments": comments,
         "shares": shares,
         "music": {"title": music_title, "author": music.get("author")} if music_title else None,
-        "date_created": as_timestamp(item.get("create_time")),
+        "date_created": date_created,
         "virality_score": score,
         "virality_tier": tier,
         "source_metrics": {
@@ -577,8 +514,10 @@ def normalize_instagram_reel(item: dict[str, Any], run_id: str, raw_payload_id: 
     comments = as_int(item.get("comment_count"))
     shares = as_int(item.get("share_count"))
     followers = as_int(user.get("follower_count"))
+    date_created = as_timestamp(item.get("taken_at"))
     score, tier = recompute_virality(
-        views=views, likes=likes, comments=comments, shares=shares, followers=followers
+        views=views, likes=likes, comments=comments, shares=shares,
+        followers=followers, date_created=date_created,
     )
     page_url = f"https://www.instagram.com/reel/{code}/" if code else None
     return {
@@ -600,12 +539,58 @@ def normalize_instagram_reel(item: dict[str, Any], run_id: str, raw_payload_id: 
         "likes": likes,
         "comments": comments,
         "shares": shares,
-        "date_created": as_timestamp(item.get("taken_at")),
+        "date_created": date_created,
         "virality_score": score,
         "virality_tier": tier,
         "source_metrics": source_metrics_from_unmapped(
             item,
             INSTAGRAM_FIRST_CLASS_KEYS,
             extra={"endpoint_kind": "apify_instagram", "page_url": page_url},
+        ),
+    }
+
+
+def normalize_instagram_post(item: dict[str, Any], run_id: str, raw_payload_id: str | None) -> dict[str, Any]:
+    """Normalize a reel/post scraped by-URL via apify/instagram-scraper. That actor's shape
+    differs from the search actor (camelCase: shortCode/videoUrl/videoPlayCount/ownerUsername),
+    so this is a separate normalizer from normalize_instagram_reel."""
+    code = first_present(item, "shortCode", "shortcode", "code")
+    views = as_int(first_present(item, "videoPlayCount", "videoViewCount", "play_count"))
+    likes = as_int(first_present(item, "likesCount", "like_count"))
+    comments = as_int(first_present(item, "commentsCount", "comment_count"))
+    followers = as_int(first_present(item, "followersCount", "ownerFollowersCount"))
+    date_created = as_timestamp(first_present(item, "timestamp", "taken_at"))
+    score, tier = recompute_virality(
+        views=views, likes=likes, comments=comments, shares=None,
+        followers=followers, date_created=date_created,
+    )
+    caption = item.get("caption")
+    description = caption if isinstance(caption, str) else instagram_caption_text(item)
+    handle = first_present(item, "ownerUsername", "username")
+    page_url = f"https://www.instagram.com/reel/{code}/" if code else item.get("url")
+    return {
+        "run_id": run_id,
+        "raw_payload_id": raw_payload_id,
+        "external_id": str(first_present(item, "id", "shortCode", "pk") or ""),
+        "source": "instagram",
+        "video_id": stringify_if_needed(code),
+        "video_url": first_present(item, "videoUrl", "video_url"),
+        "cover": first_present(item, "displayUrl", "thumbnail_url"),
+        "description": description,
+        "handle": handle,
+        "user_handle": handle,
+        "user_id": stringify_if_needed(first_present(item, "ownerId", "owner_id")),
+        "nickname": first_present(item, "ownerFullName", "full_name"),
+        "followers": followers,
+        "views": views,
+        "likes": likes,
+        "comments": comments,
+        "date_created": date_created,
+        "virality_score": score,
+        "virality_tier": tier,
+        "source_metrics": source_metrics_from_unmapped(
+            item,
+            INSTAGRAM_FIRST_CLASS_KEYS,
+            extra={"endpoint_kind": "apify_instagram_url", "page_url": page_url},
         ),
     }

@@ -1,0 +1,38 @@
+# Render blueprint for the InstaAgent FastAPI backend (the API the frontend calls).
+# Deploy: Render dashboard → New → Blueprint → connect this repo → it reads this file →
+# fill in the secrets marked `sync: false` → Create. Frontend on Vercel points at the
+# resulting https://<name>.onrender.com via NEXT_PUBLIC_API_URL.
+#
+# Free plan spins the service down after ~15 min idle; the next request cold-starts (~50s).
+services:
+  - type: web
+    name: instaagent-api
+    runtime: python
+    plan: free
+    buildCommand: pip install .
+    startCommand: uvicorn instaagent_pipeline.api.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      # Browsers only get through CORS from these origins. Keep the Vercel prod domain here.
+      - key: CORS_ORIGINS
+        value: "https://instaagent-ad-pipeline.vercel.app,http://localhost:3000"
+      # Secrets — enter these in the Render dashboard (never committed). Reading data needs
+      # SUPABASE_* (+ VOYAGE for /search); the rest power scraping/enrichment from the UI.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: VOYAGE_API_KEY
+        sync: false
+      - key: APIFY_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: CLAUDE_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SGE_ACCESS_TOKEN
+        sync: false

@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from .config import Config
 from .http_client import HttpClientError, request_json
-from .ingestion import complete_query, log_api_usage, log_failed_query, start_query
+from .ingestion import logged_query
 from .supabase_client import SupabaseClient
 
 
@@ -18,14 +18,12 @@ VOYAGE_RERANK_ENDPOINT = "/v1/rerank"
 # Voyage accepts up to 1000 inputs per request; 128 keeps request bodies small.
 EMBEDDING_BATCH_SIZE = 128
 
-EMBEDDING_SPACES = ("icp", "search")
-SEARCH_SPACE = "search"
 ALL_SPACES = ("icp", "search")
 
 # Columns the space builders read, selected from item_enrichments. The icp builder
 # reads persona + target_demographic; the search builder reads ai_description, the
 # SEARCH_TAG_FIELDS tag block, and the full transcript_text. item_id is the polymorphic
-# key (= paid_ads.paid_ad_row_id or ugc_items.id).
+# key (= paid_ads.paid_ad_row_id or organic_items.id).
 # Base columns that always exist. target_generation (migration 018) and content_formats
 # (migration 020) are newer columns: selected when present and skipped via the 400-fallback
 # in _select_enrichment_rows when the migration hasn't been applied yet, so embedding never
@@ -77,9 +75,9 @@ def embed_items(
         raise RuntimeError("Supabase credentials are required to load embedding candidates.")
     if limit < 1:
         raise ValueError("--limit must be greater than 0.")
-    if source not in {"paid", "ugc", "all"}:
-        raise ValueError("--source must be one of paid, ugc, all.")
-    target_spaces = spaces or EMBEDDING_SPACES
+    if source not in {"paid", "organic", "all"}:
+        raise ValueError("--source must be one of paid, organic, all.")
+    target_spaces = spaces or ALL_SPACES
     unknown = [space for space in target_spaces if space not in SPACE_TEXT_BUILDERS]
     if unknown:
         raise ValueError(f"Unknown embedding space(s): {', '.join(unknown)}.")
@@ -98,9 +96,9 @@ def embed_items(
     if source in {"paid", "all"}:
         rows = _select_enrichment_rows(supabase, run_id=run_id, item_type="paid_ad", limit=limit)
         collect_candidates(rows, item_type="paid_ad", id_column="item_id", spaces=target_spaces, existing=existing, result=result, out=candidates)
-    if source in {"ugc", "all"}:
-        rows = _select_enrichment_rows(supabase, run_id=run_id, item_type="ugc_item", limit=limit)
-        collect_candidates(rows, item_type="ugc_item", id_column="item_id", spaces=target_spaces, existing=existing, result=result, out=candidates)
+    if source in {"organic", "all"}:
+        rows = _select_enrichment_rows(supabase, run_id=run_id, item_type="organic_item", limit=limit)
+        collect_candidates(rows, item_type="organic_item", id_column="item_id", spaces=target_spaces, existing=existing, result=result, out=candidates)
 
     result.candidates = len(candidates)
     if dry_run:
@@ -231,31 +229,24 @@ def embed_batch(
     input_json: Path | None,
     timeout: int,
 ) -> int:
-    endpoint = VOYAGE_EMBEDDINGS_ENDPOINT
-    provider = f"{VOYAGE_PROVIDER}:{embedding_model}"
-    request_params = {
-        "model": embedding_model,
-        "input_count": len(batch),
-        "spaces": sorted({candidate.space for candidate in batch}),
-    }
-    source_query_id = start_query(
+    with logged_query(
         supabase=supabase,
-        dry_run=False,
         run_id=run_id,
-        provider=provider,
-        endpoint=endpoint,
-        method="POST",
-        request_params=request_params,
-    )
-    response_headers: dict[str, str] = {}
-    response_status: int | None = None
-    try:
+        provider=f"{VOYAGE_PROVIDER}:{embedding_model}",
+        endpoint=VOYAGE_EMBEDDINGS_ENDPOINT,
+        request_params={
+            "model": embedding_model,
+            "input_count": len(batch),
+            "spaces": sorted({candidate.space for candidate in batch}),
+        },
+    ) as log:
+        log.metadata = {"model": embedding_model}
         if input_json:
             body = json.loads(input_json.read_text())
         else:
             response = request_json(
                 "POST",
-                f"{VOYAGE_BASE_URL}{endpoint}",
+                f"{VOYAGE_BASE_URL}{VOYAGE_EMBEDDINGS_ENDPOINT}",
                 headers={"Authorization": f"Bearer {config.voyage_api_key}"},
                 body={
                     "input": [candidate.source_text for candidate in batch],
@@ -265,54 +256,12 @@ def embed_batch(
                 timeout=timeout,
             )
             body = response.body
-            response_headers = response.headers
-            response_status = response.status
+            log.headers = response.headers
+            log.status = response.status
 
         embeddings = parse_voyage_response(body, expected_count=len(batch))
-        log_api_usage(
-            supabase=supabase,
-            dry_run=False,
-            run_id=run_id,
-            provider=provider,
-            endpoint=endpoint,
-            status=response_status,
-            response_count=len(embeddings),
-            headers=response_headers,
-            metadata={"model": embedding_model, "usage": voyage_usage(body)},
-        )
-        complete_query(
-            supabase=supabase,
-            dry_run=False,
-            source_query_id=source_query_id,
-            response_count=len(embeddings),
-            http_status=response_status,
-        )
-    except (HttpClientError, RuntimeError) as exc:
-        if isinstance(exc, HttpClientError) and response_status is None:
-            log_api_usage(
-                supabase=supabase,
-                dry_run=False,
-                run_id=run_id,
-                provider=provider,
-                endpoint=endpoint,
-                status=exc.status,
-                response_count=None,
-                headers={},
-                metadata={"model": embedding_model},
-            )
-        log_failed_query(
-            supabase=supabase,
-            dry_run=False,
-            run_id=run_id,
-            provider=provider,
-            endpoint=endpoint,
-            method="POST",
-            request_params=request_params,
-            source_query_id=source_query_id,
-            http_status=getattr(exc, "status", None),
-            error_message=str(exc),
-        )
-        raise
+        log.response_count = len(embeddings)
+        log.metadata["usage"] = voyage_usage(body)
 
     payload = [
         {

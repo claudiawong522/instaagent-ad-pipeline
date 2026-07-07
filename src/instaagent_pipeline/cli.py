@@ -15,18 +15,12 @@ from .apify_organic import (
     ingest_tiktok_trends,
 )
 from .config import Config
-from .ad_enrichment import enrich_paid_ads
+from .paid_enrichment import enrich_paid_ads
 from .audience_enrichment import enrich_audience
 from .organic_enrichment import enrich_organic_items
 from .clustering import cluster_items
 from .embeddings import ALL_SPACES, embed_items
-from .keywords import (
-    active_keyword_allocations,
-    allocate_manual_keywords,
-    generate_keyword_allocations,
-    insert_keyword_allocations,
-)
-from .ingestion import utc_now_iso
+from .orchestration import init_run, ingest_allocated_keywords
 from .supabase_client import SupabaseClient
 from .trend_classify import classify_formats
 from .trend_ingest import ingest_trends
@@ -39,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     dry_run = getattr(args, "dry_run", False)
     dry_run_needs_supabase = args.command in {
         "enrich-paid-ads",
-        "enrich-ugc",
+        "enrich-organic",
         "enrich-audience",
         "embed-items",
         "cluster-items",
@@ -48,7 +42,23 @@ def main(argv: list[str] | None = None) -> int:
     supabase = build_supabase(config, dry_run=dry_run and not dry_run_needs_supabase)
 
     if args.command == "init-run":
-        result = init_run(args, supabase, config)
+        result = init_run(
+            config=config,
+            supabase=supabase,
+            product_name=args.product_name,
+            category=args.category,
+            target_market=args.target_market,
+            notes=args.notes,
+            campaign_guidelines=args.campaign_guidelines,
+            keywords=args.keyword,
+            keyword_type=args.keyword_type,
+            target_paid_count=args.target_paid_count,
+            target_organic_count=args.target_organic_count,
+            target_tiktok_count=args.target_tiktok_count,
+            top_k=args.top_k,
+            run_config=json.loads(args.config_json),
+            dry_run=args.dry_run,
+        )
     elif args.command == "ingest-apify-ads":
         if args.keyword:
             result = ingest_apify_ads(
@@ -66,16 +76,15 @@ def main(argv: list[str] | None = None) -> int:
             result = ingest_allocated_keywords(
                 config=config,
                 supabase=supabase,
-                args=args,
+                run_id=args.run_id,
                 target_field="target_paid_count",
                 ingest_func=ingest_apify_ads,
+                page_size=getattr(args, "page_size", None),
+                input_json=args.input_json,
+                extra_params=parse_extra_params(args.extra_param),
+                dry_run=args.dry_run,
             )
-        result = with_paid_ad_enrichment(
-            result,
-            config=config,
-            supabase=supabase,
-            args=args,
-        )
+        result = with_enrichment(result, enrich_paid_ads, config=config, supabase=supabase, args=args)
     elif args.command in ("ingest-tiktok", "ingest-instagram"):
         ingest_func = ingest_tiktok if args.command == "ingest-tiktok" else ingest_instagram
         if args.keyword:
@@ -94,16 +103,15 @@ def main(argv: list[str] | None = None) -> int:
             result = ingest_allocated_keywords(
                 config=config,
                 supabase=supabase,
-                args=args,
-                target_field="target_tiktok_count" if args.command == "ingest-tiktok" else "target_ugc_count",
+                run_id=args.run_id,
+                target_field="target_tiktok_count" if args.command == "ingest-tiktok" else "target_organic_count",
                 ingest_func=ingest_func,
+                page_size=getattr(args, "page_size", None),
+                input_json=args.input_json,
+                extra_params=parse_extra_params(args.extra_param),
+                dry_run=args.dry_run,
             )
-        result = with_organic_enrichment(
-            result,
-            config=config,
-            supabase=supabase,
-            args=args,
-        )
+        result = with_enrichment(result, enrich_organic_items, config=config, supabase=supabase, args=args)
     elif args.command == "ingest-tiktok-trends":
         result = ingest_tiktok_trends(
             config=config,
@@ -115,12 +123,7 @@ def main(argv: list[str] | None = None) -> int:
             input_json=args.input_json,
             extra_params=parse_extra_params(args.extra_param),
         )
-        result = with_organic_enrichment(
-            result,
-            config=config,
-            supabase=supabase,
-            args=args,
-        )
+        result = with_enrichment(result, enrich_organic_items, config=config, supabase=supabase, args=args)
     elif args.command == "ingest-trends":
         result = ingest_trends(
             config=config,
@@ -129,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.timeout,
             concurrency=args.concurrency,
             skip_enrichment=args.skip_enrichment,
+            skip_classify=args.skip_classify,
             force=args.force,
             dry_run=args.dry_run,
         )
@@ -152,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             input_json=args.input_json,
         )
-    elif args.command == "enrich-ugc":
+    elif args.command == "enrich-organic":
         result = enrich_organic_items(
             config=config,
             supabase=supabase,
@@ -227,6 +231,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     print(json.dumps(to_jsonable(result), indent=2))
+    if getattr(args, "fail_on_drift", False) and getattr(result, "drift_alert", None):
+        print("error: trend parser drift detected (see drift_alert above)", file=sys.stderr)
+        return 3
     return 0
 
 
@@ -243,7 +250,7 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--keyword", action="append")
     init.add_argument("--keyword-type", default="seed")
     init.add_argument("--target-paid-count", type=int, default=1000)
-    init.add_argument("--target-ugc-count", type=int, default=2500, help="reels (Instagram) target")
+    init.add_argument("--target-organic-count", type=int, default=2500, help="reels (Instagram) target")
     init.add_argument("--target-tiktok-count", type=int, default=2500)
     init.add_argument("--top-k", type=int, default=3)
     init.add_argument("--config-json", default="{}")
@@ -251,26 +258,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     apify_ads = subparsers.add_parser("ingest-apify-ads", help="Ingest Apify Meta Ad Library paid ad candidates.")
     add_ingest_common_args(apify_ads)
-    add_paid_ad_enrichment_args(apify_ads)
+    add_enrichment_args(apify_ads, "paid ad videos")
     apify_ads.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
     apify_ads.add_argument("--target-count", type=int, default=1000)
 
     tiktok = subparsers.add_parser(
         "ingest-tiktok",
-        help="Ingest organic content from the Apify clockworks/tiktok-scraper by keyword into ugc_items.",
+        help="Ingest organic content from the Apify clockworks/tiktok-scraper by keyword into organic_items.",
     )
     add_ingest_common_args(tiktok)
-    add_organic_enrichment_args(tiktok)
+    add_enrichment_args(tiktok, "organic videos")
     tiktok.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
     tiktok.add_argument("--target-count", type=int, default=2500)
     tiktok.add_argument("--page-size", type=int, default=0)
 
     instagram = subparsers.add_parser(
         "ingest-instagram",
-        help="Ingest organic reels from the Apify data-slayer/instagram-search-reels by keyword into ugc_items.",
+        help="Ingest organic reels from the Apify data-slayer/instagram-search-reels by keyword into organic_items.",
     )
     add_ingest_common_args(instagram)
-    add_organic_enrichment_args(instagram)
+    add_enrichment_args(instagram, "organic videos")
     instagram.add_argument("--keyword", help="Optional manual keyword. Omit to use stored keyword allocations.")
     instagram.add_argument("--target-count", type=int, default=2500)
     instagram.add_argument("--page-size", type=int, default=0)
@@ -278,24 +285,32 @@ def build_parser() -> argparse.ArgumentParser:
     tiktok_trends = subparsers.add_parser(
         "ingest-tiktok-trends",
         help="Discover viral formats (keyword-free) from a country's For You feed via "
-        "novi/tiktok-trend-api into ugc_items. Followers backfilled separately.",
+        "novi/tiktok-trend-api into organic_items. Followers backfilled separately.",
     )
     add_ingest_common_args(tiktok_trends)
-    add_organic_enrichment_args(tiktok_trends)
+    add_enrichment_args(tiktok_trends, "organic videos")
     tiktok_trends.add_argument("--region", default="US", help="Two-letter country code for the For You feed (default US).")
     tiktok_trends.add_argument("--target-count", type=int, default=200)
 
     trends = subparsers.add_parser(
         "ingest-trends",
         help="Scrape viral formats from configured web trend pages (TREND_SOURCES) into "
-        "viral_formats + ugc_items, re-scraping each example TikTok video for live metrics. "
-        "Chains organic enrichment (MP4 download + analysis) unless --skip-enrichment.",
+        "viral_formats + organic_items, re-scraping each example TikTok video for live metrics. "
+        "Chains organic enrichment (MP4 download + analysis) unless --skip-enrichment, then "
+        "classify-formats (niche tags + trend embeddings) unless --skip-classify.",
     )
     trends.add_argument("--source-name", help="Only ingest this configured source (e.g. ramdam). Omit for all.")
     trends.add_argument("--force", action="store_true", help="Re-parse even if the page is unchanged since last run.")
+    trends.add_argument(
+        "--fail-on-drift", action="store_true",
+        help="Exit non-zero when a source's parser looks broken by a page change (drift_alert "
+        "in the output), so a scheduled CI run fails and GitHub's own failure email becomes "
+        "the reminder — no SMTP creds needed.",
+    )
     trends.add_argument("--timeout", type=int, default=300, help="Per-video enrichment timeout in seconds (covers the MP4 download).")
     trends.add_argument("--concurrency", type=int, default=32, help="Parallel video enrichments (I/O-bound).")
     trends.add_argument("--skip-enrichment", action="store_true", help="Ingest formats + videos only; do not download MP4s / run vision analysis.")
+    trends.add_argument("--skip-classify", action="store_true", help="Do not chain classify-formats (niche tags + trend embeddings) after ingest.")
     trends.add_argument("--dry-run", action="store_true", help="Fetch + LLM-parse pages and print formats without writing or re-scraping.")
 
     classify = subparsers.add_parser(
@@ -344,7 +359,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     enrich_organic = subparsers.add_parser(
-        "enrich-ugc",
+        "enrich-organic",
         help="Transcribe and analyze organic videos via OpenRouter into item_enrichments.",
     )
     enrich_organic.add_argument("--run-id", required=True)
@@ -363,7 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate icp/search embeddings for analyzed items via Voyage AI into item_embeddings.",
     )
     embed.add_argument("--run-id", required=True)
-    embed.add_argument("--source", choices=["paid", "ugc", "all"], default="all")
+    embed.add_argument("--source", choices=["paid", "organic", "all"], default="all")
     embed.add_argument(
         "--space",
         choices=[*ALL_SPACES, "all"],
@@ -392,7 +407,7 @@ def build_parser() -> argparse.ArgumentParser:
         "from stored ai_description+transcript (text-only, no video). Requires migration 018.",
     )
     audience.add_argument("--run-id", required=True)
-    audience.add_argument("--source", choices=["paid", "ugc", "all"], default="all")
+    audience.add_argument("--source", choices=["paid", "organic", "all"], default="all")
     audience.add_argument("--limit", type=int, default=1000, help="Maximum items to fetch per source.")
     audience.add_argument("--overwrite", action="store_true", help="Re-enrich rows that already have target_generation.")
     audience.add_argument("--timeout", type=int, default=60)
@@ -403,7 +418,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Cluster icp embeddings per source via HDBSCAN and label clusters via OpenRouter.",
     )
     cluster.add_argument("--run-id", required=True)
-    cluster.add_argument("--source", choices=["paid", "ugc", "all"], default="all")
+    cluster.add_argument("--source", choices=["paid", "organic", "all"], default="all")
     cluster.add_argument(
         "--min-cluster-size",
         type=int,
@@ -436,53 +451,30 @@ def add_ingest_common_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_organic_enrichment_args(parser: argparse.ArgumentParser) -> None:
+def add_enrichment_args(parser: argparse.ArgumentParser, noun: str) -> None:
+    """Post-ingest enrichment flags shared by every ingest command; `noun` names the
+    item kind in help text (e.g. "organic videos", "paid ad videos")."""
     parser.add_argument(
         "--skip-enrichment",
         action="store_true",
-        help="Do not transcribe and analyze organic videos via OpenRouter after live ingestion.",
+        help=f"Do not transcribe and analyze {noun} via OpenRouter after live ingestion.",
     )
     parser.add_argument(
         "--enrichment-limit",
         type=int,
-        help="Maximum number of organic items to enrich. Defaults to the number fetched.",
+        help=f"Maximum number of {noun} to enrich. Defaults to the number fetched.",
     )
     parser.add_argument(
         "--enrichment-timeout",
         type=int,
         default=300,
-        help="OpenRouter request timeout in seconds per organic video (covers the video download too).",
+        help="OpenRouter request timeout in seconds per video (covers the video download too).",
     )
     parser.add_argument(
         "--concurrency",
         type=int,
         default=32,
-        help="Number of organic videos to enrich in parallel after live ingestion (I/O-bound). Matches the Supabase pool_maxsize.",
-    )
-
-
-def add_paid_ad_enrichment_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--skip-enrichment",
-        action="store_true",
-        help="Do not transcribe and analyze paid ad videos via OpenRouter after live ingestion.",
-    )
-    parser.add_argument(
-        "--enrichment-limit",
-        type=int,
-        help="Maximum number of paid ads to enrich. Defaults to the number fetched.",
-    )
-    parser.add_argument(
-        "--enrichment-timeout",
-        type=int,
-        default=300,
-        help="OpenRouter request timeout in seconds per ad video (covers the video download too).",
-    )
-    parser.add_argument(
-        "--concurrency",
-        type=int,
-        default=32,
-        help="Number of ad videos to enrich in parallel after live ingestion (I/O-bound). Matches the Supabase pool_maxsize.",
+        help=f"Number of {noun} to enrich in parallel after live ingestion (I/O-bound). Matches the Supabase pool_maxsize.",
     )
 
 
@@ -494,52 +486,25 @@ def build_supabase(config: Config, *, dry_run: bool) -> SupabaseClient | None:
     return SupabaseClient(config.supabase_url, config.supabase_key)
 
 
-def with_organic_enrichment(
+def with_enrichment(
     ingestion_result: Any,
+    enrich_func: Any,
     *,
     config: Config,
     supabase: SupabaseClient | None,
     args: argparse.Namespace,
 ) -> Any:
+    """Chain the post-ingest vision enrichment (paid or organic) onto a live ingest result."""
     if args.dry_run or args.skip_enrichment:
         return ingestion_result
     if supabase is None:
-        raise RuntimeError("Supabase credentials are required for organic enrichment.")
+        raise RuntimeError("Supabase credentials are required for enrichment.")
 
     enrichment_limit = args.enrichment_limit or fetched_count(ingestion_result)
     if enrichment_limit < 1:
         return {"ingestion": ingestion_result, "enrichment": None}
 
-    enrichment = enrich_organic_items(
-        config=config,
-        supabase=supabase,
-        run_id=args.run_id,
-        limit=enrichment_limit,
-        dry_run=False,
-        input_json=None,
-        timeout=args.enrichment_timeout,
-        concurrency=getattr(args, "concurrency", 32),
-    )
-    return {"ingestion": ingestion_result, "enrichment": enrichment}
-
-
-def with_paid_ad_enrichment(
-    ingestion_result: Any,
-    *,
-    config: Config,
-    supabase: SupabaseClient | None,
-    args: argparse.Namespace,
-) -> Any:
-    if args.dry_run or args.skip_enrichment:
-        return ingestion_result
-    if supabase is None:
-        raise RuntimeError("Supabase credentials are required for paid ad enrichment.")
-
-    enrichment_limit = args.enrichment_limit or fetched_count(ingestion_result)
-    if enrichment_limit < 1:
-        return {"ingestion": ingestion_result, "enrichment": None}
-
-    enrichment = enrich_paid_ads(
+    enrichment = enrich_func(
         config=config,
         supabase=supabase,
         run_id=args.run_id,
@@ -556,149 +521,6 @@ def fetched_count(result: Any) -> int:
     if isinstance(result, dict):
         return int(result.get("fetched") or 0)
     return int(getattr(result, "fetched", 0) or 0)
-
-
-def init_run(args: argparse.Namespace, supabase: SupabaseClient | None, config: Config) -> dict[str, Any]:
-    run_config = json.loads(args.config_json)
-    if args.campaign_guidelines:
-        run_config["campaign_guidelines"] = args.campaign_guidelines
-    product_payload = {
-        "name": args.product_name,
-        "category": args.category,
-        "target_market": args.target_market,
-        "notes": args.notes,
-    }
-    run_payload = {
-        "status": "created",
-        "config": run_config,
-        "target_paid_count": args.target_paid_count,
-        "target_ugc_count": args.target_ugc_count,
-        "target_tiktok_count": args.target_tiktok_count,
-        "top_k": args.top_k,
-    }
-    if args.dry_run:
-        if args.keyword:
-            allocations = allocate_manual_keywords(
-                args.keyword,
-                target_paid_count=args.target_paid_count,
-                target_ugc_count=args.target_ugc_count,
-                target_tiktok_count=args.target_tiktok_count,
-                keyword_type=args.keyword_type,
-            )
-        else:
-            generation_result = generate_keyword_allocations(
-                config=config,
-                dry_run=True,
-                product_name=args.product_name,
-                category=args.category,
-                target_market=args.target_market,
-                notes=args.notes,
-                campaign_guidelines=args.campaign_guidelines,
-                target_paid_count=args.target_paid_count,
-                target_ugc_count=args.target_ugc_count,
-                target_tiktok_count=args.target_tiktok_count,
-            )
-            allocations = generation_result.allocations
-        return {
-            "product": product_payload,
-            "pipeline_run": run_payload,
-            "keywords": [allocation.__dict__ for allocation in allocations],
-        }
-
-    if supabase is None:
-        raise RuntimeError("Supabase credentials are required unless --dry-run is used.")
-
-    product = supabase.insert("products", product_payload)
-    run_payload["product_id"] = product["id"]
-    run = supabase.insert("pipeline_runs", run_payload)
-    try:
-        if args.keyword:
-            allocations = allocate_manual_keywords(
-                args.keyword,
-                target_paid_count=args.target_paid_count,
-                target_ugc_count=args.target_ugc_count,
-                target_tiktok_count=args.target_tiktok_count,
-                keyword_type=args.keyword_type,
-            )
-        else:
-            generation_result = generate_keyword_allocations(
-                config=config,
-                supabase=supabase,
-                dry_run=args.dry_run,
-                run_id=run["id"],
-                product_name=args.product_name,
-                category=args.category,
-                target_market=args.target_market,
-                notes=args.notes,
-                campaign_guidelines=args.campaign_guidelines,
-                target_paid_count=args.target_paid_count,
-                target_ugc_count=args.target_ugc_count,
-                target_tiktok_count=args.target_tiktok_count,
-            )
-            allocations = generation_result.allocations
-        keywords = insert_keyword_allocations(supabase, run_id=run["id"], allocations=allocations)
-    except Exception:
-        supabase.update_by_id(
-            "pipeline_runs",
-            run["id"],
-            {
-                "status": "failed",
-                "updated_at": utc_now_iso(),
-            },
-        )
-        raise
-    return {"product": product, "pipeline_run": run, "keywords": keywords}
-
-
-def ingest_allocated_keywords(
-    *,
-    config: Config,
-    supabase: SupabaseClient | None,
-    args: argparse.Namespace,
-    target_field: str,
-    ingest_func: Any,
-) -> dict[str, Any]:
-    if args.dry_run:
-        raise RuntimeError("--keyword is required with --dry-run because dry-run cannot load stored keywords.")
-    if supabase is None:
-        raise RuntimeError("Supabase credentials are required to load stored keyword allocations.")
-
-    rows = active_keyword_allocations(supabase, args.run_id)
-    if not rows:
-        raise RuntimeError(f"No active keywords found for run {args.run_id}.")
-
-    details: list[dict[str, Any]] = []
-    fetched = 0
-    written = 0
-    extra_params = parse_extra_params(args.extra_param)
-    for row in rows:
-        keyword = str(row.get("keyword_text") or "").strip()
-        target_count = int(row.get(target_field) or 0)
-        if not keyword or target_count <= 0:
-            continue
-        result = ingest_func(
-            config=config,
-            supabase=supabase,
-            run_id=args.run_id,
-            keyword=keyword,
-            target_count=target_count,
-            page_size=int(getattr(args, "page_size", target_count) or target_count),
-            dry_run=False,
-            input_json=args.input_json,
-            extra_params=extra_params,
-        )
-        fetched += result.fetched
-        written += result.written
-        details.append(
-            {
-                "keyword": keyword,
-                "target_count": target_count,
-                "fetched": result.fetched,
-                "written": result.written,
-            }
-        )
-
-    return {"fetched": fetched, "written": written, "keywords": details}
 
 
 def parse_extra_params(values: list[str]) -> dict[str, Any]:

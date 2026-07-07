@@ -1,7 +1,7 @@
 """Core search logic, independent of the web framework so it can be unit-tested.
 
 Embeds the query with Voyage, runs a pgvector KNN over the 'search' space via the
-match_item_embeddings RPC, hydrates the ranked items from paid_ads/ugc_items (+
+match_item_embeddings RPC, hydrates the ranked items from paid_ads/organic_items (+
 enrichment fields and transcripts from item_enrichments), applies secondary filters,
 and returns unified VideoResult dicts.
 """
@@ -14,10 +14,9 @@ from urllib.parse import urlsplit
 
 from ..config import Config
 from ..embeddings import embed_query, rerank, vector_literal
-from ..http_client import HttpClientError, request_json
+from ..http_client import HttpClientError
 from ..supabase_client import SupabaseClient
-
-OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+from .campaigns import runs_with_products
 
 # running_duration (days the ad has been live, the verified-populated column — NOT the
 # legacy running_duration_days) is the paid-ad performance metric, the analog of organic
@@ -75,11 +74,10 @@ def search_ads(
             pool=pool,
         )
 
-    # Recall: expand the query (fixes short-query cosine dilution), embed it, and pull
-    # candidates from BOTH embedding spaces with no cosine floor. The reranker — not the
-    # cosine score — decides relevance, so recall is deliberately generous.
-    expanded = expand_query(config, query)
-    vector = embed_query(config, expanded)
+    # Recall: embed the query and pull candidates from BOTH embedding spaces with no
+    # cosine floor. The reranker — not the cosine score — decides relevance, so recall
+    # is deliberately generous.
+    vector = embed_query(config, query)
     vector_text = vector_literal(vector)
 
     candidate_docs: dict[tuple[str, str], str] = {}
@@ -115,9 +113,8 @@ def search_ads(
     if not seen_order:
         return []
 
-    # Rerank with the ORIGINAL query (the cross-encoder reads the natural query best;
-    # the expansion was only to widen recall). Gate by the calibrated rerank score, which
-    # gives an honest variable result count — not a fixed top-N.
+    # Rerank with the query (the cross-encoder reads the natural query best). Gate by the
+    # calibrated rerank score, which gives an honest variable result count — not a fixed top-N.
     documents = [candidate_docs[key] for key in seen_order]
     reranked = rerank(config, query, documents, top_k=len(documents))
 
@@ -133,13 +130,13 @@ def search_ads(
         return []
 
     paid_ids = [iid for it, iid in order if it == "paid_ad"]
-    organic_ids = [iid for it, iid in order if it == "ugc_item"]
+    organic_ids = [iid for it, iid in order if it == "organic_item"]
 
     with ThreadPoolExecutor(max_workers=4) as ex:
-        f_paid = ex.submit(_hydrate, supabase, "paid_ads", "paid_ad_row_id", paid_ids, PAID_HYDRATE_COLUMNS)
-        f_organic = ex.submit(_hydrate, supabase, "ugc_items", "id", organic_ids, ORGANIC_HYDRATE_COLUMNS)
+        f_paid = ex.submit(supabase.select_by_ids, "paid_ads", "paid_ad_row_id", paid_ids, PAID_HYDRATE_COLUMNS)
+        f_organic = ex.submit(supabase.select_by_ids, "organic_items", "id", organic_ids, ORGANIC_HYDRATE_COLUMNS)
         f_paid_enr = ex.submit(_enrichments, supabase, "paid_ad", paid_ids)
-        f_organic_enr = ex.submit(_enrichments, supabase, "ugc_item", organic_ids)
+        f_organic_enr = ex.submit(_enrichments, supabase, "organic_item", organic_ids)
         paid, organic, paid_enr, organic_enr = f_paid.result(), f_organic.result(), f_paid_enr.result(), f_organic_enr.result()
 
     return _assemble(
@@ -148,46 +145,6 @@ def search_ads(
         min_days_live=min_days_live, min_date=min_date, languages=languages, age_brackets=age_brackets,
         content_formats=content_formats, price_tier=price_tier, limit=limit,
     )
-
-
-def expand_query(config: Config, query: str) -> str:
-    """Expand a short query into a multi-concept string to widen embedding recall.
-
-    A bare one-word query ("genz") produces a concentrated vector that mismatches the
-    multi-concept document vectors; expanding it ("gen z, young, casual, trendy") closes
-    that gap. Best-effort: any failure falls back to the raw query so search never breaks.
-
-    Disabled by default (config.query_expansion_enabled) — on the current corpus it changes
-    no results while adding ~2.6s/search; see config for the A/B rationale.
-    """
-    if not config.query_expansion_enabled or not config.openrouter_api_key:
-        return query
-    prompt = (
-        "Expand this short video-search query into a concise comma-separated list of "
-        "synonyms and closely related concepts (audience, tone, format, product) useful "
-        "for semantic retrieval. Return ONLY the comma-separated terms, no explanation.\n\n"
-        f"Query: {query}"
-    )
-    try:
-        response = request_json(
-            "POST",
-            OPENROUTER_CHAT_URL,
-            headers={"Authorization": f"Bearer {config.openrouter_api_key}"},
-            body={
-                "model": config.query_expansion_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 80,
-            },
-            timeout=15,
-        )
-        choices = response.body.get("choices") if isinstance(response.body, dict) else None
-        if isinstance(choices, list) and choices:
-            content = (choices[0].get("message") or {}).get("content")
-            if isinstance(content, str) and content.strip():
-                return f"{query}, {content.strip()}"
-    except (HttpClientError, RuntimeError, KeyError, IndexError, TypeError):
-        pass
-    return query
 
 
 def _browse_ads(
@@ -227,22 +184,22 @@ def _browse_ads(
             paid_ids.append(iid)
             order.append(("paid_ad", iid))
 
-    if item_type in (None, "ugc_item"):
+    if item_type in (None, "organic_item"):
         params = {"select": ORGANIC_HYDRATE_COLUMNS, "limit": str(pool)}
         if run_id:
             params["run_id"] = f"eq.{run_id}"
-        for row in supabase.select("ugc_items", params):
+        for row in supabase.select("organic_items", params):
             iid = row.get("id")
             if not iid:
                 continue
             iid = str(iid)
             organic[iid] = row
             organic_ids.append(iid)
-            order.append(("ugc_item", iid))
+            order.append(("organic_item", iid))
 
     with ThreadPoolExecutor(max_workers=2) as ex:
         f_paid_enr = ex.submit(_enrichments, supabase, "paid_ad", paid_ids)
-        f_organic_enr = ex.submit(_enrichments, supabase, "ugc_item", organic_ids)
+        f_organic_enr = ex.submit(_enrichments, supabase, "organic_item", organic_ids)
         paid_enr, organic_enr = f_paid_enr.result(), f_organic_enr.result()
 
     return _assemble(
@@ -340,15 +297,8 @@ def _video_dedupe_key(url: str | None) -> str | None:
 
 
 def list_runs(supabase: SupabaseClient) -> list[dict[str, Any]]:
-    runs = supabase.select(
-        "pipeline_runs",
-        {"select": "id,status,config,target_paid_count,target_ugc_count,target_tiktok_count,created_at,product_id", "order": "created_at.desc"},
-    )
-    product_ids = [str(r["product_id"]) for r in runs if r.get("product_id")]
-    products = _hydrate(supabase, "products", "id", product_ids, "id,name,category")
     out = []
-    for run in runs:
-        product = products.get(str(run.get("product_id")))
+    for run, product in runs_with_products(supabase, "id,name,category"):
         out.append(
             {
                 "run_id": str(run.get("id")),
@@ -359,46 +309,15 @@ def list_runs(supabase: SupabaseClient) -> list[dict[str, Any]]:
                 # True for the keyword-free Viral Discovery run, so Search can offer a dedicated
                 # "viral formats only" filter without matching on the campaign name.
                 "discovery": bool((run.get("config") or {}).get("discovery")),
-                "product_name": (product or {}).get("name"),
-                "category": (product or {}).get("category"),
+                "product_name": product.get("name"),
+                "category": product.get("category"),
                 "target_paid_count": run.get("target_paid_count"),
-                "target_ugc_count": run.get("target_ugc_count"),
+                "target_organic_count": run.get("target_organic_count"),
                 "target_tiktok_count": run.get("target_tiktok_count"),
                 "created_at": run.get("created_at"),
             }
         )
     return out
-
-
-def get_item(config: Config, supabase: SupabaseClient, item_type: str, item_id: str) -> dict[str, Any] | None:
-    if item_type == "paid_ad":
-        rows = _hydrate(supabase, "paid_ads", "paid_ad_row_id", [item_id], PAID_HYDRATE_COLUMNS)
-        enrichment = _enrichments(supabase, "paid_ad", [item_id]).get(item_id)
-    elif item_type == "ugc_item":
-        rows = _hydrate(supabase, "ugc_items", "id", [item_id], ORGANIC_HYDRATE_COLUMNS)
-        enrichment = _enrichments(supabase, "ugc_item", [item_id]).get(item_id)
-    else:
-        return None
-    row = rows.get(item_id)
-    if not row:
-        return None
-    return _to_video_result(item_type, row, enrichment, None)
-
-
-def _hydrate(
-    supabase: SupabaseClient,
-    table: str,
-    id_column: str,
-    ids: list[str],
-    columns: str,
-) -> dict[str, dict[str, Any]]:
-    if not ids:
-        return {}
-    rows = supabase.select(
-        table,
-        {"select": columns, id_column: f"in.({','.join(ids)})", "limit": str(len(ids))},
-    )
-    return {str(row.get(id_column)): row for row in rows if row.get(id_column)}
 
 
 _ENRICH_BASE_COLUMNS = (
@@ -480,7 +399,7 @@ def _to_video_result(
             "similarity": similarity,
         }
     return {
-        "item_type": "ugc_item",
+        "item_type": "organic_item",
         "item_id": str(row.get("id")),
         "run_id": row.get("run_id"),
         "title": row.get("handle") or row.get("user_handle") or row.get("nickname"),

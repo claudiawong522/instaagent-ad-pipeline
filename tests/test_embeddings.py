@@ -6,7 +6,7 @@ from typing import Any
 
 from instaagent_pipeline.embeddings import (
     ALL_SPACES,
-    EMBEDDING_SPACES,
+    ALL_SPACES,
     EmbedResult,
     EmbeddingCandidate,
     batched,
@@ -59,7 +59,7 @@ def test_build_icp_text_includes_quality_and_drivers() -> None:
 
 
 def test_embedding_spaces_are_icp_and_search_only() -> None:
-    assert EMBEDDING_SPACES == ("icp", "search")
+    assert ALL_SPACES == ("icp", "search")
     assert ALL_SPACES == ("icp", "search")
 
 
@@ -174,7 +174,7 @@ class _FakeSupabase:
 
     def select(self, table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         if table == "item_enrichments":
-            it = "paid_ad" if params.get("item_type") == "eq.paid_ad" else "ugc_item"
+            it = "paid_ad" if params.get("item_type") == "eq.paid_ad" else "organic_item"
             return [{"item_id": "x1", "persona": "gym goers",
                      "ai_description": "A demo.", "content_formats": ["unboxing"]}]
         if table == "item_embeddings":

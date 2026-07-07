@@ -1,11 +1,19 @@
-name: Trend scrape
+name: Trend scrape (static sources)
 
-# Daily viral-format ingest (ingest-trends). Unchanged pages are skipped via content-hash,
-# so a no-change day only pays the Newengen headless render. Scheduled workflows run on the
-# default branch only.
+# Daily viral-format ingest for the non-newengen sources: ramdam + socialbee (evergreen URLs
+# that update weekly) and socialgrowthengineers (a weekly gated newsletter). A daily run catches
+# new trends within a day; unchanged pages are skipped via content-hash, so a no-change day is
+# nearly free (a plain HTTP/API fetch, no headless render).
+#
+# newengen is deliberately NOT here — it's a monthly, JS-rendered report whose flaky render
+# changes the page text (and content-hash) on every fetch, defeating the skip gate; scraping it
+# daily re-parses the same frozen report ~30x/month and churns duplicate/renamed rows. It runs
+# on its own windowed schedule in trend-scrape-newengen.yml.
+#
+# Scheduled workflows run on the default branch only.
 on:
   schedule:
-    - cron: "0 13 * * *" # 13:00 UTC ≈ 9am ET, after Ramdam's Monday-morning drops
+    - cron: "0 13 * * *" # 13:00 UTC ≈ 9am ET
   workflow_dispatch:
     inputs:
       force:
@@ -14,12 +22,12 @@ on:
         default: false
 
 concurrency:
-  group: trend-scrape
+  group: trend-scrape-static
   cancel-in-progress: false
 
 jobs:
   ingest:
-    name: ingest-trends
+    name: ingest-trends (static)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -37,11 +45,36 @@ jobs:
           pip install -e .
           pip install requests
 
-      - name: Run ingest-trends
+      # One --source-name call per source (the CLI selects a single source; per-source failures
+      # are caught internally so one bad source won't abort the others).
+      - name: Run ingest-trends (ramdam, socialbee, socialgrowthengineers)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           APIFY_API_KEY: ${{ secrets.APIFY_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Voyage key for the trend embeddings classify-formats writes (chained after ingest).
+          # If unset, formats are still tagged but not embedded — not recallable until re-embedded.
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          # JWT that unlocks the socialgrowthengineers gated newsletter; expires ~quarterly (refresh
+          # via scratchpad/sge_unlock.py). If unset/expired, only that source errors; others run.
+          SGE_ACCESS_TOKEN: ${{ secrets.SGE_ACCESS_TOKEN }}
+          # SMTP creds for the parser-drift reminder email (drift_alert.py) — free relay
+          # (Gmail app password by default; Brevo etc. via the HOST/PORT/FROM overrides).
+          # If unset, drift is only logged in the run output.
+          ALERT_SMTP_USER: ${{ secrets.ALERT_SMTP_USER }}
+          ALERT_SMTP_PASSWORD: ${{ secrets.ALERT_SMTP_PASSWORD }}
+          ALERT_SMTP_HOST: ${{ secrets.ALERT_SMTP_HOST }}
+          ALERT_SMTP_PORT: ${{ secrets.ALERT_SMTP_PORT }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+        # --fail-on-drift turns a broken parser into a red run, so GitHub's own workflow-failure
+        # email is the fix-it reminder even with no SMTP secrets configured. rc accumulation keeps
+        # one drifted source from skipping the rest.
         run: |
-          python -m instaagent_pipeline.cli ingest-trends ${{ inputs.force && '--force' || '' }}
+          rc=0
+          for src in ramdam socialbee socialgrowthengineers; do
+            echo "::group::ingest-trends $src"
+            python -m instaagent_pipeline.cli ingest-trends --source-name "$src" --fail-on-drift ${{ inputs.force && '--force' || '' }} || rc=1
+            echo "::endgroup::"
+          done
+          exit $rc
