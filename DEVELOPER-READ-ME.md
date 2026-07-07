@@ -1,4 +1,10 @@
-## Dataflow Handwritten
+## IF YOU ARE A DEVELOPER, READ!!!
+For a future developer taking over this project, read this in extreme detail. This note is hand-written, intended to be concise, and draws out the skeleton of this repo and explains how data flows. A thorough understanding of this md will make future development much smoother.
+Please aim to update this doc handwritten, and not with AI. This is because AI docs currently do not enforce the same level of concisenss, even if you turn this into a skill or explicitly as it to reference this md.
+
+There are 2 skills that are repo specific:
+1. the e2e report skill. this is such that end to end tests deliver reports that actually explain what it did. this repo has a lot of pipelines, thus you will have to run many flows.
+2. the trend scraping skill. whenever you add a new source newsletter, beware that every single page renders differently. you might need to take different measures to make sure that a. all trends are correctly populated, all videos are saved, all saved videos match its corresponding trend. this usually requires a few trial and errors, and this skill documents the tried and failed runs. please update it as you add new newsletters.
 
 ## How does database get populated?
 - user inputs campaign detials + intended ad count + organic count
@@ -114,18 +120,34 @@
 ## How do trends get populated?
 - we track 4 webpages- ramdam, newengen, socialbee, socialgrowthengineers
 - either, plain http request, or for js rendered websites, use a apify headless browser with actor website-content-crawler, waits till page rendered
-   - SGE is special: it has a structured json api (/api/formats/), so skip fetch+LLM entirely, just read the api and copy fields across
-- then it strips to only text and keeps video links; 'you might also like' links are filtered out
+     - SGE is special: it's url is unstable, now we find the latest post, get past the email gate with a cookie, then usual html stuff
+- then it uses a static parser to get trend metadata and video link, llm fallback if fails
+     - SGE is special: bad naming conventions thus passes through an LLM every time
+     - if detects change in blog format, will send email to instaagenttool@gmail.com, signalling to manual change parser
 - compares content's hash to source, if no difference, skip scrape
 - an openrouter call to google/gemini-3-flash with page inputs returns [{format_name, format_description, video_urls[]}]
 - dedupe formats: sometimes the llm returns the same trend under multiple names, they're now collapsed into one
 - 2 guards
-   - if 0 formats got a video, incomplete render, retry
+   - if 0 formats got a video, incomplete render, retry, only for js pages
    - if a format has no video, it's a name-drop, drop the trend
-- rescrape video url with apify for live metrics
+- route video back to format: the LLM gave us url → format. But when Apify scrapes those videos, it hands the results back as a flat list keyed by numeric video-id, not grouped by format. So we need the reverse map — video-id → format_id — to route each scraped video back to the right row. 
+- if a video link is dead (deleted/private/expired), the format isn't written
+- rescrape video url with apify for live metrics + video download
+     - before rescrape, it checks if video exists in organic_items (to save cost, but highly unlikely)
+- annotate: write ingest_note explaining video-less formats; delete formats with zero linked videos
 - log cost
-- enrichment
+- alert owner if parser is broken via email with github actions
+- enrichment > writes ai_description + transcript
+- llm classifies the fit tags > outputs {versatility, fit_niches, product_requirements, niche_constraint}
+- compute embeddings (voyage-4-lite)
+     -It concatenates:{format_name}. {format_description}
+     Works for: {fit_niches}  ({versatility}).
+     Needs a product with: {product_requirements}.
 
+## How does search work?
+1. pull up to 2000 recent viral formats
+2. vector similarity search to find top 20; 10 universal formats
+3. 1 openrouter call that takes in these 30, returns a fit verdict (great/workable/no), a 0–100 score, and a one-line idea for using the format with your product
+4. attatch example videos to format, ordered by views
+5. search result ordered by fit score, no fit verdicts sink to bottom
 
-
-- saves each search into a dedicated row in *product* so identical searches persists
